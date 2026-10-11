@@ -383,6 +383,26 @@ export async function fetchGateDecisions(limit = 200) {
   return res.json();
 }
 
+export async function fetchCommands() {
+  const res = await apiFetch(`${API_BASE_URL}/commands`);
+  if (!res.ok) throw new Error('Failed to load commands');
+  return res.json();
+}
+
+export async function clearChatHistory(threadId) {
+  const res = await apiFetch(`${API_BASE_URL}/chat/history/${encodeURIComponent(threadId)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = (await res.json()).detail || '';
+    } catch (err) {
+      detail = '';
+    }
+    throw new Error(detail || 'Failed to clear the conversation');
+  }
+  return res.json();
+}
+
 export async function fetchSettings() {
   try {
     const res = await apiFetch(`${API_BASE_URL}/settings`);

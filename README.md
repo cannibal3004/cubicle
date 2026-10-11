@@ -30,6 +30,7 @@ This is an independent open-source project and is not affiliated with xAI.
 - **Visible thinking:** Reasoning models' thinking (`reasoning_content` or `reasoning` in the stream) is shown live in a collapsible block above the reply. It is stored for display but never replayed to the model.
 - **Voice dictation:** Use the browser's Web Speech API when the browser supports it.
 - **Model tool calling:** The model receives OpenAI-style tool definitions for the shared workspace, its sandboxed computer (when the Docker runtime is on), and connected GitHub, and can call them itself. Every call goes through the same deny-by-default gateway and approval cards as the slash commands; screenshots are shown to vision models as images.
+- **Slash commands:** Type `/` in the composer for a picker. `/help`, `/clear`, `/model`, `/auto`, `/stop`, `/computer`, `/audit`, and `/settings` are handled in the app; `/workspace` and `/connector` become approval-gated actions. The list comes from `GET /api/v1/commands`.
 - **Approved workspace tools:** Explicit `/workspace list`, `/workspace read`, and `/workspace write` requests pause for user approval, stay inside `WORKSPACE_ROOT`, and produce audit events.
 - **Governed action gateway:** Workspace actions use a structured request/result contract, a deny-by-default registry, approval state, and redacted lifecycle audit records.
 - **Settings drawer:** Choose the provider, base URL, API key, default model, optional `reasoning_effort`, Composio key, and local profile details.

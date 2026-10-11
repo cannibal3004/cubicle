@@ -17,11 +17,11 @@ from app.services.action_gateway import (
     action_gateway,
 )
 from app.services.approval_gate import approval_gate
+from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs
 from app.services.context_builder import build_history_messages, cap_message_results, trim_result_text
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
-from app.services.connector_actions import ConnectorCommandError, parse_connector_command
 from app.services.llm_tools import (
     ToolCallError,
     available_tools,
@@ -33,10 +33,6 @@ from app.services.llm_tools import (
 )
 from app.services.openai_compatible_service import openai_compatible_service
 from app.services.turn_manager import Turn, TurnBusyError, turn_manager
-from app.services.workspace_service import (
-    WorkspaceToolError,
-    parse_workspace_command,
-)
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 
@@ -99,6 +95,16 @@ def _model_accepts_images(model: str, llm_config) -> bool:
 @router.get("/history/{thread_id}", response_model=List[Message])
 async def get_history(thread_id: str):
     return storage_service.get_messages(thread_id=thread_id)
+
+
+@router.delete("/history/{thread_id}")
+async def clear_history(thread_id: str):
+    """Delete a thread's messages (the /clear command). Refused mid-reply."""
+    current = turn_manager.current(thread_id)
+    if current is not None and not current.finished:
+        raise HTTPException(status_code=409, detail="A reply is still in progress; stop it first.")
+    deleted = storage_service.delete_messages(thread_id)
+    return {"status": "ok", "deleted": deleted}
 
 
 @router.post("/send")
@@ -306,14 +312,11 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         # --- explicit slash commands typed by the user ------------------------
         last_user_text = formatted_history[-1]["content"] if formatted_history else ""
         try:
-            action_call = parse_workspace_command(last_user_text)
-            if action_call is None:
-                action_call = parse_connector_command(last_user_text)
-        except (WorkspaceToolError, ConnectorCommandError) as exc:
+            action_call = parse_action_command(last_user_text)
+        except CommandError as exc:
             action_call = None
-            command_tool = "connector" if last_user_text.lower().startswith("/connector") else "workspace"
-            tool_context = f"A {command_tool} request was rejected before execution: {exc}"
-            turn.emit({"type": "tool.failed", "tool": command_tool, "error": str(exc)})
+            tool_context = f"A {exc.tool} request was rejected before execution: {exc}"
+            turn.emit({"type": "tool.failed", "tool": exc.tool, "error": str(exc)})
 
         if action_call:
             outcome = await _perform_action(turn, thread_id, action_call, gate_mode=gate_mode, user_request=last_user_text)

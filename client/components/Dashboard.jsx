@@ -266,6 +266,8 @@ export default function Dashboard() {
             onEditBot={() => activeBot && setBotEditor({ mode: 'edit', bot: activeBot })}
             onUpdateBot={handleUpdateBot}
             onToggleComputer={() => setActiveTab('computer')}
+            onOpenAudit={() => setActiveTab('audit')}
+            onOpenSettings={() => setIsSettingsOpen(true)}
             defaultModel={defaultModel}
             prefill={chatPrefill}
           />

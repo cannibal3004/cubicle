@@ -140,11 +140,23 @@ export default function MessageItem({ message, botId }) {
         <div className="dark-bubble-error px-4 py-1.5 text-xs font-mono max-w-md flex items-center justify-between gap-3 shadow-sm">
           <div className="flex items-center gap-2 min-w-0">
             <FiX className="text-red-500 text-sm flex-shrink-0" />
-            <span className="truncate">{message.text}</span>
+            <span className={message.local ? 'whitespace-pre-wrap break-words' : 'truncate'}>{message.text}</span>
           </div>
           {formattedTime && (
             <span className="text-[10px] text-zinc-500 font-mono flex-shrink-0">{formattedTime}</span>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  // Notes the app itself adds to the thread (slash-command results). Not
+  // persisted and never sent to the model.
+  if (message.sender === 'system') {
+    return (
+      <div className="flex justify-center my-2">
+        <div className="px-3 py-1.5 rounded-xl border border-[#27272a] bg-[#121214] text-[11px] font-mono text-zinc-400 max-w-xl whitespace-pre-wrap break-words shadow-sm">
+          {message.text}
         </div>
       </div>
     );
