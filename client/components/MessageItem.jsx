@@ -152,6 +152,21 @@ export default function MessageItem({ message, botId }) {
 
   // Notes the app itself adds to the thread (slash-command results). Not
   // persisted and never sent to the model.
+  if (message.sender === 'system' && message.item_type === 'compaction') {
+    const count = message.raw_payload?.messages_compacted;
+    const manual = message.raw_payload?.reason === 'manual';
+    return (
+      <details className="my-3 mx-auto max-w-xl rounded-xl border border-sky-500/20 bg-sky-500/5 text-[11px] text-zinc-300 shadow-sm">
+        <summary className="cursor-pointer select-none px-3 py-1.5 font-mono text-sky-300/90">
+          Context compacted{count ? ` · ${count} messages summarized` : ''}{manual ? ' · /compact' : ''}{formattedTime ? ` · ${formattedTime}` : ''}
+        </summary>
+        <div className="px-3 pb-3 leading-relaxed whitespace-pre-wrap break-words">
+          <ReactMarkdown>{message.text}</ReactMarkdown>
+        </div>
+      </details>
+    );
+  }
+
   if (message.sender === 'system') {
     return (
       <div className="flex justify-center my-2">

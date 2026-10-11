@@ -4,7 +4,7 @@ from unittest import mock
 
 from app.services import context_builder
 from app.services.context_builder import (
-    OMITTED_NOTE,
+    SUMMARY_LEAD,
     build_history_messages,
     cap_message_results,
     trim_result_text,
@@ -17,6 +17,10 @@ def _bot(text, calls=None):
 
 def _user(text):
     return {"sender": "user", "text": text}
+
+
+def _compaction(text):
+    return {"sender": "system", "item_type": "compaction", "text": text}
 
 
 class ContextBuilderTests(unittest.TestCase):
@@ -33,7 +37,7 @@ class ContextBuilderTests(unittest.TestCase):
         self.assertEqual(records[1]["result"], "2" * 30)
         self.assertEqual(records[2]["result"], "3" * 30)
 
-    def test_recent_turns_replay_full_results_and_older_turns_get_stubs(self):
+    def test_every_tool_turn_replays_its_full_results(self):
         history = [
             _user("find it"),
             _bot("Found A.", [{"id": "c1", "name": "exa_search", "raw_arguments": '{"query": "A"}', "status": "completed", "summary": "Search A", "result": '{"hits": ["A"]}'}]),
@@ -43,25 +47,30 @@ class ContextBuilderTests(unittest.TestCase):
             _user("thanks"),
             _bot("You're welcome."),
         ]
-        messages = build_history_messages(history, replay_tools=True, replay_turns=1)
+        messages = build_history_messages(history, replay_tools=True)
 
         roles = [(m["role"], m.get("content")[:12] if isinstance(m.get("content"), str) else "") for m in messages]
         self.assertEqual(
             roles,
-            [("user", "find it"), ("assistant", ""), ("tool", '{"status": "'), ("assistant", "Found A."),
+            [("user", "find it"), ("assistant", ""), ("tool", '{"hits": ["A'), ("assistant", "Found A."),
              ("user", "and B?"), ("assistant", ""), ("tool", '{"hits": ["B'), ("tool", '{"status": "'), ("assistant", "Found B."),
              ("user", "thanks"), ("assistant", "You're welco")],
         )
-        # Older turn: tool calls kept, result replaced by a stub that still names the summary.
-        older = json.loads(messages[2]["content"])
-        self.assertEqual(older["note"], OMITTED_NOTE)
-        self.assertEqual(older["summary"], "Search A")
+        # The older turn keeps its real result: the context is never rewritten after it was sent.
+        self.assertEqual(messages[2]["content"], '{"hits": ["A"]}')
         self.assertEqual(messages[1]["tool_calls"], [{"id": "c1", "name": "exa_search", "arguments": '{"query": "A"}'}])
         # Arguments stored as a dict are serialised; a denied call explains itself.
         self.assertEqual(messages[5]["tool_calls"][0]["arguments"], '{"query": "B"}')
         denied = json.loads(messages[7]["content"])
         self.assertEqual(denied["status"], "denied")
         self.assertIn("denied", denied["error"])
+
+    def test_the_same_history_builds_the_same_messages_as_it_grows(self):
+        calls = [{"id": "c1", "name": "t", "status": "completed", "result": "R"}]
+        history = [_user("a"), _bot("A", calls), _user("b"), _bot("B", calls), _user("c"), _bot("C", calls), _user("d"), _bot("D", calls)]
+        before = build_history_messages(history[:6], replay_tools=True)
+        after = build_history_messages(history, replay_tools=True)
+        self.assertEqual(after[: len(before)], before)
 
     def test_without_tool_replay_only_texts_are_used(self):
         history = [_user("hi"), _bot("Found A.", [{"id": "c1", "name": "t", "status": "completed", "result": "big"}])]
@@ -74,10 +83,23 @@ class ContextBuilderTests(unittest.TestCase):
             _bot("Done.", [{"name": "no-id", "status": "completed", "result": "x"},
                            {"id": "c9", "name": "t", "status": "completed", "result": None, "result_dropped": True}]),
         ]
-        messages = build_history_messages(history, replay_tools=True, replay_turns=5)
+        messages = build_history_messages(history, replay_tools=True)
         self.assertEqual([m["role"] for m in messages], ["user", "assistant", "tool", "assistant"])
         self.assertEqual(json.loads(messages[2]["content"])["note"], "result not retained")
         self.assertEqual(len(messages[1]["tool_calls"]), 1)
+
+    def test_context_starts_at_the_latest_compaction(self):
+        history = [
+            _user("old 1"), _bot("Old 1."), _compaction("first summary"),
+            _user("old 2"), _bot("Old 2."), _compaction("second summary"),
+            _user("recent"), _bot("Recent."), {"sender": "system", "text": "a local note that is not a compaction"},
+        ]
+        messages = build_history_messages(history, replay_tools=True)
+        self.assertEqual([m["role"] for m in messages], ["user", "assistant", "user", "assistant"])
+        self.assertEqual(messages[0]["content"], f"{SUMMARY_LEAD}\n\nsecond summary")
+        self.assertNotIn("first summary", json.dumps(messages))
+        self.assertNotIn("old", json.dumps(messages))
+        self.assertEqual(messages[2]["content"], "recent")
 
 
 if __name__ == "__main__":

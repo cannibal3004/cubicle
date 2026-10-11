@@ -19,6 +19,8 @@ import {
   respondApproval,
   fetchCommands,
   clearChatHistory,
+  compactThread,
+  fetchChatHistory,
 } from '../lib/api';
 
 const AUTO_APPROVAL_MODES = ['off', 'shadow', 'on', 'inherit'];
@@ -272,6 +274,19 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             ...prev.slice(-4),
             { id: `${event.botMsgId}-${Date.now()}`, reason: event.reason || '', botId },
           ]);
+        } else if (event.type === 'context.compacted' && event.message) {
+          // The stored marker goes where it sits in history: after the user's
+          // message, before the reply that is about to stream.
+          updateMessages((prev) => {
+            const placeholder = prev.find((msg) => msg.id === streamingMsgId);
+            const rest = prev.filter((msg) => msg.id !== streamingMsgId && msg.id !== event.message.id);
+            return placeholder ? [...rest, event.message, placeholder] : [...rest, event.message];
+          });
+        } else if (event.type === 'context.compaction_failed') {
+          updateMessages((prev) => [
+            ...prev,
+            { id: `local-${Date.now()}`, sender: 'system', text: `Context compaction failed: ${event.error}. Continuing with the full context.`, isError: true, local: true, created_at: new Date().toISOString() },
+          ]);
         } else if (event.type === 'turn.usage' && event.usage) {
           updateMessages((prev) =>
             prev.map((msg) => (msg.id === streamingMsgId ? { ...msg, usage: event.usage } : msg))
@@ -424,6 +439,21 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
           addLocalMessage('Conversation cleared.');
         } catch (err) {
           addLocalMessage(`Could not clear the conversation: ${err.message}`, true);
+        }
+        return;
+      }
+      case 'compact': {
+        addLocalMessage('Compacting the conversation. The model is writing a summary of the older turns...');
+        try {
+          const result = await compactThread(botId);
+          if (result.status === 'nothing_to_compact') {
+            addLocalMessage(`Nothing to compact yet: the last ${result.keep_recent_turns} turns are always kept as they are.`);
+            return;
+          }
+          const history = await fetchChatHistory(botId);
+          setMessagesFor(botId, () => history);
+        } catch (err) {
+          addLocalMessage(`Compaction failed: ${err.message}`, true);
         }
         return;
       }

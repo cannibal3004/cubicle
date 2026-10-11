@@ -32,6 +32,7 @@ class CommandSpec:
 COMMANDS: Tuple[CommandSpec, ...] = (
     CommandSpec("help", "/help", "List the slash commands.", "client"),
     CommandSpec("clear", "/clear", "Delete this bot's conversation history and start fresh.", "client"),
+    CommandSpec("compact", "/compact", "Summarize the older part of this conversation to free up context.", "client"),
     CommandSpec("model", "/model <model>", "Switch this bot's model. A unique part of the id is enough.", "client", args="<model>"),
     CommandSpec("auto", "/auto off|shadow|on|inherit", "Set this bot's auto-approval mode.", "client", args="off|shadow|on|inherit"),
     CommandSpec("stop", "/stop", "Stop the reply that is streaming.", "client", while_streaming=True),

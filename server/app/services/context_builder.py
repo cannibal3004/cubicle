@@ -1,10 +1,13 @@
 """Build the model's context from the stored transcript.
 
-Phase one of context management: tool results are kept with the message
-that produced them (trimmed), and recent bot turns are replayed in the
-provider's native shape (assistant tool_calls, tool results, final text)
-so the model remembers what it found instead of searching again. Older
-turns keep their tool calls but get a one-line stub per result.
+The rule that matters for speed: the context is append-only. A message is
+sent exactly as it was sent the turn before, so the provider's prompt cache
+resumes from the end of the previous turn and a turn costs only the tokens
+it adds. Tool results are bounded when they are stored (trimmed per result,
+capped per reply) and then replayed in full, in the provider's native shape
+(assistant tool_calls, tool results, final text), for every bot turn. When
+the thread grows past the window, compaction (context_compactor) folds the
+older part into one stored summary and the context starts there.
 """
 
 import json
@@ -12,7 +15,37 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 
-OMITTED_NOTE = "result omitted from context (older turn)"
+COMPACTION_ITEM_TYPE = "compaction"
+SUMMARY_LEAD = "Summary of the conversation so far (earlier messages were compacted):"
+
+
+def is_compaction(message: Dict[str, Any]) -> bool:
+    return message.get("sender") == "system" and message.get("item_type") == COMPACTION_ITEM_TYPE
+
+
+def latest_compaction(history: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    for message in reversed(history):
+        if is_compaction(message):
+            return message
+    return None
+
+
+def live_messages(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The messages the latest compaction does not cover, in stored order.
+
+    Messages are stored in insertion order and a compaction is inserted after
+    the newest user message (the one that started the turn), so the live
+    range starts after the message the compaction says it covers, not after
+    the compaction row. Compaction rows and other system rows are left out.
+    """
+    compaction = latest_compaction(history)
+    if compaction is None:
+        return [m for m in history if m.get("sender") in ("user", "bot")]
+    covers = (compaction.get("raw_payload") or {}).get("covers_through")
+    start = next((i for i, m in enumerate(history) if m.get("id") == covers and m.get("id") is not None), None)
+    if start is None:
+        start = history.index(compaction)
+    return [m for m in history[start + 1:] if m.get("sender") in ("user", "bot")]
 
 
 def trim_result_text(text: str, limit: Optional[int] = None) -> str:
@@ -47,14 +80,12 @@ def _stub_for(record: Dict[str, Any], note: str) -> str:
     return json.dumps(stub, ensure_ascii=False)
 
 
-def _tool_message(record: Dict[str, Any], full: bool) -> Dict[str, Any]:
+def _tool_message(record: Dict[str, Any]) -> Dict[str, Any]:
     if record.get("status") == "completed":
-        if full and record.get("result"):
+        if record.get("result"):
             content = record["result"]
-        elif record.get("result_dropped") or not record.get("result"):
-            content = _stub_for(record, "result not retained")
         else:
-            content = _stub_for(record, OMITTED_NOTE)
+            content = _stub_for(record, "result not retained")
     else:
         content = _stub_for(record, "the call did not complete")
     return {"role": "tool", "tool_call_id": str(record["id"]), "content": content}
@@ -73,32 +104,26 @@ def _call_entries(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return entries
 
 
-def build_history_messages(
-    history: List[Dict[str, Any]],
-    *,
-    replay_tools: bool,
-    replay_turns: Optional[int] = None,
-) -> List[Dict[str, Any]]:
+def summary_messages(compaction: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """How a stored compaction is shown to the model: a user turn carrying the
+    summary and a short acknowledgement, so the kept turns follow naturally."""
+    return [
+        {"role": "user", "content": f"{SUMMARY_LEAD}\n\n{compaction.get('text', '')}", "image_url": None},
+        {"role": "assistant", "content": "Understood. I will continue from that summary.", "image_url": None},
+    ]
+
+
+def build_history_messages(history: List[Dict[str, Any]], *, replay_tools: bool) -> List[Dict[str, Any]]:
     """Transcript -> provider-neutral messages.
 
-    With `replay_tools` (OpenAI-compatible providers), bot turns that used
-    tools become assistant(tool_calls) + tool results + assistant(text).
-    The most recent `replay_turns` tool-using bot turns carry full results;
-    older ones carry stubs. Without it (MUAPI), only the texts are used, as before.
+    Starts at the latest compaction, if there is one, with its summary. With
+    `replay_tools` (OpenAI-compatible providers), bot turns that used tools
+    become assistant(tool_calls) + tool results + assistant(text). Without it
+    (MUAPI), only the texts are used.
     """
-    replay_turns = settings.CONTEXT_REPLAY_TURNS if replay_turns is None else replay_turns
-    # Count only replies that used tools, so plain exchanges in between do
-    # not push real results out of the window.
-    tool_turns = [
-        i for i, m in enumerate(history)
-        if m.get("sender") == "bot" and any(
-            isinstance(r, dict) and r.get("id") for r in ((m.get("raw_payload") or {}).get("tool_calls") or [])
-        )
-    ]
-    full_from = set(tool_turns[-replay_turns:]) if replay_turns > 0 else set()
-
-    messages: List[Dict[str, Any]] = []
-    for index, message in enumerate(history):
+    compaction = latest_compaction(history)
+    messages: List[Dict[str, Any]] = summary_messages(compaction) if compaction else []
+    for message in live_messages(history):
         sender = message.get("sender")
         if sender == "user":
             messages.append({"role": "user", "content": message.get("text", ""), "image_url": message.get("image_url")})
@@ -113,9 +138,8 @@ def build_history_messages(
         if not replay_tools or not records:
             messages.append({"role": "assistant", "content": text, "image_url": None})
             continue
-        full = index in full_from
         messages.append({"role": "assistant", "content": "", "tool_calls": _call_entries(records)})
-        messages.extend(_tool_message(record, full) for record in records)
+        messages.extend(_tool_message(record) for record in records)
         if text.strip():
             messages.append({"role": "assistant", "content": text, "image_url": None})
     return messages

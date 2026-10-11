@@ -403,6 +403,20 @@ export async function clearChatHistory(threadId) {
   return res.json();
 }
 
+export async function compactThread(threadId) {
+  const res = await apiFetch(`${API_BASE_URL}/chat/compact/${encodeURIComponent(threadId)}`, { method: 'POST' });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = (await res.json()).detail || '';
+    } catch (err) {
+      detail = '';
+    }
+    throw new Error(detail || 'Failed to compact the conversation');
+  }
+  return res.json();
+}
+
 export async function fetchSettings() {
   try {
     const res = await apiFetch(`${API_BASE_URL}/settings`);

@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -21,6 +22,7 @@ from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs
 from app.services.context_builder import build_history_messages, cap_message_results, trim_result_text
+from app.services.context_compactor import compact_thread, last_prompt_tokens, should_compact
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
 from app.services.llm_tools import (
     ToolCallError,
@@ -95,6 +97,25 @@ def _model_accepts_images(model: str, llm_config) -> bool:
 @router.get("/history/{thread_id}", response_model=List[Message])
 async def get_history(thread_id: str):
     return storage_service.get_messages(thread_id=thread_id)
+
+
+@router.post("/compact/{thread_id}")
+async def compact_now(thread_id: str):
+    """Summarise the older part of a thread now (the /compact command)."""
+    current = turn_manager.current(thread_id)
+    if current is not None and not current.finished:
+        raise HTTPException(status_code=409, detail="A reply is still in progress; wait for it or use /stop first.")
+    setup = await _turn_setup(thread_id, None)
+    try:
+        stored = await compact_thread(
+            thread_id, reason="manual", model=setup["selected_model"], system_prompt=setup["compaction_prompt"],
+            config=setup["llm_config"], replay_tools=setup["llm_config"].provider != "muapi",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Compaction failed: {exc}") from exc
+    if stored is None:
+        return {"status": "nothing_to_compact", "keep_recent_turns": settings.CONTEXT_KEEP_RECENT_TURNS}
+    return {"status": "ok", "compaction": stored}
 
 
 @router.delete("/history/{thread_id}")
@@ -234,19 +255,23 @@ async def _context_window_for(llm_config, model: str) -> Optional[int]:
     return info.context_length if info is not None else None
 
 
-async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
-    """Capture everything a turn needs at start time and return its coroutine.
+logger = logging.getLogger(__name__)
 
-    The runner is executed by the TurnManager as its own task, so it must not
-    depend on any request or connection outliving it.
+async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[str, Any]:
+    """Everything a turn (or a compaction) needs, captured once.
+
+    The system prompt is built so that it is byte-identical from one turn to
+    the next: the provider's prompt cache resumes from the end of the last
+    turn only while the prefix does not change, so the date goes at the end
+    and at day resolution, and nothing per-turn goes in here.
     """
     history = storage_service.get_messages(thread_id=thread_id)
     bots = storage_service.get_bots()
     current_bot = next((b for b in bots if b["id"] == thread_id), None)
 
     raw_prompt = current_bot["system_prompt"] if current_bot else "You are a helpful AI assistant."
-    current_time_str = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
-    system_prompt = f"Current Date & Time: {current_time_str}.\n\n{raw_prompt}"
+    today = datetime.now().strftime("%A, %B %d, %Y")
+    system_prompt = f"{raw_prompt}\n\nToday is {today}."
     llm_config = llm_service.current_llm_config()
     selected_model = (
         requested_model
@@ -282,8 +307,47 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
     tools_prompt = describe_tools(tool_specs)
     # The bot's auto-approval mode is fixed for the whole turn, like its tools.
     gate_mode = approval_gate.mode_for(current_bot)
+    return {
+        "history": history,
+        "current_bot": current_bot,
+        "system_prompt": system_prompt,
+        # What a turn sends as its system prompt before any per-turn context;
+        # the compaction summary request sends exactly this so its prefix is
+        # served from the cache.
+        "compaction_prompt": f"{system_prompt}\n\n{tools_prompt}" if tools_prompt else system_prompt,
+        "llm_config": llm_config,
+        "selected_model": selected_model,
+        "formatted_history": formatted_history,
+        "context_window": context_window,
+        "tool_specs": tool_specs,
+        "tool_definitions": tool_definitions,
+        "tools_prompt": tools_prompt,
+        "gate_mode": gate_mode,
+    }
+
+
+async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
+    """Capture everything a turn needs at start time and return its coroutine.
+
+    The runner is executed by the TurnManager as its own task, so it must not
+    depend on any request or connection outliving it.
+    """
+    setup = await _turn_setup(thread_id, requested_model)
+    history = setup["history"]
+    current_bot = setup["current_bot"]
+    system_prompt = setup["system_prompt"]
+    llm_config = setup["llm_config"]
+    selected_model = setup["selected_model"]
+    formatted_history = setup["formatted_history"]
+    context_window = setup["context_window"]
+    tool_specs = setup["tool_specs"]
+    tool_definitions = setup["tool_definitions"]
+    tools_prompt = setup["tools_prompt"]
+    gate_mode = setup["gate_mode"]
+    replay_tools = llm_config.provider != "muapi"
 
     async def run(turn: Turn) -> None:
+        nonlocal formatted_history, history
         bot_msg_id = f"msg-{uuid.uuid4().hex[:6]}"
         text_pieces: List[str] = []
         # Thinking is shown to the user and kept with the message for display,
@@ -308,6 +372,24 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         tool_context = ""
 
         turn.emit({"type": "turn.started", "botMsgId": bot_msg_id, "model": selected_model})
+
+        # --- compaction: the thread has outgrown its share of the window ------
+        if should_compact(history, context_window):
+            turn.emit({"type": "context.compacting", "botMsgId": bot_msg_id,
+                       "promptTokens": last_prompt_tokens(history), "contextWindow": context_window})
+            try:
+                stored = await compact_thread(
+                    thread_id, reason="auto", model=selected_model, system_prompt=setup["compaction_prompt"],
+                    config=llm_config, replay_tools=replay_tools,
+                )
+            except Exception as exc:  # the turn goes on with the full context; it may still fit
+                logger.warning("Compaction of %s failed: %s", thread_id, exc)
+                turn.emit({"type": "context.compaction_failed", "botMsgId": bot_msg_id, "error": str(exc)})
+            else:
+                if stored is not None:
+                    turn.emit({"type": "context.compacted", "botMsgId": bot_msg_id, "message": stored})
+                    history = storage_service.get_messages(thread_id=thread_id)
+                    formatted_history = build_history_messages(history, replay_tools=replay_tools)
 
         # --- explicit slash commands typed by the user ------------------------
         last_user_text = formatted_history[-1]["content"] if formatted_history else ""
