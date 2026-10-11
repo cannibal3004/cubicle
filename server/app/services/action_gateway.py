@@ -36,6 +36,29 @@ _SENSITIVE_TEXT = re.compile(
     r"\s*[:=]\s*['\"]?([^\s,'\"]+)"
 )
 
+# Credentials that give themselves away by shape, with no "token=" label in
+# front of them: a pasted key in a chat message, or a `printf '%s' ghp_...`
+# that writes one to a file. Each pattern keeps its recognisable prefix so the
+# redacted text still says what kind of thing was there.
+_TOKEN_LITERALS = (
+    (re.compile(r"\b(github_pat_)[A-Za-z0-9_]{20,}"), r"\1[REDACTED]"),
+    (re.compile(r"\b(gh[pousr]_)[A-Za-z0-9]{30,}"), r"\1[REDACTED]"),
+    (re.compile(r"\b(sk-ant-)[A-Za-z0-9_-]{20,}"), r"\1[REDACTED]"),
+    (re.compile(r"\b(sk-)[A-Za-z0-9_-]{32,}"), r"\1[REDACTED]"),
+    (re.compile(r"\b(xox[abprs]-)[A-Za-z0-9-]{10,}"), r"\1[REDACTED]"),
+    (re.compile(r"\b(AKIA|ASIA)[A-Z0-9]{16}\b"), r"\1[REDACTED]"),
+    (re.compile(r"\b(AIza)[0-9A-Za-z_-]{35}\b"), r"\1[REDACTED]"),
+    (re.compile(r"\b([sr]k_(?:live|test)_)[A-Za-z0-9]{10,}"), r"\1[REDACTED]"),
+    (re.compile(r"\b(eyJ)[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), r"\1[REDACTED]"),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"), "[REDACTED PRIVATE KEY]"),
+)
+
+
+def redact_token_literals(text: str) -> str:
+    for pattern, replacement in _TOKEN_LITERALS:
+        text = pattern.sub(replacement, text)
+    return text
+
 
 def redact_sensitive(value: Any, key: str = "") -> Any:
     """Return a JSON-safe copy with credential-like fields removed."""
@@ -57,7 +80,7 @@ def redact_sensitive(value: Any, key: str = "") -> Any:
     if isinstance(value, (list, tuple)):
         return [redact_sensitive(item, key) for item in value]
     if isinstance(value, str):
-        return _SENSITIVE_TEXT.sub(r"\1=[REDACTED]", value)
+        return redact_token_literals(_SENSITIVE_TEXT.sub(r"\1=[REDACTED]", value))
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)

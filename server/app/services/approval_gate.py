@@ -25,6 +25,7 @@ import httpx
 
 from app.config import settings
 from app.schemas.contracts import ActionRequest
+from app.services.action_gateway import redact_sensitive
 from app.services.storage_service import StorageService, storage_service
 from app.services.workspace_service import WorkspaceService, WorkspaceToolError, workspace_service
 
@@ -191,8 +192,11 @@ class ApprovalGate:
         are added as plain keys: the model reads keyed lookups far better than
         it infers them.
         """
+        # The request's arguments, target and preview were redacted when the action
+        # was opened; the user's own message was not, and a pasted key must not
+        # reach the model or the decision log either.
         state: Dict[str, Any] = {
-            "user_request": _clip(user_request or ""),
+            "user_request": _clip(redact_sensitive(user_request or "")),
             "tool": f"{request.tool}.{request.action}",
             "intent": request.intent,
             "arguments": _clip(dict(request.arguments)),

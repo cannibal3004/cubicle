@@ -93,6 +93,14 @@ class ApprovalGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["existing_bytes"], 21)
         self.assertNotIn("private", str(state))
 
+    def test_state_redacts_a_pasted_token_in_the_users_message(self):
+        token = "github_pat_11AAAAAAA0" + "x" * 60
+        request = _request(tool="computer", action="terminal_execute", arguments={"command": f"printf '%s' {token} > /tmp/.gh_token"})
+        state = self.gate.build_state(request, None, f"here is my token {token}, push the branch")
+        self.assertNotIn(token, state["user_request"])
+        self.assertIn("github_pat_[REDACTED]", state["user_request"])
+        self.assertIn("push the branch", state["user_request"])
+
     def test_state_marks_a_new_file_and_clips_long_fields(self):
         call = WorkspaceToolCall("workspace.write", "fresh.txt", "x")
         request = _request(arguments=call.arguments_for_display)
