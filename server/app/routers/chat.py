@@ -178,7 +178,7 @@ async def _perform_action(
         approval_gate.record(action_request, verdict)
         turn.emit({"type": "gate.scored", **base, "verdict": verdict.to_event()})
         if verdict.auto_approved:
-            action_gateway.resolve_approval(action_request, "allow", decided_by="decider")
+            action_gateway.resolve_approval(action_request, "allow", decided_by=verdict.decided_by)
 
     try:
         decision = await action_gateway.wait_for_decision(action_request)
@@ -186,7 +186,7 @@ async def _perform_action(
         turn.set_pending_approval(None)
 
     if verdict is not None:
-        decided_by = "decider" if verdict.auto_approved and decision == "allow" else "user"
+        decided_by = verdict.decided_by if verdict.auto_approved and decision == "allow" else "user"
         approval_gate.record_final(action_request.request_id, decision, decided_by)
         base["gate"] = verdict.to_event()
 
