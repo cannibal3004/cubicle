@@ -4,9 +4,13 @@ The context builder never rewrites a message the model has already seen, so
 the provider's prompt cache resumes from the end of the last turn and a turn
 costs only what it adds. The one thing that still has to give is the window:
 a long thread fills it. Compaction is the planned answer. It asks the model
-to summarise everything older than the last few turns, stores that summary
-as a `compaction` message in the thread, and from then on the context starts
-there. The raw messages stay in the database for display and audit.
+to summarise everything older than a budget of recent tokens, stores that
+summary as a `compaction` message in the thread, and from then on the context
+starts there. The raw messages stay in the database for display and audit.
+
+What is kept is measured in tokens, not turns: a turn of this harness can be
+a one-line answer or ninety thousand tokens of tool calls, so a turn count
+says nothing about how much of the window the kept part will take.
 
 The summary request repeats the conversation's own prefix (same system
 prompt, same history), so the prefill is served from the cache and the call
@@ -35,43 +39,105 @@ SUMMARY_INSTRUCTION = """The conversation above is about to be compacted: everyt
 
 Write it as notes to yourself, in plain prose and lists, without preamble. Keep it under 800 words. Do not call tools."""
 
+# Used when the provider's own count is not available for a stretch of the
+# thread. Code and JSON run closer to three characters a token, so this
+# slightly understates them; the budget is a target, not a hard limit.
+CHARS_PER_TOKEN = 4
 
 
-def split_for_compaction(history: List[Dict[str, Any]], keep_recent_turns: Optional[int] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def estimate_tokens(messages: List[Dict[str, Any]]) -> int:
+    """Rough size of provider-neutral messages: text plus tool call arguments."""
+    chars = 0
+    for message in messages:
+        chars += len(message.get("content") or "")
+        for call in message.get("tool_calls") or []:
+            chars += len(call.get("name") or "") + len(call.get("arguments") or "")
+    return -(-chars // CHARS_PER_TOKEN)
+
+
+def _prompt_tokens_of(message: Dict[str, Any]) -> Optional[int]:
+    usage = (message.get("raw_payload") or {}).get("usage") or {}
+    tokens = usage.get("prompt_tokens")
+    return int(tokens) if isinstance(tokens, (int, float)) and tokens > 0 else None
+
+
+def turn_slices(live: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    """Group live messages into turns: each user message starts one."""
+    turns: List[List[Dict[str, Any]]] = []
+    for message in live:
+        if message.get("sender") == "user" or not turns:
+            turns.append([message])
+        else:
+            turns[-1].append(message)
+    return turns
+
+
+def turn_sizes(turns: List[List[Dict[str, Any]]], *, replay_tools: bool = True) -> List[int]:
+    """Tokens each turn adds to the context.
+
+    Where this turn's reply and the next turn's reply both carry the
+    provider's prompt count, the difference between them is exact: it is what
+    the context grew by between the two requests (this reply, with its tool
+    calls and results, plus the next user message). Otherwise, and always for
+    the newest turn, the size is estimated from the characters the builder
+    would send.
+    """
+    prompts = [next((_prompt_tokens_of(m) for m in reversed(turn) if m.get("sender") == "bot"), None) for turn in turns]
+    sizes: List[int] = []
+    for i, turn in enumerate(turns):
+        here, following = prompts[i], prompts[i + 1] if i + 1 < len(turns) else None
+        if here and following and following > here:
+            sizes.append(following - here)
+        else:
+            sizes.append(estimate_tokens(build_history_messages(turn, replay_tools=replay_tools)))
+    return sizes
+
+
+def split_for_compaction(
+    history: List[Dict[str, Any]], keep_recent_tokens: Optional[int] = None, *, replay_tools: bool = True
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Split the live part of a thread into (older, recent).
 
-    `older` is what gets summarised: the messages after the last compaction
-    and before the last `keep_recent_turns` user messages. `recent` begins at
-    the first kept user message. Either may be empty.
+    `recent` is the newest whole turns that fit in the token budget, and
+    always at least the newest turn, however large. `older` is what gets
+    summarised: the messages after the last compaction and before `recent`.
+    Either may be empty.
     """
-    keep = settings.CONTEXT_KEEP_RECENT_TURNS if keep_recent_turns is None else keep_recent_turns
-    keep = max(1, keep)
+    budget = settings.CONTEXT_KEEP_RECENT_TOKENS if keep_recent_tokens is None else keep_recent_tokens
     live = live_messages(history)
-    user_indexes = [i for i, m in enumerate(live) if m.get("sender") == "user"]
-    if len(user_indexes) <= keep:
+    turns = turn_slices(live)
+    if len(turns) <= 1:
         return [], live
-    cut = user_indexes[-keep]
-    return live[:cut], live[cut:]
+    sizes = turn_sizes(turns, replay_tools=replay_tools)
+    kept, total = 1, sizes[-1]
+    while kept < len(turns) and total + sizes[-kept - 1] <= budget:
+        total += sizes[-kept - 1]
+        kept += 1
+    cut = len(turns) - kept
+    older = [m for turn in turns[:cut] for m in turn]
+    recent = [m for turn in turns[cut:] for m in turn]
+    return older, recent
 
 
 def last_prompt_tokens(history: List[Dict[str, Any]]) -> Optional[int]:
     """The prompt size the provider reported on the latest bot reply, if any."""
     for message in reversed(history):
-        if message.get("sender") != "bot":
-            continue
-        usage = (message.get("raw_payload") or {}).get("usage") or {}
-        tokens = usage.get("prompt_tokens")
-        return int(tokens) if isinstance(tokens, (int, float)) and tokens > 0 else None
+        if message.get("sender") == "bot":
+            return _prompt_tokens_of(message)
     return None
+
+
+def over_budget(prompt_tokens: Optional[int], context_window: Optional[int]) -> bool:
+    """True when a reported prompt size crossed the configured share of the window."""
+    share = settings.CONTEXT_COMPACT_AT
+    if not context_window or share <= 0 or not prompt_tokens:
+        return False
+    return prompt_tokens >= share * context_window
 
 
 def should_compact(history: List[Dict[str, Any]], context_window: Optional[int]) -> bool:
     """True when the last reported prompt crossed the configured share of the window."""
-    share = settings.CONTEXT_COMPACT_AT
-    if not context_window or share <= 0:
-        return False
-    tokens = last_prompt_tokens(history)
-    return tokens is not None and tokens >= share * context_window
+    return over_budget(last_prompt_tokens(history), context_window)
 
 
 async def compact_thread(
@@ -82,12 +148,12 @@ async def compact_thread(
     system_prompt: str,
     config: Any = None,
     storage: StorageService = storage_service,
-    keep_recent_turns: Optional[int] = None,
+    keep_recent_tokens: Optional[int] = None,
     replay_tools: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """Summarise the older part of a thread and store the summary. Returns the stored message, or None when there was nothing to compact."""
     history = storage.get_messages(thread_id=thread_id)
-    older, recent = split_for_compaction(history, keep_recent_turns)
+    older, recent = split_for_compaction(history, keep_recent_tokens, replay_tools=replay_tools)
     if not older:
         return None
 

@@ -22,7 +22,7 @@ from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs
 from app.services.context_builder import build_history_messages, cap_message_results, trim_result_text
-from app.services.context_compactor import compact_thread, last_prompt_tokens, should_compact
+from app.services.context_compactor import compact_thread, last_prompt_tokens, over_budget
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
 from app.services.llm_tools import (
     ToolCallError,
@@ -109,12 +109,12 @@ async def compact_now(thread_id: str):
     try:
         stored = await compact_thread(
             thread_id, reason="manual", model=setup["selected_model"], system_prompt=setup["compaction_prompt"],
-            config=setup["llm_config"], replay_tools=setup["llm_config"].provider != "muapi",
+            config=setup["llm_config"], storage=storage_service, replay_tools=setup["llm_config"].provider != "muapi",
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Compaction failed: {exc}") from exc
     if stored is None:
-        return {"status": "nothing_to_compact", "keep_recent_turns": settings.CONTEXT_KEEP_RECENT_TURNS}
+        return {"status": "nothing_to_compact", "keep_recent_tokens": settings.CONTEXT_KEEP_RECENT_TOKENS}
     return {"status": "ok", "compaction": stored}
 
 
@@ -371,25 +371,34 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             }
         tool_context = ""
 
-        turn.emit({"type": "turn.started", "botMsgId": bot_msg_id, "model": selected_model})
-
-        # --- compaction: the thread has outgrown its share of the window ------
-        if should_compact(history, context_window):
+        async def compact_if_needed(prompt_tokens: Optional[int]) -> bool:
+            """Fold the stored history when a reported prompt size has outgrown
+            its share of the window. True when the context was rebuilt."""
+            nonlocal formatted_history, history
+            if not over_budget(prompt_tokens, context_window):
+                return False
             turn.emit({"type": "context.compacting", "botMsgId": bot_msg_id,
-                       "promptTokens": last_prompt_tokens(history), "contextWindow": context_window})
+                       "promptTokens": prompt_tokens, "contextWindow": context_window})
             try:
                 stored = await compact_thread(
                     thread_id, reason="auto", model=selected_model, system_prompt=setup["compaction_prompt"],
-                    config=llm_config, replay_tools=replay_tools,
+                    config=llm_config, storage=storage_service, replay_tools=replay_tools,
                 )
             except Exception as exc:  # the turn goes on with the full context; it may still fit
                 logger.warning("Compaction of %s failed: %s", thread_id, exc)
                 turn.emit({"type": "context.compaction_failed", "botMsgId": bot_msg_id, "error": str(exc)})
-            else:
-                if stored is not None:
-                    turn.emit({"type": "context.compacted", "botMsgId": bot_msg_id, "message": stored})
-                    history = storage_service.get_messages(thread_id=thread_id)
-                    formatted_history = build_history_messages(history, replay_tools=replay_tools)
+                return False
+            if stored is None:
+                return False
+            turn.emit({"type": "context.compacted", "botMsgId": bot_msg_id, "message": stored})
+            history = storage_service.get_messages(thread_id=thread_id)
+            formatted_history = build_history_messages(history, replay_tools=replay_tools)
+            return True
+
+        turn.emit({"type": "turn.started", "botMsgId": bot_msg_id, "model": selected_model})
+
+        # --- compaction: the thread has outgrown its share of the window ------
+        await compact_if_needed(last_prompt_tokens(history))
 
         # --- explicit slash commands typed by the user ------------------------
         last_user_text = formatted_history[-1]["content"] if formatted_history else ""
@@ -415,6 +424,8 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
 
         # --- model turn, looping while it calls tools ------------------------
         messages: List[Dict[str, Any]] = list(formatted_history)
+        # Where the stored history ends and this turn's own rounds begin.
+        prefix_len = len(messages)
         max_rounds = max(1, settings.LLM_MAX_TOOL_ROUNDS)
         rounds = 0
         # Once the tool budget is spent the model gets one last call without
@@ -422,6 +433,13 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         final_answer_only = False
         while True:
             rounds += 1
+            # Between rounds the previous round has reported how big the
+            # prompt grew. A turn of many tool calls can cross the line on
+            # its own, so fold the stored history here too, and carry this
+            # turn's rounds over verbatim as the pending work.
+            if rounds > 1 and await compact_if_needed(usage_prompt):
+                messages = list(formatted_history) + messages[prefix_len:]
+                prefix_len = len(formatted_history)
             round_text = ""
             pending_calls: List[Dict[str, Any]] = []
             round_ok = True

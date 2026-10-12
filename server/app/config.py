@@ -48,7 +48,7 @@ class Settings:
     # model's context window, the next turn first summarises everything but
     # the most recent user turns. 0 disables the automatic trigger.
     CONTEXT_COMPACT_AT: float = float(os.getenv("CONTEXT_COMPACT_AT", "0.7"))
-    CONTEXT_KEEP_RECENT_TURNS: int = int(os.getenv("CONTEXT_KEEP_RECENT_TURNS", "4"))
+    CONTEXT_KEEP_RECENT_TOKENS: int = int(os.getenv("CONTEXT_KEEP_RECENT_TOKENS", "30000"))
     CONTEXT_TOOL_RESULT_CHARS: int = int(os.getenv("CONTEXT_TOOL_RESULT_CHARS", "4000"))
     CONTEXT_TOOL_RESULTS_MESSAGE_CHARS: int = int(os.getenv("CONTEXT_TOOL_RESULTS_MESSAGE_CHARS", "24000"))
     COMPOSIO_API_KEY: str = os.getenv("COMPOSIO_API_KEY", "")

@@ -447,7 +447,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
         try {
           const result = await compactThread(botId);
           if (result.status === 'nothing_to_compact') {
-            addLocalMessage(`Nothing to compact yet: the last ${result.keep_recent_turns} turns are always kept as they are.`);
+            addLocalMessage(`Nothing to compact yet: the newest ${Number(result.keep_recent_tokens).toLocaleString()} tokens of conversation are always kept as they are.`);
             return;
           }
           const history = await fetchChatHistory(botId);
