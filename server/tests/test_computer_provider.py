@@ -181,6 +181,24 @@ class ComputerGatewayTests(unittest.IsolatedAsyncioTestCase):
         await self.gateway.wait_for_decision(again)
         self.assertNotIn("computer_auto_started", (await self.gateway.execute(again)).result)
 
+    async def test_package_installs_need_approval_and_are_remembered(self):
+        call = ActionInvocation(
+            name="computer.install_packages",
+            arguments={"bot_id": "bot-pkg", "packages": ["ffmpeg", "jq"]},
+            target={"bot_id": "bot-pkg"},
+            preview="Install packages in the computer for bot-pkg: ffmpeg, jq",
+        )
+        request, approval = self.gateway.open("computer:bot-pkg", "bot-pkg", call)
+        self.assertIsNotNone(approval)
+        self.assertEqual(await self.gateway.wait_for_decision(request), "allow")
+        result = await self.gateway.execute(request)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.result["operation"], "packages.install")
+        self.assertEqual(result.result["packages"], ["ffmpeg", "jq"])
+        self.assertTrue(result.result["computer_auto_started"])
+        self.assertEqual(self.provider.get_or_create("bot-pkg").packages, ["ffmpeg", "jq"])
+        self.assertEqual(self.provider.get_or_create("bot-pkg").to_dict()["packages"], ["ffmpeg", "jq"])
+
 
 class ComputerRouterTests(unittest.IsolatedAsyncioTestCase):
     @unittest.skipIf(app is None, "FastAPI dependencies are not installed")

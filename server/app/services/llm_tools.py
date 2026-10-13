@@ -100,7 +100,7 @@ COMPUTER_TOOLS: List[ToolSpec] = [
     ),
     ToolSpec(
         name="computer_terminal_execute",
-        description="Run a shell command inside the sandbox (30 second timeout, 1 MB of output). The sandbox filesystem is separate from the shared workspace; its writable directory is /workspace.",
+        description="Run a shell command inside the sandbox as its unprivileged user (30 second timeout, 1 MB of output). The sandbox filesystem is separate from the shared workspace. /workspace and the home directory persist between starts; /tmp does not. There is no sudo: for apt packages use computer_install_packages; pip (in a venv), npm, cargo and similar work normally in the home directory.",
         parameters=_obj({"command": {"type": "string", "description": "Shell command to run"}}, ["command"]),
         group="computer",
         needs_approval=True,
@@ -111,6 +111,16 @@ COMPUTER_TOOLS: List[ToolSpec] = [
         parameters=_obj({"path": {"type": "string", "description": "Absolute path inside the sandbox"}}),
         group="computer",
         needs_approval=False,
+    ),
+    ToolSpec(
+        name="computer_install_packages",
+        description="Install Ubuntu packages (apt) into the sandbox. This is the only way to get system packages: there is no sudo in the shell. Installed packages are added to this computer's package list and put back automatically whenever the computer is recreated or its image is rebuilt.",
+        parameters=_obj(
+            {"packages": {"type": "array", "items": {"type": "string"}, "description": "Ubuntu package names, e.g. [\"ffmpeg\", \"libpq-dev\"]"}},
+            ["packages"],
+        ),
+        group="computer",
+        needs_approval=True,
     ),
     ToolSpec(
         name="computer_request_takeover",
@@ -271,6 +281,8 @@ def describe_tools(specs: List[ToolSpec]) -> str:
             "- Your computer: a sandboxed Linux container with a Chromium browser and a shell, with internet access. "
             "Navigate with computer_browser_navigate, then computer_screenshot to see the page, computer_send_input to click or type, "
             "and computer_terminal_execute for commands. The computer starts itself the first time you use it (that first call can take a little longer); computer_start only warms it up. "
+            "Software: computer_install_packages installs apt packages (the shell has no sudo); pip in a venv, npm, cargo and the like work from the shell. "
+            "/workspace and the home directory persist between starts, so installed tools and venvs stay; /tmp is wiped. "
             "The user can watch the same desktop live and take control of it; when a step needs a human, call computer_request_takeover."
         )
     if "share" in groups:
@@ -390,6 +402,21 @@ def build_invocation(
     if name == "computer_files_list":
         path = _string(arguments, "path", default="/workspace", max_len=1000)
         return _computer_invocation("files_list", bot_id, {"path": path}, f"List computer files for {bot_id} at {path}")
+    if name == "computer_install_packages":
+        packages = arguments.get("packages")
+        if isinstance(packages, str):
+            packages = packages.split()
+        if not isinstance(packages, list) or not packages or len(packages) > 50:
+            raise ToolCallError("'packages' must be a list of 1 to 50 package names.")
+        names = []
+        for item in packages:
+            name = item.strip().lower() if isinstance(item, str) else ""
+            if not re.match(r"^[a-z0-9][a-z0-9+.:~-]{0,99}$", name):
+                raise ToolCallError(f"'{str(item)[:60]}' is not a valid package name.")
+            if name not in names:
+                names.append(name)
+        listed = ", ".join(names)
+        return _computer_invocation("install_packages", bot_id, {"packages": names}, f"Install packages in the computer for {bot_id}: {listed[:160]}")
     if name == "computer_send_input":
         kind = _string(arguments, "type", required=True, max_len=20).lower()
         if kind not in _INPUT_TYPES:

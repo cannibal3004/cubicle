@@ -35,6 +35,7 @@ class ComputerActionRequest(BaseModel):
         "send_input",
         "cleanup",
         "request_takeover",
+        "install_packages",
     ]
     arguments: Dict[str, Any] = Field(default_factory=dict)
 
@@ -61,6 +62,10 @@ def _preview(action: str, bot_id: str, arguments: Dict[str, Any]) -> str:
         return f"Remove the computer assigned to {bot_id}"
     if action == "request_takeover":
         return f"Ask the user to take over the computer for {bot_id}"
+    if action == "install_packages":
+        packages = arguments.get("packages")
+        listed = " ".join(packages) if isinstance(packages, list) else str(packages or "")
+        return f"Install packages in the computer for {bot_id}: {listed[:160]}"
     if action == "set_control":
         return f"Give control of the computer for {bot_id} to the {arguments.get('owner') or 'bot'}"
     return f"Run computer action {action} for {bot_id}"

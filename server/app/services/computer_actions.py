@@ -94,6 +94,10 @@ def register_computer_actions(
         status, started = await _ready(call, target_provider)
         return _mark_started(await target_provider.files_list(status.computer_id, str(call.arguments.get("path") or "/workspace")), started)
 
+    async def install_packages(call: ActionInvocation) -> Dict[str, Any]:
+        status, started = await _ready(call, target_provider)
+        return _mark_started(await target_provider.install_packages(status.computer_id, call.arguments.get("packages")), started)
+
     async def send_input(call: ActionInvocation) -> Dict[str, Any]:
         status, started = await _ready(call, target_provider)
         event = call.arguments.get("event")
@@ -223,6 +227,17 @@ def register_computer_actions(
                 requires_approval=False,
             ),
             files_list,
+        ),
+        "computer.install_packages": (
+            ActionDefinition(
+                name="computer.install_packages",
+                tool="computer",
+                action="install_packages",
+                intent="Install Ubuntu packages inside the bot computer and keep them on its package list.",
+                risk="write",
+                requires_approval=True,
+            ),
+            install_packages,
         ),
         "computer.send_input": (
             ActionDefinition(

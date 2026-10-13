@@ -371,6 +371,12 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack }) {
               <div className="flex justify-between text-slate-400"><span>Control</span><span className="text-slate-200 capitalize">{computer?.controlled_by || 'bot'}</span></div>
               <div className="flex justify-between text-slate-400"><span>Generation</span><span className="text-slate-200 font-mono">{computer?.generation ?? 0}</span></div>
               <div className="flex justify-between text-slate-400"><span>Last operation</span><span className="text-slate-200 font-mono">{computer?.last_operation || 'none'}</span></div>
+              <div className="flex justify-between gap-3 text-slate-400">
+                <span className="shrink-0">Packages</span>
+                <span className="text-slate-200 font-mono text-right break-words min-w-0" title="Ubuntu packages this computer installed; restored at every start">
+                  {computer?.packages?.length ? computer.packages.join(', ') : 'none'}
+                </span>
+              </div>
             </div>
           </div>
 

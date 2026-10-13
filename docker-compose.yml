@@ -76,11 +76,13 @@ services:
       DECIDER_TIMEOUT_SECONDS: ${DECIDER_TIMEOUT_SECONDS:-15}
       # Computer provider: fake (default) or docker (needs the `computer` profile).
       COMPUTER_PROVIDER: ${COMPUTER_PROVIDER:-fake}
-      COMPUTER_DOCKER_IMAGE: ${COMPUTER_DOCKER_IMAGE:-cubicle-computer:2.0.0}
+      COMPUTER_DOCKER_IMAGE: ${COMPUTER_DOCKER_IMAGE:-cubicle-computer:2.1.0}
       COMPUTER_DOCKER_NETWORK: cubicle-computers
       COMPUTER_DOCKER_WORKSPACE_MODE: ${COMPUTER_DOCKER_WORKSPACE_MODE:-volume}
       COMPUTER_DOCKER_HOST_WORKSPACE_ROOT: ${COMPUTER_DOCKER_HOST_WORKSPACE_ROOT:-}
       COMPUTER_DOCKER_WALLPAPER: ${COMPUTER_WALLPAPER:-}
+      COMPUTER_DOCKER_TMP_SIZE: ${COMPUTER_DOCKER_TMP_SIZE:-2g}
+      COMPUTER_DOCKER_INSTALL_TIMEOUT: ${COMPUTER_DOCKER_INSTALL_TIMEOUT:-600}
       # The Docker CLI inside the API only ever reaches the socket proxy.
       DOCKER_HOST: tcp://docker-socket-proxy:2375
     volumes:
@@ -134,6 +136,10 @@ services:
       ALLOW_START: 1
       ALLOW_STOP: 1
       ALLOW_RESTARTS: 1
+      # computer_install_packages runs apt in the sandbox through docker exec;
+      # a reset in volume mode removes the computer's home volume.
+      EXEC: 1
+      VOLUMES: 1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
@@ -143,7 +149,7 @@ services:
   # as a service. The API starts one container per bot from this image.
   computer-runtime:
     build: ./runtime
-    image: ${COMPUTER_DOCKER_IMAGE:-cubicle-computer:2.0.0}
+    image: ${COMPUTER_DOCKER_IMAGE:-cubicle-computer:2.1.0}
     profiles:
       - computer
     deploy:

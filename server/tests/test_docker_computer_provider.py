@@ -13,16 +13,21 @@ class FakeDockerCommand:
     def __call__(self, args, timeout):
         self.calls.append((tuple(args), timeout))
         if args[0] == "run":
-            return "container-test"
+            return "container-test" if "--entrypoint" not in args else ""
         if args[0] == "port":
             return "127.0.0.1:45678"
         if args[0] == "rm":
             # No stale container exists in these tests, like a real daemon says.
             raise ComputerProviderError("Error response from daemon: No such container")
+        if args[0] == "exec":
+            return "Reading package lists...\nSetting up " + " ".join(args[5:]) + "\n"
         return ""
 
     def run_args(self):
-        return next(call[0] for call in self.calls if call[0][0] == "run")
+        return next(call[0] for call in self.calls if call[0][0] == "run" and "--entrypoint" not in call[0])
+
+    def calls_of(self, verb):
+        return [call[0] for call in self.calls if call[0][0] == verb]
 
 
 class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
@@ -55,17 +60,160 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((self.root / "computers" / status.computer_id).is_dir())
         run_args = self.docker.run_args()
         self.assertEqual(run_args[0], "run")
-        self.assertIn("--read-only", run_args)
+        # The root filesystem is writable (apt installs into it) but the
+        # sandbox user is dropped to with no capabilities; the root stage at
+        # boot keeps only what dpkg needs.
+        self.assertNotIn("--read-only", run_args)
+        self.assertNotIn("--user", run_args)
         self.assertIn("--cap-drop", run_args)
         self.assertIn("ALL", run_args)
+        added = [run_args[i + 1] for i, a in enumerate(run_args) if a == "--cap-add"]
+        self.assertEqual(added, ["CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SETGID", "SETUID", "SETPCAP"])
         self.assertIn("--security-opt", run_args)
         self.assertIn("no-new-privileges:true", run_args)
         self.assertIn("--pids-limit", run_args)
-        self.assertIn("/home/pwuser:rw,nosuid,size=1g,uid=1001,gid=1001", run_args)
+        self.assertIn("/tmp:rw,nosuid,size=2g", run_args)
+        # Home and apt cache are bind mounts beside the workspace, created up front.
+        mounts = [run_args[i + 1] for i, a in enumerate(run_args) if a == "--mount"]
+        self.assertTrue(any(m.endswith(",dst=/home/pwuser") and f"{status.computer_id}.home" in m for m in mounts))
+        self.assertTrue(any(m.endswith(",dst=/var/lib/cubicle/apt") and f"{status.computer_id}.apt" in m for m in mounts))
+        self.assertTrue((self.root / "computers" / f"{status.computer_id}.home").is_dir())
+        self.assertTrue((self.root / "computers" / f"{status.computer_id}.apt").is_dir())
+        self.assertIn("CUBICLE_PACKAGES=", run_args)
         self.assertIn("--publish", run_args)
         self.assertIn("127.0.0.1::3000", run_args)
+        self.assertEqual(started.packages, [])
         self.assertNotIn("COMPUTER_TOKEN", started.to_dict())
         self.assertNotIn("token", started.to_dict())
+
+    async def test_tmp_size_is_configurable(self):
+        provider = DockerComputerProvider(
+            image="cubicle-computer:test",
+            workspace_root=self.root / "computers",
+            seccomp_profile=self.root / "missing-seccomp.json",
+            start_timeout=0.5,
+            tmp_size="4g",
+            docker_command=self.docker,
+        )
+        status = provider.get_or_create("bot-tmp")
+
+        async def ready(_record):
+            return {"status": "healthy"}
+
+        provider._wait_until_ready = ready
+        await provider.start(status.computer_id)
+        self.assertIn("/tmp:rw,nosuid,size=4g", self.docker.run_args())
+
+    async def test_installed_packages_are_remembered_and_restored_at_the_next_start(self):
+        status = self.provider.get_or_create("bot-pkg")
+
+        async def ready(_record):
+            return {"status": "healthy"}
+
+        self.provider._wait_until_ready = ready
+        await self.provider.start(status.computer_id)
+
+        result = await self.provider.install_packages(status.computer_id, ["ffmpeg", "Libpq-dev", "ffmpeg"])
+        self.assertEqual(result["installed"], ["ffmpeg", "libpq-dev"])
+        self.assertEqual(result["packages"], ["ffmpeg", "libpq-dev"])
+        self.assertIn("Setting up ffmpeg libpq-dev", result["output"])
+        exec_call = self.docker.calls_of("exec")[0]
+        self.assertEqual(exec_call[:4], ("exec", "--user", "root", "container-test"))
+        self.assertEqual(exec_call[4], "/opt/cubicle-computer/install-packages.sh")
+        self.assertEqual(exec_call[5:], ("ffmpeg", "libpq-dev"))
+        self.assertEqual(
+            (self.root / "computers" / f"{status.computer_id}.packages").read_text(encoding="utf-8"),
+            "ffmpeg\nlibpq-dev\n",
+        )
+        self.assertEqual(self.provider.describe("bot-pkg").packages, ["ffmpeg", "libpq-dev"])
+
+        # A second install adds to the list; the list is given to the next container.
+        await self.provider.install_packages(status.computer_id, ["jq"])
+        await self.provider.stop(status.computer_id)
+        await self.provider.start(status.computer_id)
+        last_run = self.docker.calls_of("run")[-1]
+        self.assertIn("CUBICLE_PACKAGES=ffmpeg libpq-dev jq", last_run)
+
+        # A fresh provider (API restart) reads the list back from disk.
+        again = DockerComputerProvider(
+            image="cubicle-computer:test",
+            workspace_root=self.root / "computers",
+            seccomp_profile=self.root / "missing-seccomp.json",
+            docker_command=self.docker,
+        )
+        self.assertEqual(again.get_or_create("bot-pkg").packages, ["ffmpeg", "libpq-dev", "jq"])
+
+    async def test_package_names_are_validated_before_anything_runs(self):
+        status = self.provider.get_or_create("bot-pkg")
+
+        async def ready(_record):
+            return {"status": "healthy"}
+
+        self.provider._wait_until_ready = ready
+        await self.provider.start(status.computer_id)
+        for bad in (["ffmpeg; rm -rf /"], ["--reinstall"], [], ["x" * 120], "", ["../etc"]):
+            with self.assertRaises(ComputerProviderError):
+                await self.provider.install_packages(status.computer_id, bad)
+        self.assertEqual(self.docker.calls_of("exec"), [])
+        with self.assertRaisesRegex(ComputerProviderError, "At most 50"):
+            await self.provider.install_packages(status.computer_id, [f"pkg{i}" for i in range(51)])
+
+    async def test_a_failed_install_is_reported_and_not_remembered(self):
+        def docker(args, timeout):
+            if args[0] == "exec":
+                raise ComputerProviderError("Docker command failed: E: Unable to locate package nosuchpkg")
+            return self.docker(args, timeout)
+
+        provider = DockerComputerProvider(
+            image="cubicle-computer:test",
+            workspace_root=self.root / "computers",
+            seccomp_profile=self.root / "missing-seccomp.json",
+            start_timeout=0.5,
+            docker_command=docker,
+        )
+        status = provider.get_or_create("bot-pkg")
+
+        async def ready(_record):
+            return {"status": "healthy"}
+
+        provider._wait_until_ready = ready
+        await provider.start(status.computer_id)
+        with self.assertRaisesRegex(ComputerProviderError, "Unable to locate package"):
+            await provider.install_packages(status.computer_id, ["nosuchpkg"])
+        self.assertEqual(status.packages, [])
+        self.assertFalse((self.root / "computers" / f"{status.computer_id}.packages").exists())
+
+    async def test_reset_empties_the_home_directory_and_the_package_list(self):
+        status = self.provider.get_or_create("bot-reset")
+
+        async def ready(_record):
+            return {"status": "healthy"}
+
+        self.provider._wait_until_ready = ready
+        await self.provider.start(status.computer_id)
+        await self.provider.install_packages(status.computer_id, ["ffmpeg"])
+        home = self.root / "computers" / f"{status.computer_id}.home"
+        self.assertTrue(home.is_dir())
+
+        reset = await self.provider.reset(status.computer_id)
+        self.assertEqual(reset.state, "stopped")
+        self.assertEqual(reset.generation, 2)
+        self.assertEqual(reset.packages, [])
+        self.assertFalse((self.root / "computers" / f"{status.computer_id}.packages").exists())
+        # The files belong to the sandbox user, so a throwaway container
+        # over the same mount does the deleting, with no network.
+        wipe = next(c for c in self.docker.calls_of("run") if "--entrypoint" in c)
+        self.assertIn("find", wipe)
+        self.assertIn("none", wipe)
+        self.assertIn("--rm", wipe)
+        self.assertNotIn("--network", wipe[wipe.index("--mount"):])
+        mount = wipe[wipe.index("--mount") + 1]
+        self.assertTrue(mount.startswith("type=bind,src="))
+        self.assertIn(f"{status.computer_id}.home", mount)
+        self.assertTrue(mount.endswith(",dst=/wipe"))
+        self.assertEqual(wipe[-4:], ("/wipe", "-mindepth", "1", "-delete"))
+        # The workspace is untouched.
+        self.assertTrue((self.root / "computers" / status.computer_id).is_dir())
 
     async def test_browser_terminal_files_input_and_screenshot_use_scoped_runtime(self):
         status = self.provider.get_or_create("bot-test")
@@ -196,10 +344,25 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         await provider.start(status.computer_id)
 
         run_args = self.docker.run_args()
-        mount = run_args[run_args.index("--mount") + 1]
+        mounts = [run_args[i + 1] for i, a in enumerate(run_args) if a == "--mount"]
         self.assertEqual(
-            mount, f"type=volume,src=cubicle-computer-ws-{status.computer_id[-60:]},dst=/workspace"
+            mounts,
+            [
+                f"type=volume,src=cubicle-computer-ws-{status.computer_id[-60:]},dst=/workspace",
+                f"type=volume,src=cubicle-computer-home-{status.computer_id[-60:]},dst=/home/pwuser",
+                f"type=volume,src=cubicle-computer-apt-{status.computer_id[-60:]},dst=/var/lib/cubicle/apt",
+            ],
         )
+        # No host directories are created for the home or apt cache in volume mode.
+        self.assertFalse((self.root / "computers" / f"{status.computer_id}.home").exists())
+
+        # Reset removes the home volume instead of running a wipe container.
+        await provider.reset(status.computer_id)
+        self.assertEqual(
+            self.docker.calls_of("volume"),
+            [("volume", "rm", "-f", f"cubicle-computer-home-{status.computer_id[-60:]}")],
+        )
+        self.assertEqual([c for c in self.docker.calls_of("run") if "--entrypoint" in c], [])
 
     async def test_bind_mode_translates_to_the_host_path_when_configured(self):
         provider = DockerComputerProvider(
@@ -219,12 +382,14 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         await provider.start(status.computer_id)
 
         run_args = self.docker.run_args()
-        mount = run_args[run_args.index("--mount") + 1]
-        self.assertTrue(mount.startswith("type=bind,src="))
-        self.assertIn(status.computer_id, mount)
-        self.assertIn("cubicle", mount.replace("\\", "/"))
-        self.assertNotIn(str(self.root), mount)
-        self.assertTrue(mount.endswith(",dst=/workspace"))
+        mounts = [run_args[i + 1] for i, a in enumerate(run_args) if a == "--mount"]
+        self.assertEqual(len(mounts), 3)
+        for mount, destination in zip(mounts, ("/workspace", "/home/pwuser", "/var/lib/cubicle/apt")):
+            self.assertTrue(mount.startswith("type=bind,src="))
+            self.assertIn(status.computer_id, mount)
+            self.assertIn("cubicle", mount.replace("\\", "/"))
+            self.assertNotIn(str(self.root), mount)
+            self.assertTrue(mount.endswith(f",dst={destination}"))
 
     async def test_user_control_blocks_bot_input_and_navigation_until_handed_back(self):
         status = self.provider.get_or_create("bot-test")

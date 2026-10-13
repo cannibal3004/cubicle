@@ -116,14 +116,16 @@ The local server creates a mode-0600 session token in `DATA_DIR` and the browser
 The default provider is the deterministic local adapter. To enable the real sandbox desktop (browser, terminal, file manager, input, screenshots, and live VNC), build the pinned runtime image and opt in to the Docker provider:
 
 ```bash
-docker build -t cubicle-computer:2.0.0 ./runtime
+docker build -t cubicle-computer:2.1.0 ./runtime
 export COMPUTER_PROVIDER=docker
-export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.0.0
+export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.1.0
 ```
 
-The Docker daemon must be running before starting the API. Each bot gets a separate container, a separate workspace under `DATA_DIR/computers`, an ephemeral loopback-only port, and an internal runtime token. The container root is read-only, capabilities are dropped, and CPU, memory, process, and shared-memory limits are applied.
+The Docker daemon must be running before starting the API. Each bot gets a separate container, a separate workspace under `DATA_DIR/computers`, an ephemeral loopback-only port, and an internal runtime token. The sandbox user has no capabilities and cannot gain any; CPU, memory, process, and shared-memory limits are applied.
 
-Inside the container an Xvnc display runs a minimal desktop (xfwm4 with compositing): a centred, auto-hiding Plank dock with Chromium, Thunar and xfce4-terminal, no application menu and no session controls. Chromium is not running at boot: the dock button, the bot, and the sandbox shell all start it with the same launcher command, and the driver attaches to that one instance over the loopback DevTools port, so whoever opens a window, there is a single browser. Windows have maximize and close buttons only; there is no task list, so minimizing is disabled to keep windows from being stranded. Screenshots capture the whole desktop and input goes through xdotool, so the bot can use the terminal and file manager as well as the browser. Ubuntu 24.04 with Node, Python and pip, git, curl, jq and unzip is available; `/workspace` persists between starts and `/tmp` and the home directory are wiped.
+**What persists.** Beside each computer's workspace directory the API keeps `<id>.home` (the sandbox user's home: venvs, npm and cargo installs, dotfiles, the Chromium profile), `<id>.apt` (apt's download cache) and `<id>.packages` (the Ubuntu packages the computer has installed, one per line, editable). The container's own filesystem is disposable: at every start it begins as root, installs the package list, hands the home directory to the sandbox user and drops privileges before the desktop comes up, so the image can be rebuilt at any time and every computer comes back with its packages. The bot installs system packages with `computer_install_packages` (approval required; apt runs as root through `docker exec`, the sandbox shell has no sudo), and everything user-level from the shell. `/tmp` is a tmpfs of `COMPUTER_DOCKER_TMP_SIZE` (2g) wiped at every start. "Reset" in the Computer tab empties the home directory and the package list; the workspace stays.
+
+Inside the container an Xvnc display runs a minimal desktop (xfwm4 with compositing): a centred, auto-hiding Plank dock with Chromium, Thunar and xfce4-terminal, no application menu and no session controls. Chromium is not running at boot: the dock button, the bot, and the sandbox shell all start it with the same launcher command, and the driver attaches to that one instance over the loopback DevTools port, so whoever opens a window, there is a single browser. Windows have maximize and close buttons only; there is no task list, so minimizing is disabled to keep windows from being stranded. Screenshots capture the whole desktop and input goes through xdotool, so the bot can use the terminal and file manager as well as the browser. Ubuntu 24.04 with Node, Python with pip and venv, git, curl, jq and unzip is available; `/workspace` and the home directory persist between starts and `/tmp` is wiped.
 
 **Watching and taking control.** The Computer tab streams the desktop through noVNC. The WebSocket goes to the API, which checks your session and bridges to the sandbox driver using the per-computer token; the sandbox publishes no ports and its VNC server listens on loopback only. "Take control" lets your mouse and keyboard through; while you hold control the bot's click, type and navigate tools are refused (it can still take screenshots). "Hand back to bot" returns control. The bot has a `computer_request_takeover` tool: it posts a card in chat and the Computer tab with what it needs, and after you hand control back the chat input is pre-filled with a message telling it to continue.
 
@@ -211,7 +213,7 @@ The server reads these variables from the environment:
 | `AUTH_COOKIE_SECURE` | `0` | Set to `1` when serving over HTTPS |
 | `CORS_ORIGINS` | localhost and loopback client origins | Comma-separated browser origins allowed by the API |
 | `COMPUTER_PROVIDER` | `fake` | Computer adapter: `fake` or `docker` |
-| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.0.0` | Pinned local runtime image |
+| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.1.0` | Pinned local runtime image |
 | `COMPUTER_DOCKER_WORKSPACE_ROOT` | `DATA_DIR/computers` | Root for per-bot runtime workspaces |
 | `COMPUTER_DOCKER_CPU_LIMIT` | `2.0` | Docker CPU limit per computer |
 | `COMPUTER_DOCKER_MEMORY_LIMIT` | `2g` | Docker memory limit per computer |
@@ -318,7 +320,7 @@ With an OpenAI-compatible provider the model is offered these functions. The gat
 | `workspace_list`, `workspace_read`, `workspace_write` | `workspace.*` | yes |
 | `share_file` | `files.share` | no (puts a download card for a workspace or computer file in the chat) |
 | `computer_start`, `computer_screenshot`, `computer_files_list`, `computer_request_takeover` | `computer.*` | no |
-| `computer_browser_navigate`, `computer_terminal_execute`, `computer_send_input` | `computer.*` | yes |
+| `computer_browser_navigate`, `computer_terminal_execute`, `computer_send_input`, `computer_install_packages` | `computer.*` | yes |
 | `<app>_<action>` for every app connected through Composio, e.g. `gmail_fetch_emails`, `github_create_a_pull_request` | `connector.composio_read` or `connector.composio_action` | no for tools Composio marks read-only, yes for everything else |
 | `github_list_issues`, `github_create_issue` | `connector.github_*` | no / yes (fallback when the Composio catalog cannot be fetched) |
 
@@ -472,7 +474,7 @@ Confirm that the daemon is running, the runtime image was built, and the API use
 
 ```bash
 docker info
-docker image inspect cubicle-computer:2.0.0
+docker image inspect cubicle-computer:2.1.0
 echo "$COMPUTER_PROVIDER"
 ```
 
