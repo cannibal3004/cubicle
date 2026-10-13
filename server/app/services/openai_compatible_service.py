@@ -119,12 +119,30 @@ def build_request_body(
         "model": model,
         "messages": build_messages(messages, system_prompt),
         "stream": True,
+        # Token usage arrives in a final chunk; it drives the context meter.
+        "stream_options": {"include_usage": True},
     }
     if config.reasoning_effort:
         body["reasoning_effort"] = config.reasoning_effort
     if tools:
         body["tools"] = tools
     return body
+
+
+def _usage_event(usage: Any) -> Optional[Dict[str, Any]]:
+    """Normalise a provider usage object into a `usage` stream event."""
+    if not isinstance(usage, dict):
+        return None
+    prompt = usage.get("prompt_tokens")
+    completion = usage.get("completion_tokens")
+    if not isinstance(prompt, int) and not isinstance(completion, int):
+        return None
+    return {
+        "type": "usage",
+        "prompt_tokens": prompt if isinstance(prompt, int) else 0,
+        "completion_tokens": completion if isinstance(completion, int) else 0,
+        "total_tokens": usage.get("total_tokens") if isinstance(usage.get("total_tokens"), int) else None,
+    }
 
 
 def _finish_tool_calls(accumulator: Dict[int, Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -284,6 +302,7 @@ class OpenAICompatibleService:
 
                     produced_output = False
                     tool_accumulator: Dict[int, Dict[str, Any]] = {}
+                    last_usage: Any = None
                     async for line in response.aiter_lines():
                         line = line.strip()
                         # OpenRouter emits ": OPENROUTER PROCESSING" keep-alive comments.
@@ -298,6 +317,8 @@ class OpenAICompatibleService:
                             continue
                         if not isinstance(chunk, dict):
                             continue
+                        if isinstance(chunk.get("usage"), dict):
+                            last_usage = chunk["usage"]
 
                         error = chunk.get("error")
                         if error:
@@ -342,6 +363,9 @@ class OpenAICompatibleService:
                         }
                         yield {"type": "turn.completed", "ok": False}
                         return
+                    usage_event = _usage_event(last_usage)
+                    if usage_event:
+                        yield usage_event
                     yield {"type": "turn.completed", "ok": True}
         except httpx.HTTPError as exc:
             yield {"type": "content.delta", "delta": f"Error: could not reach {url}: {exc}"}
@@ -389,6 +413,9 @@ class OpenAICompatibleService:
             yield {"type": "content.delta", "delta": text}
         if calls:
             yield {"type": "tool_calls", "calls": calls}
+        usage_event = _usage_event(data.get("usage") if isinstance(data, dict) else None)
+        if usage_event:
+            yield usage_event
         yield {"type": "turn.completed", "ok": True}
 
     async def list_models(self, config: LLMConfig, refresh: bool = False) -> List[ModelInfo]:

@@ -200,6 +200,7 @@ class StreamingTests(unittest.TestCase):
                     {"choices": [{"delta": {"reasoning_content": "..."}}]},
                     {"choices": [{"delta": {"content": "Hel"}}]},
                     {"choices": [{"delta": {"content": "lo"}, "finish_reason": "stop"}]},
+                    {"choices": [], "usage": {"prompt_tokens": 120, "completion_tokens": 7, "total_tokens": 127}},
                 ),
             )
 
@@ -217,6 +218,7 @@ class StreamingTests(unittest.TestCase):
         self.assertEqual(captured["auth"], "Bearer sk-test")
         self.assertEqual(captured["body"]["model"], "test/model")
         self.assertEqual(captured["body"]["reasoning_effort"], "medium")
+        self.assertEqual(captured["body"]["stream_options"], {"include_usage": True})
         self.assertEqual(
             events,
             [
@@ -224,6 +226,7 @@ class StreamingTests(unittest.TestCase):
                 {"type": "reasoning.delta", "delta": "..."},
                 {"type": "content.delta", "delta": "Hel"},
                 {"type": "content.delta", "delta": "lo"},
+                {"type": "usage", "prompt_tokens": 120, "completion_tokens": 7, "total_tokens": 127},
                 {"type": "turn.completed", "ok": True},
             ],
         )

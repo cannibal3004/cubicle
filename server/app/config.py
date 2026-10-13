@@ -41,6 +41,16 @@ class Settings:
     # Screenshots as images for the model: auto (unless the catalog says the
     # model has no vision), always, or never.
     LLM_SCREENSHOTS_TO_MODEL: str = os.getenv("LLM_SCREENSHOTS_TO_MODEL", "auto").strip().lower()
+    # Context management. Tool results are stored with the reply that made
+    # them (trimmed) and the most recent tool-using bot turns are replayed to the model
+    # with those results so it does not redo work; older turns get stubs.
+    # Compaction: when the last reported prompt reaches this share of the
+    # model's context window, the next turn first summarises everything but
+    # the most recent user turns. 0 disables the automatic trigger.
+    CONTEXT_COMPACT_AT: float = float(os.getenv("CONTEXT_COMPACT_AT", "0.7"))
+    CONTEXT_KEEP_RECENT_TOKENS: int = int(os.getenv("CONTEXT_KEEP_RECENT_TOKENS", "30000"))
+    CONTEXT_TOOL_RESULT_CHARS: int = int(os.getenv("CONTEXT_TOOL_RESULT_CHARS", "4000"))
+    CONTEXT_TOOL_RESULTS_MESSAGE_CHARS: int = int(os.getenv("CONTEXT_TOOL_RESULTS_MESSAGE_CHARS", "24000"))
     COMPOSIO_API_KEY: str = os.getenv("COMPOSIO_API_KEY", "")
     # Connected apps are offered to the model as tools. Composio flags a
     # subset of each toolkit as "important"; that keeps the list useful
@@ -62,7 +72,7 @@ class Settings:
     # Turns run server-side and outlive the page, so an approval can wait
     # for someone to come back to it.
     APPROVAL_TIMEOUT_SECONDS: int = int(os.getenv("APPROVAL_TIMEOUT_SECONDS", "900"))
-    # Auto-approval: a decision model (decider-0.8b on a halogen-flash-server
+    # Auto-approval: a decision model (decider-4b on a halogen-flash-server
     # NPU, or anything serving POST /v1/systemone) scores each action that
     # needs approval. These are the defaults; App Settings overrides them.
     # off: never consulted; shadow: scored and logged, the user still decides;

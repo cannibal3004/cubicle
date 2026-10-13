@@ -95,6 +95,11 @@ function ToolCallList({ calls }) {
   );
 }
 
+function formatTokenCount(n) {
+  if (!Number.isFinite(n)) return '?';
+  return n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`;
+}
+
 export default function MessageItem({ message, botId }) {
   const isUser = message.sender === 'user';
   const isError = message.isError || message.text?.toLowerCase().startsWith('error:');
@@ -103,6 +108,7 @@ export default function MessageItem({ message, botId }) {
   const reasoning = message.reasoning || message.raw_payload?.reasoning || '';
   const toolCalls = message.toolCalls || message.raw_payload?.tool_calls || [];
   const attachments = message.attachments || message.raw_payload?.attachments || [];
+  const usage = message.usage || message.raw_payload?.usage || null;
 
   if (isUser) {
     return (
@@ -134,11 +140,38 @@ export default function MessageItem({ message, botId }) {
         <div className="dark-bubble-error px-4 py-1.5 text-xs font-mono max-w-md flex items-center justify-between gap-3 shadow-sm">
           <div className="flex items-center gap-2 min-w-0">
             <FiX className="text-red-500 text-sm flex-shrink-0" />
-            <span className="truncate">{message.text}</span>
+            <span className={message.local ? 'whitespace-pre-wrap break-words' : 'truncate'}>{message.text}</span>
           </div>
           {formattedTime && (
             <span className="text-[10px] text-zinc-500 font-mono flex-shrink-0">{formattedTime}</span>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  // Notes the app itself adds to the thread (slash-command results). Not
+  // persisted and never sent to the model.
+  if (message.sender === 'system' && message.item_type === 'compaction') {
+    const count = message.raw_payload?.messages_compacted;
+    const manual = message.raw_payload?.reason === 'manual';
+    return (
+      <details className="my-3 mx-auto max-w-xl rounded-xl border border-sky-500/20 bg-sky-500/5 text-[11px] text-zinc-300 shadow-sm">
+        <summary className="cursor-pointer select-none px-3 py-1.5 font-mono text-sky-300/90">
+          Context compacted{count ? ` · ${count} messages summarized` : ''}{manual ? ' · /compact' : ''}{formattedTime ? ` · ${formattedTime}` : ''}
+        </summary>
+        <div className="px-3 pb-3 leading-relaxed whitespace-pre-wrap break-words">
+          <ReactMarkdown>{message.text}</ReactMarkdown>
+        </div>
+      </details>
+    );
+  }
+
+  if (message.sender === 'system') {
+    return (
+      <div className="flex justify-center my-2">
+        <div className="px-3 py-1.5 rounded-xl border border-[#27272a] bg-[#121214] text-[11px] font-mono text-zinc-400 max-w-xl whitespace-pre-wrap break-words shadow-sm">
+          {message.text}
         </div>
       </div>
     );
@@ -187,9 +220,17 @@ export default function MessageItem({ message, botId }) {
             ))}
           </div>
         )}
-        {formattedTime && (
-          <div className="text-[10px] text-zinc-400 text-right mt-1 font-mono tracking-tight select-none">
-            {formattedTime}
+        {(formattedTime || usage) && (
+          <div className="text-[10px] text-zinc-400 text-right mt-1 font-mono tracking-tight select-none flex items-center justify-end gap-2">
+            {usage && (
+              <span
+                className="text-zinc-600"
+                title={`${(usage.prompt_tokens || 0).toLocaleString()} prompt + ${(usage.completion_tokens || 0).toLocaleString()} completion tokens${usage.rounds > 1 ? ` over ${usage.rounds} rounds` : ''}`}
+              >
+                {formatTokenCount((usage.prompt_tokens || 0) + (usage.completion_tokens || 0))} tok
+              </span>
+            )}
+            {formattedTime && <span>{formattedTime}</span>}
           </div>
         )}
       </div>

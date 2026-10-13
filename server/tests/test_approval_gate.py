@@ -93,6 +93,14 @@ class ApprovalGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["existing_bytes"], 21)
         self.assertNotIn("private", str(state))
 
+    def test_state_redacts_a_pasted_token_in_the_users_message(self):
+        token = "github_pat_11AAAAAAA0" + "x" * 60
+        request = _request(tool="computer", action="terminal_execute", arguments={"command": f"printf '%s' {token} > /tmp/.gh_token"})
+        state = self.gate.build_state(request, None, f"here is my token {token}, push the branch")
+        self.assertNotIn(token, state["user_request"])
+        self.assertIn("github_pat_[REDACTED]", state["user_request"])
+        self.assertIn("push the branch", state["user_request"])
+
     def test_state_marks_a_new_file_and_clips_long_fields(self):
         call = WorkspaceToolCall("workspace.write", "fresh.txt", "x")
         request = _request(arguments=call.arguments_for_display)
@@ -132,6 +140,35 @@ class ApprovalGateTests(unittest.IsolatedAsyncioTestCase):
         ScriptedDecider.scores = {**{key: 0.0 for key in QUESTIONS}, "destroy": 0.2}
         verdict = await self.gate.evaluate(_request(), None, mode="on", user_request="tidy up")
         self.assertEqual(verdict.outcome, "ask")
+
+    async def test_a_shrinking_write_is_held_by_rule_without_the_model(self):
+        (self.root / "workspace" / "notes.md").write_text("x" * 400, encoding="utf-8")
+        call = WorkspaceToolCall("workspace.write", "notes.md", "y" * 50)
+        request = _request(arguments=call.arguments_for_display)
+        verdict = await self.gate.evaluate(request, call, mode="on", user_request="tidy the notes")
+        self.assertEqual(verdict.outcome, "ask")
+        self.assertEqual(verdict.rule, "shrinking_write")
+        self.assertEqual(verdict.decided_by, "rule")
+        self.assertIn("400 to 50", verdict.reason)
+        self.assertEqual(ScriptedDecider.calls, [])
+        self.assertEqual(verdict.to_event()["rule"], "shrinking_write")
+
+    async def test_a_write_that_keeps_most_of_the_file_goes_to_the_model(self):
+        (self.root / "workspace" / "notes.md").write_text("x" * 400, encoding="utf-8")
+        call = WorkspaceToolCall("workspace.write", "notes.md", "y" * 300)
+        request = _request(arguments=call.arguments_for_display)
+        verdict = await self.gate.evaluate(request, call, mode="on", user_request="tidy the notes")
+        self.assertIsNone(verdict.rule)
+        self.assertEqual(verdict.outcome, "auto_approved")
+        self.assertEqual(len(ScriptedDecider.calls), 1)
+
+    async def test_input_events_are_not_scored(self):
+        request = _request(tool="computer", action="send_input", arguments={"event": {"type": "click", "x": 1, "y": 2}})
+        on = await self.gate.evaluate(request, None, mode="on", user_request="click the button")
+        self.assertEqual((on.outcome, on.rule, on.decided_by), ("auto_approved", "input_event", "rule"))
+        shadow = await self.gate.evaluate(request, None, mode="shadow", user_request="click the button")
+        self.assertEqual((shadow.outcome, shadow.rule), ("ask", "input_event"))
+        self.assertEqual(ScriptedDecider.calls, [])
 
     async def test_unreachable_server_fails_closed(self):
         ScriptedDecider.error = "decision server unreachable: ConnectError"

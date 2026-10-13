@@ -127,6 +127,11 @@ export default function GateDecisionsPanel({ tabs = null }) {
                           </span>
                           <span className="text-[10px] text-zinc-500">{row.mode}</span>
                           <span className="text-xs text-zinc-300 truncate">{row.tool}</span>
+                          {row.rule && (
+                            <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-300" title="Decided by a rule, not the model">
+                              rule: {row.rule}
+                            </span>
+                          )}
                           {row.max_score != null && (
                             <span className="font-mono text-[10px] text-zinc-400">max {Number(row.max_score).toFixed(2)} / {row.threshold}</span>
                           )}

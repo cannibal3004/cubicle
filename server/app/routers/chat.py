@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -17,10 +18,12 @@ from app.services.action_gateway import (
     action_gateway,
 )
 from app.services.approval_gate import approval_gate
+from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs
+from app.services.context_builder import build_history_messages, cap_message_results, trim_result_text
+from app.services.context_compactor import compact_thread, last_prompt_tokens, over_budget
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
-from app.services.connector_actions import ConnectorCommandError, parse_connector_command
 from app.services.llm_tools import (
     ToolCallError,
     available_tools,
@@ -32,10 +35,6 @@ from app.services.llm_tools import (
 )
 from app.services.openai_compatible_service import openai_compatible_service
 from app.services.turn_manager import Turn, TurnBusyError, turn_manager
-from app.services.workspace_service import (
-    WorkspaceToolError,
-    parse_workspace_command,
-)
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 
@@ -98,6 +97,35 @@ def _model_accepts_images(model: str, llm_config) -> bool:
 @router.get("/history/{thread_id}", response_model=List[Message])
 async def get_history(thread_id: str):
     return storage_service.get_messages(thread_id=thread_id)
+
+
+@router.post("/compact/{thread_id}")
+async def compact_now(thread_id: str):
+    """Summarise the older part of a thread now (the /compact command)."""
+    current = turn_manager.current(thread_id)
+    if current is not None and not current.finished:
+        raise HTTPException(status_code=409, detail="A reply is still in progress; wait for it or use /stop first.")
+    setup = await _turn_setup(thread_id, None)
+    try:
+        stored = await compact_thread(
+            thread_id, reason="manual", model=setup["selected_model"], system_prompt=setup["compaction_prompt"],
+            config=setup["llm_config"], storage=storage_service, replay_tools=setup["llm_config"].provider != "muapi",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Compaction failed: {exc}") from exc
+    if stored is None:
+        return {"status": "nothing_to_compact", "keep_recent_tokens": settings.CONTEXT_KEEP_RECENT_TOKENS}
+    return {"status": "ok", "compaction": stored}
+
+
+@router.delete("/history/{thread_id}")
+async def clear_history(thread_id: str):
+    """Delete a thread's messages (the /clear command). Refused mid-reply."""
+    current = turn_manager.current(thread_id)
+    if current is not None and not current.finished:
+        raise HTTPException(status_code=409, detail="A reply is still in progress; stop it first.")
+    deleted = storage_service.delete_messages(thread_id)
+    return {"status": "ok", "deleted": deleted}
 
 
 @router.post("/send")
@@ -177,7 +205,7 @@ async def _perform_action(
         approval_gate.record(action_request, verdict)
         turn.emit({"type": "gate.scored", **base, "verdict": verdict.to_event()})
         if verdict.auto_approved:
-            action_gateway.resolve_approval(action_request, "allow", decided_by="decider")
+            action_gateway.resolve_approval(action_request, "allow", decided_by=verdict.decided_by)
 
     try:
         decision = await action_gateway.wait_for_decision(action_request)
@@ -185,7 +213,7 @@ async def _perform_action(
         turn.set_pending_approval(None)
 
     if verdict is not None:
-        decided_by = "decider" if verdict.auto_approved and decision == "allow" else "user"
+        decided_by = verdict.decided_by if verdict.auto_approved and decision == "allow" else "user"
         approval_gate.record_final(action_request.request_id, decision, decided_by)
         base["gate"] = verdict.to_event()
 
@@ -213,19 +241,37 @@ async def _perform_action(
     return {"status": "failed", "error": f"Action failed ({action_name}): {error}", "request": action_request, "gate": verdict}
 
 
-async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
-    """Capture everything a turn needs at start time and return its coroutine.
+async def _context_window_for(llm_config, model: str) -> Optional[int]:
+    """The model's context length from the catalog, fetching it once if the cache is cold."""
+    if llm_config.provider == "muapi":
+        return None
+    info = openai_compatible_service.cached_model_info(llm_config, model)
+    if info is None:
+        try:
+            catalog = await llm_service.list_models(llm_config)
+        except Exception:  # The catalog is a nicety; a turn must not fail on it.
+            return None
+        info = next((m for m in catalog.models if m.id == model), None)
+    return info.context_length if info is not None else None
 
-    The runner is executed by the TurnManager as its own task, so it must not
-    depend on any request or connection outliving it.
+
+logger = logging.getLogger(__name__)
+
+async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[str, Any]:
+    """Everything a turn (or a compaction) needs, captured once.
+
+    The system prompt is built so that it is byte-identical from one turn to
+    the next: the provider's prompt cache resumes from the end of the last
+    turn only while the prefix does not change, so the date goes at the end
+    and at day resolution, and nothing per-turn goes in here.
     """
     history = storage_service.get_messages(thread_id=thread_id)
     bots = storage_service.get_bots()
     current_bot = next((b for b in bots if b["id"] == thread_id), None)
 
     raw_prompt = current_bot["system_prompt"] if current_bot else "You are a helpful AI assistant."
-    current_time_str = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
-    system_prompt = f"Current Date & Time: {current_time_str}.\n\n{raw_prompt}"
+    today = datetime.now().strftime("%A, %B %d, %Y")
+    system_prompt = f"{raw_prompt}\n\nToday is {today}."
     llm_config = llm_service.current_llm_config()
     selected_model = (
         requested_model
@@ -233,14 +279,10 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         or llm_config.default_model
     )
 
-    formatted_history = []
-    for m in history:
-        if m["sender"] in ["user", "bot"]:
-            formatted_history.append({
-                "role": "user" if m["sender"] == "user" else "assistant",
-                "content": m.get("text", ""),
-                "image_url": m.get("image_url")
-            })
+    # Recent bot turns replay their tool calls and results in the provider's
+    # native shape, so the model builds on what it already found.
+    formatted_history = build_history_messages(history, replay_tools=llm_config.provider != "muapi")
+    context_window = await _context_window_for(llm_config, selected_model)
 
     # Model tool calling is only possible on OpenAI-compatible servers. MUAPI
     # takes a single prompt, so there the slash commands remain the only tools.
@@ -265,8 +307,47 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
     tools_prompt = describe_tools(tool_specs)
     # The bot's auto-approval mode is fixed for the whole turn, like its tools.
     gate_mode = approval_gate.mode_for(current_bot)
+    return {
+        "history": history,
+        "current_bot": current_bot,
+        "system_prompt": system_prompt,
+        # What a turn sends as its system prompt before any per-turn context;
+        # the compaction summary request sends exactly this so its prefix is
+        # served from the cache.
+        "compaction_prompt": f"{system_prompt}\n\n{tools_prompt}" if tools_prompt else system_prompt,
+        "llm_config": llm_config,
+        "selected_model": selected_model,
+        "formatted_history": formatted_history,
+        "context_window": context_window,
+        "tool_specs": tool_specs,
+        "tool_definitions": tool_definitions,
+        "tools_prompt": tools_prompt,
+        "gate_mode": gate_mode,
+    }
+
+
+async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
+    """Capture everything a turn needs at start time and return its coroutine.
+
+    The runner is executed by the TurnManager as its own task, so it must not
+    depend on any request or connection outliving it.
+    """
+    setup = await _turn_setup(thread_id, requested_model)
+    history = setup["history"]
+    current_bot = setup["current_bot"]
+    system_prompt = setup["system_prompt"]
+    llm_config = setup["llm_config"]
+    selected_model = setup["selected_model"]
+    formatted_history = setup["formatted_history"]
+    context_window = setup["context_window"]
+    tool_specs = setup["tool_specs"]
+    tool_definitions = setup["tool_definitions"]
+    tools_prompt = setup["tools_prompt"]
+    gate_mode = setup["gate_mode"]
+    replay_tools = llm_config.provider != "muapi"
 
     async def run(turn: Turn) -> None:
+        nonlocal formatted_history, history
         bot_msg_id = f"msg-{uuid.uuid4().hex[:6]}"
         text_pieces: List[str] = []
         # Thinking is shown to the user and kept with the message for display,
@@ -275,21 +356,58 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         tool_records: List[Dict[str, Any]] = []
         # Files the bot handed to the user this turn (download cards).
         attachments: List[Dict[str, Any]] = []
+        # Token usage as the provider reports it: the last round's prompt is
+        # the context in use; completions add up across rounds.
+        usage_prompt = 0
+        usage_completion = 0
+        usage_rounds = 0
+
+        def usage_payload() -> Dict[str, Any]:
+            return {
+                "prompt_tokens": usage_prompt,
+                "completion_tokens": usage_completion,
+                "rounds": usage_rounds,
+                "context_window": context_window,
+            }
         tool_context = ""
 
+        async def compact_if_needed(prompt_tokens: Optional[int]) -> bool:
+            """Fold the stored history when a reported prompt size has outgrown
+            its share of the window. True when the context was rebuilt."""
+            nonlocal formatted_history, history
+            if not over_budget(prompt_tokens, context_window):
+                return False
+            turn.emit({"type": "context.compacting", "botMsgId": bot_msg_id,
+                       "promptTokens": prompt_tokens, "contextWindow": context_window})
+            try:
+                stored = await compact_thread(
+                    thread_id, reason="auto", model=selected_model, system_prompt=setup["compaction_prompt"],
+                    config=llm_config, storage=storage_service, replay_tools=replay_tools,
+                )
+            except Exception as exc:  # the turn goes on with the full context; it may still fit
+                logger.warning("Compaction of %s failed: %s", thread_id, exc)
+                turn.emit({"type": "context.compaction_failed", "botMsgId": bot_msg_id, "error": str(exc)})
+                return False
+            if stored is None:
+                return False
+            turn.emit({"type": "context.compacted", "botMsgId": bot_msg_id, "message": stored})
+            history = storage_service.get_messages(thread_id=thread_id)
+            formatted_history = build_history_messages(history, replay_tools=replay_tools)
+            return True
+
         turn.emit({"type": "turn.started", "botMsgId": bot_msg_id, "model": selected_model})
+
+        # --- compaction: the thread has outgrown its share of the window ------
+        await compact_if_needed(last_prompt_tokens(history))
 
         # --- explicit slash commands typed by the user ------------------------
         last_user_text = formatted_history[-1]["content"] if formatted_history else ""
         try:
-            action_call = parse_workspace_command(last_user_text)
-            if action_call is None:
-                action_call = parse_connector_command(last_user_text)
-        except (WorkspaceToolError, ConnectorCommandError) as exc:
+            action_call = parse_action_command(last_user_text)
+        except CommandError as exc:
             action_call = None
-            command_tool = "connector" if last_user_text.lower().startswith("/connector") else "workspace"
-            tool_context = f"A {command_tool} request was rejected before execution: {exc}"
-            turn.emit({"type": "tool.failed", "tool": command_tool, "error": str(exc)})
+            tool_context = f"A {exc.tool} request was rejected before execution: {exc}"
+            turn.emit({"type": "tool.failed", "tool": exc.tool, "error": str(exc)})
 
         if action_call:
             outcome = await _perform_action(turn, thread_id, action_call, gate_mode=gate_mode, user_request=last_user_text)
@@ -306,6 +424,8 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
 
         # --- model turn, looping while it calls tools ------------------------
         messages: List[Dict[str, Any]] = list(formatted_history)
+        # Where the stored history ends and this turn's own rounds begin.
+        prefix_len = len(messages)
         max_rounds = max(1, settings.LLM_MAX_TOOL_ROUNDS)
         rounds = 0
         # Once the tool budget is spent the model gets one last call without
@@ -313,6 +433,13 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         final_answer_only = False
         while True:
             rounds += 1
+            # Between rounds the previous round has reported how big the
+            # prompt grew. A turn of many tool calls can cross the line on
+            # its own, so fold the stored history here too, and carry this
+            # turn's rounds over verbatim as the pending work.
+            if rounds > 1 and await compact_if_needed(usage_prompt):
+                messages = list(formatted_history) + messages[prefix_len:]
+                prefix_len = len(formatted_history)
             round_text = ""
             pending_calls: List[Dict[str, Any]] = []
             round_ok = True
@@ -341,6 +468,11 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     turn.emit({"type": "reasoning.delta", "botMsgId": bot_msg_id, "delta": event["delta"]})
                 elif event["type"] == "tool_calls":
                     pending_calls = list(event.get("calls") or [])
+                elif event["type"] == "usage":
+                    usage_rounds += 1
+                    usage_prompt = int(event.get("prompt_tokens") or 0)
+                    usage_completion += int(event.get("completion_tokens") or 0)
+                    turn.emit({"type": "turn.usage", "botMsgId": bot_msg_id, "usage": usage_payload()})
                 elif event["type"] == "turn.completed":
                     round_ok = bool(event.get("ok", True))
 
@@ -373,6 +505,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                 # them, then ask for a text-only reply.
                 for call in pending_calls:
                     tool_records.append({"id": call["id"], "name": call["name"], "status": "skipped",
+                                         "raw_arguments": call.get("arguments") or "{}",
                                          "error": "Tool budget for this turn was used up."})
                     turn.emit({"type": "tool.failed", "tool": call["name"], "callName": call["name"],
                                "error": "Not run: the tool budget for this turn was used up."})
@@ -388,7 +521,13 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             for call in pending_calls:
                 call_id = call["id"]
                 call_name = call["name"]
-                record: Dict[str, Any] = {"id": call_id, "name": call_name, "status": "running"}
+                record: Dict[str, Any] = {
+                    "id": call_id,
+                    "name": call_name,
+                    "status": "running",
+                    # The model's own argument text, replayed verbatim in later turns.
+                    "raw_arguments": call.get("arguments") or "{}",
+                }
                 tool_records.append(record)
 
                 try:
@@ -435,7 +574,10 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                             payload["image"] = "attached as the next message"
                         else:
                             payload["image"] = "omitted: the selected model does not accept images"
-                    messages.append({"role": "tool", "tool_call_id": call_id, "content": _tool_result_text(payload)})
+                    result_text = _tool_result_text(payload)
+                    messages.append({"role": "tool", "tool_call_id": call_id, "content": result_text})
+                    # Kept with the reply so later turns can see what came back.
+                    record["result"] = trim_result_text(result_text)
                 else:
                     record["error"] = outcome.get("error")
                     messages.append({
@@ -449,7 +591,10 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         if accumulated_reasoning:
             raw_payload["reasoning"] = accumulated_reasoning
         if tool_records:
+            cap_message_results(tool_records)
             raw_payload["tool_calls"] = tool_records
+        if usage_rounds:
+            raw_payload["usage"] = usage_payload()
         if attachments:
             raw_payload["attachments"] = attachments
 

@@ -3,18 +3,35 @@
 import React, { useState, useRef, useEffect } from 'react';
 import MessageItem from './MessageItem';
 import ApprovalCard from './ApprovalCard';
+import CommandPicker from './CommandPicker';
 import ModelPicker from './ModelPicker';
 import ToolsPopover from './ToolsPopover';
+import ContextMeter from './ContextMeter';
 import MascotAvatar from './MascotAvatar';
-import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiEdit2 } from 'react-icons/fi';
+import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiEdit2, FiArrowDown } from 'react-icons/fi';
 import {
   sendMessage,
   subscribeToChatStream,
   startTurn,
   fetchTurnStatus,
+  cancelTurn,
   uploadImage,
   respondApproval,
+  fetchCommands,
+  clearChatHistory,
+  compactThread,
+  fetchChatHistory,
 } from '../lib/api';
+
+const AUTO_APPROVAL_MODES = ['off', 'shadow', 'on', 'inherit'];
+
+// Mirrors the server's commands.command_name: only a leading slash counts.
+function commandNameOf(text) {
+  const stripped = (text || '').trimStart();
+  if (!stripped.startsWith('/')) return null;
+  const head = stripped.slice(1).split(/\s/)[0].toLowerCase();
+  return head || null;
+}
 
 function formatHeaderDate(msgs) {
   const firstWithDate = msgs?.find((m) => m.created_at);
@@ -38,7 +55,7 @@ function formatHeaderDate(msgs) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-export default function ChatWindow({ bot, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onToggleComputer, defaultModel, prefill }) {
+export default function ChatWindow({ bot, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onToggleComputer, onOpenAudit, onOpenSettings, defaultModel, prefill }) {
   const [inputPrompt, setInputPrompt] = useState('');
   // Streaming is tracked per bot by the Dashboard so a reply keeps going
   // while another bot or tab is shown.
@@ -66,12 +83,32 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
   // Cards shown when the bot asks the user to take over its computer.
   const [takeoverRequests, setTakeoverRequests] = useState([]);
 
+  // Slash commands: the registry comes from the server so the picker and the
+  // server agree on what exists. `pickerDismissed` is Esc; typing resets it.
+  const [commands, setCommands] = useState([]);
+  const [pickerIndex, setPickerIndex] = useState(0);
+  const [pickerDismissed, setPickerDismissed] = useState(false);
+  const textareaRef = useRef(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchCommands()
+      .then((data) => { if (!cancelled) setCommands(data?.commands || []); })
+      .catch((err) => console.warn('Commands unavailable:', err));
+    return () => { cancelled = true; };
+  }, []);
+
   // Text handed in from elsewhere (e.g. "I'm done on the computer" after a
   // hand-back). An object with a nonce so the same text can be re-applied.
   useEffect(() => {
     if (prefill?.text) setInputPrompt(prefill.text);
   }, [prefill]);
   const messagesEndRef = useRef(null);
+  const scrollContainerRef = useRef(null);
+  // Follow the stream only while the reader is already at the bottom. Scrolling
+  // up to read something earlier turns following off; the pill below turns it
+  // back on. Mutable ref, not state: it changes on every scroll event.
+  const followRef = useRef(true);
+  const [showJumpPill, setShowJumpPill] = useState(false);
   const fileInputRef = useRef(null);
 
   const botTitle = bot?.name || 'Grok 4.5 Analyst';
@@ -87,6 +124,10 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
   ];
 
   const activeMessages = messages && messages.length > 0 ? messages : defaultInitialMessages;
+  // Context in use, from the latest reply that reported usage.
+  const lastUsageMessage = [...activeMessages].reverse().find((m) => m.sender === 'bot' && (m.usage || m.raw_payload?.usage));
+  const lastUsage = lastUsageMessage ? lastUsageMessage.usage || lastUsageMessage.raw_payload?.usage : null;
+  const activeModelInfo = (models || []).find((m) => m.id === activeModel);
 
   useEffect(() => {
     if (bot?.model) {
@@ -96,13 +137,52 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     }
   }, [bot, defaultModel]);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const NEAR_BOTTOM_PX = 80;
+
+  const scrollToBottom = (behavior = 'auto') => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
   };
 
+  const handleThreadScroll = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+    followRef.current = nearBottom;
+    setShowJumpPill(!nearBottom);
+  };
+
+  const jumpToLatest = () => {
+    followRef.current = true;
+    setShowJumpPill(false);
+    scrollToBottom('smooth');
+  };
+
+  const botApprovals = pendingApprovals.filter((approval) => approval.botId === bot?.id);
+  const botTakeovers = takeoverRequests.filter((request) => request.botId === bot?.id);
+
+  // Switching bots shows a different thread: start it at the bottom.
   useEffect(() => {
-    scrollToBottom();
-  }, [activeMessages, isStreaming]);
+    followRef.current = true;
+    setShowJumpPill(false);
+    scrollToBottom('auto');
+  }, [bot?.id]);
+
+  // New content (tokens, tool cards, approval cards) only moves the view when
+  // the reader is following. Instant, not smooth: a smooth scroll per token
+  // never finishes before the next one starts.
+  useEffect(() => {
+    if (followRef.current) scrollToBottom('auto');
+    // A content change can also shrink the thread (/clear, a collapsed block)
+    // without any scroll event firing, which would leave a stale pill behind.
+    // Re-measure: if the end is in view now, we are following again.
+    const el = scrollContainerRef.current;
+    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX) {
+      followRef.current = true;
+      setShowJumpPill(false);
+    }
+  }, [activeMessages, isStreaming, botApprovals.length, botTakeovers.length]);
 
   const handleModelChange = (newModel) => {
     setActiveModel(newModel);
@@ -194,6 +274,23 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             ...prev.slice(-4),
             { id: `${event.botMsgId}-${Date.now()}`, reason: event.reason || '', botId },
           ]);
+        } else if (event.type === 'context.compacted' && event.message) {
+          // The stored marker goes where it sits in history: after the user's
+          // message, before the reply that is about to stream.
+          updateMessages((prev) => {
+            const placeholder = prev.find((msg) => msg.id === streamingMsgId);
+            const rest = prev.filter((msg) => msg.id !== streamingMsgId && msg.id !== event.message.id);
+            return placeholder ? [...rest, event.message, placeholder] : [...rest, event.message];
+          });
+        } else if (event.type === 'context.compaction_failed') {
+          updateMessages((prev) => [
+            ...prev,
+            { id: `local-${Date.now()}`, sender: 'system', text: `Context compaction failed: ${event.error}. Continuing with the full context.`, isError: true, local: true, created_at: new Date().toISOString() },
+          ]);
+        } else if (event.type === 'turn.usage' && event.usage) {
+          updateMessages((prev) =>
+            prev.map((msg) => (msg.id === streamingMsgId ? { ...msg, usage: event.usage } : msg))
+          );
         } else if (event.type === 'attachment.added' && event.attachment) {
           updateMessages((prev) =>
             prev.map((msg) => {
@@ -294,18 +391,199 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bot?.id, remoteTurnId]);
 
+  // ---- slash commands ---------------------------------------------------------
+
+  // The picker is open while the text is a lone "/word" with no space yet.
+  const commandQuery = (() => {
+    const stripped = inputPrompt.trimStart();
+    if (!stripped.startsWith('/') || /\s/.test(stripped)) return null;
+    return stripped.slice(1).toLowerCase();
+  })();
+  const filteredCommands = commandQuery === null
+    ? []
+    : commands.filter((c) => c.name.startsWith(commandQuery)).filter((c) => !isStreaming || c.while_streaming);
+  const pickerOpen = !pickerDismissed && filteredCommands.length > 0;
+
+  useEffect(() => { setPickerIndex(0); }, [commandQuery, filteredCommands.length]);
+
+  // Auto-grow the composer up to ~8 lines; /workspace write needs a second line.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [inputPrompt]);
+
+  const addLocalMessage = (text, isError = false) => {
+    if (!bot?.id) return;
+    setMessagesFor(bot.id, (prev) => [
+      ...prev,
+      { id: `local-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, sender: 'system', text, isError, local: true, created_at: new Date().toISOString() },
+    ]);
+  };
+
+  const runClientCommand = async (spec, args) => {
+    const botId = bot?.id;
+    if (!botId) return;
+    switch (spec.name) {
+      case 'help': {
+        const lines = commands.map((c) => `${c.usage}\n    ${c.description}`);
+        addLocalMessage(`Slash commands\n\n${lines.join('\n')}`);
+        return;
+      }
+      case 'clear': {
+        if (!window.confirm(`Delete the whole conversation with ${botTitle}? This cannot be undone.`)) return;
+        try {
+          await clearChatHistory(botId);
+          setMessagesFor(botId, () => []);
+          addLocalMessage('Conversation cleared.');
+        } catch (err) {
+          addLocalMessage(`Could not clear the conversation: ${err.message}`, true);
+        }
+        return;
+      }
+      case 'compact': {
+        addLocalMessage('Compacting the conversation. The model is writing a summary of the older turns...');
+        try {
+          const result = await compactThread(botId);
+          if (result.status === 'nothing_to_compact') {
+            addLocalMessage(`Nothing to compact yet: the newest ${Number(result.keep_recent_tokens).toLocaleString()} tokens of conversation are always kept as they are.`);
+            return;
+          }
+          const history = await fetchChatHistory(botId);
+          setMessagesFor(botId, () => history);
+        } catch (err) {
+          addLocalMessage(`Compaction failed: ${err.message}`, true);
+        }
+        return;
+      }
+      case 'model': {
+        const query = args.trim();
+        if (!query) {
+          addLocalMessage(`Current model: ${activeModel || 'default'}\nUsage: /model <model>`);
+          return;
+        }
+        const exact = models.find((m) => m.id.toLowerCase() === query.toLowerCase());
+        const matches = exact ? [exact] : models.filter((m) => `${m.id} ${m.name || ''}`.toLowerCase().includes(query.toLowerCase()));
+        if (matches.length === 1) {
+          handleModelChange(matches[0].id);
+          addLocalMessage(`Model set to ${matches[0].id}.`);
+        } else if (matches.length === 0 && models.length === 0) {
+          handleModelChange(query);
+          addLocalMessage(`Model set to ${query}. The model catalog is unavailable, so the id was not checked.`);
+        } else if (matches.length === 0) {
+          addLocalMessage(`No model matches "${query}".`, true);
+        } else {
+          const shown = matches.slice(0, 8).map((m) => `  ${m.id}`).join('\n');
+          addLocalMessage(`"${query}" matches ${matches.length} models. Be more specific:\n${shown}${matches.length > 8 ? '\n  ...' : ''}`, true);
+        }
+        return;
+      }
+      case 'auto': {
+        const mode = args.trim().toLowerCase();
+        if (!AUTO_APPROVAL_MODES.includes(mode)) {
+          addLocalMessage(`Auto-approval for this bot: ${bot?.auto_approval || 'inherit'}\nUsage: /auto off|shadow|on|inherit`, mode !== '');
+          return;
+        }
+        if (!onUpdateBot) return;
+        try {
+          await onUpdateBot(botId, { auto_approval: mode });
+          addLocalMessage(`Auto-approval for ${botTitle}: ${mode}.`);
+        } catch (err) {
+          addLocalMessage(`Could not change auto-approval: ${err.message}`, true);
+        }
+        return;
+      }
+      case 'stop': {
+        if (!isStreaming) {
+          addLocalMessage('Nothing is streaming.');
+          return;
+        }
+        try {
+          await cancelTurn(botId);
+          addLocalMessage('Stopping the reply.');
+        } catch (err) {
+          addLocalMessage(`Could not stop the reply: ${err.message}`, true);
+        }
+        return;
+      }
+      case 'computer':
+        if (onToggleComputer) onToggleComputer(); else addLocalMessage('The computer is not available here.', true);
+        return;
+      case 'audit':
+        if (onOpenAudit) onOpenAudit(); else addLocalMessage('The audit trail is not available here.', true);
+        return;
+      case 'settings':
+        if (onOpenSettings) onOpenSettings(); else addLocalMessage('Settings are not available here.', true);
+        return;
+      default:
+        addLocalMessage(`/${spec.name} is not implemented in this client.`, true);
+    }
+  };
+
+  const pickCommand = (spec) => {
+    if (!spec) return;
+    setPickerDismissed(true);
+    if (spec.args) {
+      setInputPrompt(`/${spec.name} `);
+      textareaRef.current?.focus();
+    } else {
+      setInputPrompt('');
+      submitText(`/${spec.name}`);
+    }
+  };
+
+  const handleComposerKeyDown = (e) => {
+    if (pickerOpen) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setPickerIndex((i) => (i + 1) % filteredCommands.length); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setPickerIndex((i) => (i - 1 + filteredCommands.length) % filteredCommands.length); return; }
+      if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); pickCommand(filteredCommands[pickerIndex]); return; }
+      if (e.key === 'Escape') { e.preventDefault(); setPickerDismissed(true); return; }
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent?.isComposing) {
+      e.preventDefault();
+      submitText(inputPrompt);
+    }
+  };
+
   const handleSendMessage = async (e) => {
     e?.preventDefault();
-    if ((!inputPrompt.trim() && !selectedImage) || isStreaming) return;
+    await submitText(inputPrompt);
+  };
+
+  const submitText = async (rawText) => {
+    const name = commandNameOf(rawText);
+    if (name) {
+      const spec = commands.find((c) => c.name === name);
+      if (!spec) {
+        addLocalMessage(`Unknown command /${name}. Type / to see the available commands.`, true);
+        return;
+      }
+      if (spec.kind === 'client') {
+        if (isStreaming && !spec.while_streaming) {
+          addLocalMessage(`/${name} cannot run while a reply is streaming. Use /stop first.`, true);
+          return;
+        }
+        setInputPrompt('');
+        setPickerDismissed(false);
+        await runClientCommand(spec, rawText.trim().slice(name.length + 1));
+        return;
+      }
+      // Action commands (/workspace, /connector) go to the server as a normal
+      // message; it parses them and runs them through the gateway.
+    }
+    if ((!rawText.trim() && !selectedImage) || isStreaming) return;
 
     const botId = bot?.id;
     if (!botId) return;
     const updateMessages = (updater) => setMessagesFor(botId, updater);
-    const userText = inputPrompt;
+    const userText = rawText;
     const currentSelected = selectedImage;
     
     setInputPrompt('');
     setSelectedImage(null);
+    followRef.current = true;
+    setShowJumpPill(false);
 
     let finalImageUrl = currentSelected?.uploadedUrl || null;
 
@@ -396,6 +674,8 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
 
         {/* Right Side: Model Picker & Computer Monitor Toggle */}
         <div className="flex items-center gap-3">
+          <ContextMeter usage={lastUsage} contextWindow={activeModelInfo?.context_length} model={activeModel} />
+
           <ModelPicker
             currentModel={activeModel}
             models={models}
@@ -425,7 +705,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
       </header>
 
       {/* Main Canvas Scrollable Chat Thread */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 relative">
+      <div ref={scrollContainerRef} onScroll={handleThreadScroll} className="flex-1 overflow-y-auto px-6 py-4 relative">
         <div className="max-w-4xl mx-auto w-full space-y-3 px-12 md:px-20">
           {/* Centered Recorded Timestamp */}
           <div className="text-center my-4">
@@ -434,7 +714,13 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             </span>
           </div>
 
-          {pendingApprovals.filter((approval) => approval.botId === bot?.id).map((approval) => (
+          {/* Message Items List */}
+          {activeMessages.map((msg) => (
+            <MessageItem key={msg.id} message={msg} botId={bot?.id} />
+          ))}
+
+          {/* Approval and takeover cards sit where the conversation currently is, not at the top. */}
+          {botApprovals.map((approval) => (
             <ApprovalCard
               key={approval.requestId}
               approval={approval}
@@ -442,7 +728,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             />
           ))}
 
-          {takeoverRequests.filter((request) => request.botId === bot?.id).map((request) => (
+          {botTakeovers.map((request) => (
             <div
               key={request.id}
               className="my-3 p-4 rounded-2xl border border-purple-500/30 bg-purple-500/10 shadow-xl max-w-xl"
@@ -485,11 +771,6 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             </div>
           ))}
 
-          {/* Message Items List */}
-          {activeMessages.map((msg) => (
-            <MessageItem key={msg.id} message={msg} botId={bot?.id} />
-          ))}
-
           {isStreaming && (
             <div className="flex justify-start items-center gap-3 my-3 animate-fade-in">
               <MascotAvatar type={bot?.isError ? 'warning' : 'blue'} size="sm" />
@@ -504,6 +785,27 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
 
           <div ref={messagesEndRef} />
         </div>
+
+        {/* Shown after scrolling up: jump back to the live end of the thread. */}
+        {showJumpPill && (
+          <div className="sticky bottom-2 h-0 flex justify-center pointer-events-none">
+            <button
+              suppressHydrationWarning={true}
+              type="button"
+              onClick={jumpToLatest}
+              className={`pointer-events-auto -translate-y-full flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium shadow-lg border transition ${
+                botApprovals.length > 0
+                  ? 'bg-amber-500 text-black border-amber-400 hover:bg-amber-400'
+                  : 'bg-[#1c1c20] text-zinc-200 border-[#2b2b32] hover:bg-[#26262c]'
+              }`}
+            >
+              <FiArrowDown className="text-sm" />
+              {botApprovals.length > 0
+                ? `${botApprovals.length === 1 ? 'Approval' : `${botApprovals.length} approvals`} waiting`
+                : isStreaming ? 'Follow reply' : 'Jump to latest'}
+            </button>
+          </div>
+        )}
       </div>
 
 
@@ -553,9 +855,18 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
           </div>
         )}
 
+        {pickerOpen && (
+          <CommandPicker
+            commands={filteredCommands}
+            activeIndex={pickerIndex}
+            onPick={pickCommand}
+            onHover={setPickerIndex}
+          />
+        )}
+
         <form
           onSubmit={handleSendMessage}
-          className="w-full max-w-2xl dark-pill-input px-4 py-2.5 flex items-center gap-3 bg-[#1c1c20] border border-[#2b2b32] shadow-2xl transition focus-within:border-zinc-500"
+          className="w-full max-w-2xl dark-pill-input px-4 py-2.5 flex items-end gap-3 bg-[#1c1c20] border border-[#2b2b32] shadow-2xl transition focus-within:border-zinc-500"
         >
           {/* Plus / Image Upload Action Button */}
           <button
@@ -568,14 +879,18 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             <FiPlus />
           </button>
 
-          {/* Textarea Input */}
-          <input
+          {/* Composer. Enter sends, Shift+Enter adds a line, "/" opens the command picker. */}
+          <textarea
+            ref={textareaRef}
             suppressHydrationWarning={true}
-            type="text"
+            rows={1}
             value={inputPrompt}
-            onChange={(e) => setInputPrompt(e.target.value)}
-            placeholder={`Message ${botTitle}`}
-            className="w-full bg-transparent text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none"
+            onChange={(e) => { setInputPrompt(e.target.value); setPickerDismissed(false); }}
+            onKeyDown={handleComposerKeyDown}
+            placeholder={`Message ${botTitle}, or / for commands`}
+            aria-autocomplete="list"
+            aria-expanded={pickerOpen}
+            className="w-full bg-transparent text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none leading-5 py-0.5 max-h-40 overflow-y-auto"
           />
 
           {/* Microphone Dictation Button */}

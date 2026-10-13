@@ -516,7 +516,7 @@ export default function AppSettingsDrawer({
               </p>
             )}
             <p className="text-[10px] leading-relaxed text-zinc-500">
-              A halogen-flash-server with <span className="font-mono">decider-0.8b</span> on its NPU, or any server
+              A halogen-flash-server with <span className="font-mono">decider-4b</span> on its NPU, or any server
               with a <span className="font-mono">POST /v1/systemone</span> route. If it cannot be reached, every
               approval asks you as usual.
             </p>
