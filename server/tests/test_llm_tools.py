@@ -140,9 +140,9 @@ class BuildInvocationTests(unittest.TestCase):
         self.assertEqual(install.arguments["packages"], ["ffmpeg", "libpq-dev"])
         self.assertIn("ffmpeg, libpq-dev", install.preview)
         self.assertEqual(build_invocation("computer_install_packages", {"packages": "jq curl"}, "bot-1").arguments["packages"], ["jq", "curl"])
-        with self.assertRaisesRegex(ToolCallError, "not a valid package name"):
+        with self.assertRaisesRegex(ToolCallError, "Invalid package name"):
             build_invocation("computer_install_packages", {"packages": ["ffmpeg; rm -rf /"]}, "bot-1")
-        with self.assertRaisesRegex(ToolCallError, "list of 1 to 50"):
+        with self.assertRaisesRegex(ToolCallError, "list of package names is required"):
             build_invocation("computer_install_packages", {"packages": []}, "bot-1")
         self.assertEqual(build_invocation("computer_screenshot", {}, "bot-1").name, "computer.screenshot")
         self.assertEqual(build_invocation("computer_start", {}, "bot-1").name, "computer.start")

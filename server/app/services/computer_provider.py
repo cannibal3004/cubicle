@@ -90,6 +90,11 @@ class ComputerStatus:
 TERMINAL_COMMAND_MAX_CHARS = 60000
 FILE_CONTENT_MAX_CHARS = 200_000
 FILE_PATH_MAX_CHARS = 512
+# Ubuntu package names: lower-case letters, digits, and the few symbols
+# dpkg allows (plus, dot, colon for an architecture, tilde, hyphen). No
+# leading hyphen, so a name can never read as an apt option.
+PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9+.:~-]{0,99}$")
+MAX_PACKAGES_PER_CALL = 50
 
 
 def check_file_path(path: Any) -> str:
@@ -115,6 +120,29 @@ def check_file_content(content: Any) -> str:
     if len(content) > FILE_CONTENT_MAX_CHARS:
         raise ComputerProviderError(f"File content must be at most {FILE_CONTENT_MAX_CHARS} characters.")
     return content
+
+
+def check_package_names(packages: Any) -> List[str]:
+    """The cleaned, de-duplicated package list, or an error naming the first bad entry.
+
+    Every route to install_packages runs this before anything else happens,
+    so a bad name is refused before an approval is opened rather than after
+    the user has said yes.
+    """
+    if isinstance(packages, str):
+        packages = packages.split()
+    if not isinstance(packages, (list, tuple)) or not packages:
+        raise ComputerProviderError("A list of package names is required.")
+    if len(packages) > MAX_PACKAGES_PER_CALL:
+        raise ComputerProviderError(f"At most {MAX_PACKAGES_PER_CALL} packages can be installed in one call.")
+    names: List[str] = []
+    for name in packages:
+        cleaned = name.strip().lower() if isinstance(name, str) else ""
+        if not PACKAGE_NAME.match(cleaned):
+            raise ComputerProviderError(f"Invalid package name: {str(name)[:60]!r}.")
+        if cleaned not in names:
+            names.append(cleaned)
+    return names
 
 
 class ComputerProviderError(RuntimeError):
@@ -294,11 +322,7 @@ class FakeComputerProvider:
 
     async def install_packages(self, computer_id: str, packages: Any) -> Dict[str, Any]:
         status = self._require_active(computer_id)
-        if isinstance(packages, str):
-            packages = packages.split()
-        if not isinstance(packages, (list, tuple)) or not packages or not all(isinstance(p, str) and p.strip() for p in packages):
-            raise ComputerProviderError("A list of package names is required.")
-        names = [p.strip().lower() for p in packages]
+        names = check_package_names(packages)
         status.packages = status.packages + [n for n in names if n not in status.packages]
         self._touch(status, "packages.install")
         return {

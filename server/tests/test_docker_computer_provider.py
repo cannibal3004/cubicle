@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.services.computer_provider import ComputerProviderError
+from app.services.computer_provider import ComputerProviderError, check_package_names
 from app.services.docker_computer_provider import DockerComputerProvider
 
 
@@ -184,6 +184,14 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.docker.calls_of("exec"), [])
         with self.assertRaisesRegex(ComputerProviderError, "At most 50"):
             await self.provider.install_packages(status.computer_id, [f"pkg{i}" for i in range(51)])
+
+    def test_the_shared_check_cleans_and_refuses_the_same_way_everywhere(self):
+        self.assertEqual(check_package_names([" FFmpeg ", "jq", "ffmpeg"]), ["ffmpeg", "jq"])
+        self.assertEqual(check_package_names("jq curl"), ["jq", "curl"])
+        self.assertEqual(check_package_names(["libc6:i386", "g++", "python3.12"]), ["libc6:i386", "g++", "python3.12"])
+        for bad in (None, "", [], ["-q"], ["a b"], ["x" * 101], ["ffmpeg; rm -rf /"], [7]):
+            with self.assertRaises(ComputerProviderError):
+                check_package_names(bad)
 
     async def test_a_failed_install_is_reported_and_not_remembered(self):
         def docker(args, timeout):

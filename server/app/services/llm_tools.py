@@ -13,7 +13,13 @@ from typing import Any, Dict, List, Optional, Union
 
 from app.config import settings
 from app.services.action_gateway import ActionInvocation
-from app.services.computer_provider import FILE_CONTENT_MAX_CHARS, TERMINAL_COMMAND_MAX_CHARS, computer_id_for_bot
+from app.services.computer_provider import (
+    FILE_CONTENT_MAX_CHARS,
+    TERMINAL_COMMAND_MAX_CHARS,
+    ComputerProviderError,
+    check_package_names,
+    computer_id_for_bot,
+)
 from app.services.workspace_service import WorkspaceToolCall
 
 
@@ -577,18 +583,10 @@ def build_invocation(
         path = _string(arguments, "path", default="/workspace", max_len=1000)
         return _computer_invocation("files_list", bot_id, {"path": path}, f"List computer files for {bot_id} at {path}")
     if name == "computer_install_packages":
-        packages = arguments.get("packages")
-        if isinstance(packages, str):
-            packages = packages.split()
-        if not isinstance(packages, list) or not packages or len(packages) > 50:
-            raise ToolCallError("'packages' must be a list of 1 to 50 package names.")
-        names = []
-        for item in packages:
-            name = item.strip().lower() if isinstance(item, str) else ""
-            if not re.match(r"^[a-z0-9][a-z0-9+.:~-]{0,99}$", name):
-                raise ToolCallError(f"'{str(item)[:60]}' is not a valid package name.")
-            if name not in names:
-                names.append(name)
+        try:
+            names = check_package_names(arguments.get("packages"))
+        except ComputerProviderError as exc:
+            raise ToolCallError(str(exc)) from exc
         listed = ", ".join(names)
         return _computer_invocation("install_packages", bot_id, {"packages": names}, f"Install packages in the computer for {bot_id}: {listed[:160]}")
     if name == "computer_send_input":

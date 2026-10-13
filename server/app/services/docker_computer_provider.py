@@ -41,6 +41,8 @@ from app.services.computer_provider import (
     check_command,
     check_file_content,
     check_file_path,
+    check_package_names,
+    PACKAGE_NAME,
     COMPUTER_CAPABILITIES,
     ComputerProviderError,
     ComputerStatus,
@@ -65,25 +67,6 @@ DockerCommand = Callable[[Sequence[str], float], str]
 SETUP_CAPABILITIES = ("CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SETGID", "SETUID", "SETPCAP")
 
 INSTALL_SCRIPT = "/opt/cubicle-computer/install-packages.sh"
-PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9+.:~-]{0,99}$")
-MAX_PACKAGES_PER_CALL = 50
-
-
-def validate_package_names(packages: Any) -> list:
-    if isinstance(packages, str):
-        packages = packages.split()
-    if not isinstance(packages, (list, tuple)) or not packages:
-        raise ComputerProviderError("A list of package names is required.")
-    if len(packages) > MAX_PACKAGES_PER_CALL:
-        raise ComputerProviderError(f"At most {MAX_PACKAGES_PER_CALL} packages can be installed in one call.")
-    names = []
-    for name in packages:
-        cleaned = name.strip().lower() if isinstance(name, str) else ""
-        if not PACKAGE_NAME.match(cleaned):
-            raise ComputerProviderError(f"Invalid package name: {str(name)[:60]!r}.")
-        if cleaned not in names:
-            names.append(cleaned)
-    return names
 
 
 # Where the shared folder appears inside a computer.
@@ -766,7 +749,7 @@ class DockerComputerProvider:
         package list, which every later start restores.
         """
         record = self._active_record(computer_id)
-        names = validate_package_names(packages)
+        names = check_package_names(packages)
         output = await self._docker(
             ["exec", "--user", "root", record.container_id or "", INSTALL_SCRIPT, *names],
             timeout=self.install_timeout,
