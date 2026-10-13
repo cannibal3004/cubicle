@@ -100,7 +100,7 @@ function formatTokenCount(n) {
   return n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`;
 }
 
-export default function MessageItem({ message, botId }) {
+function MessageItem({ message, botId }) {
   const isUser = message.sender === 'user';
   const isError = message.isError || message.text?.toLowerCase().startsWith('error:');
   const formattedTime = formatMsgTime(message.created_at);
@@ -237,3 +237,8 @@ export default function MessageItem({ message, botId }) {
     </div>
   );
 }
+
+// The thread re-renders on every streamed token and every keystroke in the
+// composer. Messages that did not change keep their object identity, so this
+// skips re-parsing their markdown each time.
+export default React.memo(MessageItem);

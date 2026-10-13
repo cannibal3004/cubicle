@@ -125,8 +125,14 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
 
   const activeMessages = messages && messages.length > 0 ? messages : defaultInitialMessages;
   // Context in use, from the latest reply that reported usage.
-  const lastUsageMessage = [...activeMessages].reverse().find((m) => m.sender === 'bot' && (m.usage || m.raw_payload?.usage));
-  const lastUsage = lastUsageMessage ? lastUsageMessage.usage || lastUsageMessage.raw_payload?.usage : null;
+  let lastUsage = null;
+  for (let i = activeMessages.length - 1; i >= 0; i -= 1) {
+    const m = activeMessages[i];
+    if (m.sender === 'bot' && (m.usage || m.raw_payload?.usage)) {
+      lastUsage = m.usage || m.raw_payload?.usage;
+      break;
+    }
+  }
   const activeModelInfo = (models || []).find((m) => m.id === activeModel);
 
   useEffect(() => {
@@ -227,7 +233,36 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
 
     let streamingMsgId = null;
     const updateMessages = (updater) => setMessagesFor(botId, updater);
+
+    // Tokens arrive one event each. They are collected and applied once per
+    // animation frame, so a burst of tokens costs one render, not one each.
+    // Every other event flushes first, so ordering is unchanged.
+    const pendingDeltas = { text: '', reasoning: '', frame: null };
+    const flushDeltas = () => {
+      pendingDeltas.frame = null;
+      const { text, reasoning } = pendingDeltas;
+      if (!text && !reasoning) return;
+      pendingDeltas.text = '';
+      pendingDeltas.reasoning = '';
+      updateMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === streamingMsgId
+            ? { ...msg, text: msg.text + text, reasoning: (msg.reasoning || '') + reasoning }
+            : msg
+        )
+      );
+    };
+    const queueDelta = (field, delta) => {
+      pendingDeltas[field] += delta || '';
+      if (pendingDeltas.frame === null) {
+        pendingDeltas.frame = typeof requestAnimationFrame === 'function'
+          ? requestAnimationFrame(flushDeltas)
+          : setTimeout(flushDeltas, 16);
+      }
+    };
+
     const finish = () => {
+      flushDeltas();
       setStreamingFor(botId, false);
       const current = attachmentsRef.current[botId];
       if (current && current.turnId === turnId) {
@@ -241,6 +276,17 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
       botId,
       { turnId, after },
       (event) => {
+        if (event.type === 'content.delta') {
+          queueDelta('text', event.delta);
+          return;
+        }
+        if (event.type === 'reasoning.delta') {
+          // The model's thinking. Shown in a collapsible block, never
+          // merged into the answer text.
+          queueDelta('reasoning', event.delta);
+          return;
+        }
+        flushDeltas();
         if (event.type === 'turn.started') {
           streamingMsgId = event.botMsgId;
           updateMessages((prev) =>
@@ -325,24 +371,6 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
                 ],
               };
             })
-          );
-        } else if (event.type === 'content.delta') {
-          updateMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === streamingMsgId
-                ? { ...msg, text: msg.text + event.delta }
-                : msg
-            )
-          );
-        } else if (event.type === 'reasoning.delta') {
-          // The model's thinking. Shown in a collapsible block, never
-          // merged into the answer text.
-          updateMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === streamingMsgId
-                ? { ...msg, reasoning: (msg.reasoning || '') + event.delta }
-                : msg
-            )
           );
         } else if (event.type === 'turn.completed' || event.type === 'turn.failed' || event.type === 'turn.cancelled') {
           updateMessages((prev) =>
