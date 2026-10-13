@@ -1,5 +1,5 @@
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 def _resolve_llm_provider() -> str:
     """Pick the LLM provider, honouring the legacy MUAPI-only environment."""
@@ -19,6 +19,14 @@ def _default_data_dir() -> str:
     if not new.exists() and legacy.exists():
         return str(legacy)
     return str(new)
+
+
+def _absolute_or_empty(value: str) -> str:
+    """`value` when it is an absolute path on either kind of host, else ""."""
+    value = (value or "").strip()
+    if PureWindowsPath(value).is_absolute() or PurePosixPath(value).is_absolute():
+        return value
+    return ""
 
 
 class Settings:
@@ -98,7 +106,7 @@ class Settings:
     AUTH_COOKIE_SECURE: bool = os.getenv("AUTH_COOKIE_SECURE", "0").lower() in {"1", "true", "yes"}
     COMPUTER_PROVIDER: str = os.getenv("COMPUTER_PROVIDER", "fake").strip().lower()
     COMPUTER_DOCKER_IMAGE: str = os.getenv(
-        "COMPUTER_DOCKER_IMAGE", "cubicle-computer:2.2.0"
+        "COMPUTER_DOCKER_IMAGE", "cubicle-computer:2.3.0"
     ).strip()
     COMPUTER_DOCKER_BINARY: str = os.getenv("COMPUTER_DOCKER_BINARY", "docker").strip()
     COMPUTER_DOCKER_WORKSPACE_ROOT: Path = Path(
@@ -125,6 +133,16 @@ class Settings:
     # COMPUTER_DOCKER_WORKSPACE_ROOT, because the daemon resolves mount sources
     # on the host.
     COMPUTER_DOCKER_HOST_WORKSPACE_ROOT: str = os.getenv("COMPUTER_DOCKER_HOST_WORKSPACE_ROOT", "").strip()
+    # The shared folder (WORKSPACE_ROOT) as the Docker daemon sees it, mounted
+    # into every computer at /shared so a bot reaches it with its computer
+    # tools. Compose passes WORKSPACE_DIR, which only works when it is an
+    # absolute host path; an API that sees host paths itself (bind mode with
+    # no translation) uses WORKSPACE_ROOT. Empty: computers get no /shared.
+    COMPUTER_DOCKER_HOST_SHARED_DIR: str = (
+        os.getenv("COMPUTER_DOCKER_HOST_SHARED_DIR", "").strip()
+        or _absolute_or_empty(os.getenv("WORKSPACE_DIR", ""))
+        or (str(WORKSPACE_ROOT) if COMPUTER_DOCKER_WORKSPACE_MODE == "bind" and not COMPUTER_DOCKER_HOST_WORKSPACE_ROOT else "")
+    )
     # Optional host path of an image file to use as the sandbox desktop
     # wallpaper. Resolved by the Docker daemon, so it is a host path even when
     # the API runs in a container.

@@ -47,24 +47,27 @@ def _obj(properties: Dict[str, Any], required: Optional[List[str]] = None) -> Di
     return schema
 
 
-WORKSPACE_TOOLS: List[ToolSpec] = [
+# The shared folder is a directory on the host the user chose. These tools
+# reach it from the API; a bot whose computer has the folder mounted at
+# /shared uses its computer tools there instead and is not offered these.
+SHARED_FOLDER_TOOLS: List[ToolSpec] = [
     ToolSpec(
-        name="workspace_list",
-        description="List files and folders in the shared workspace directory. Paths are relative to the workspace root; omit path for the root.",
+        name="shared_folder_list",
+        description="List files and folders in the shared folder, a directory on the host that the user can see. Paths are relative to the folder; omit path for its top level.",
         parameters=_obj({"path": {"type": "string", "description": "Relative directory path, default '.'"}}),
         group="workspace",
         needs_approval=True,
     ),
     ToolSpec(
-        name="workspace_read",
-        description="Read a UTF-8 text file from the shared workspace (at most 128 KB).",
+        name="shared_folder_read",
+        description="Read a UTF-8 text file from the shared folder (at most 128 KB).",
         parameters=_obj({"path": {"type": "string", "description": "Relative file path"}}, ["path"]),
         group="workspace",
         needs_approval=True,
     ),
     ToolSpec(
-        name="workspace_write",
-        description="Create or overwrite a UTF-8 text file in the shared workspace. Missing parent folders are created automatically.",
+        name="shared_folder_write",
+        description="Create or overwrite a UTF-8 text file in the shared folder. Missing parent folders are created automatically.",
         parameters=_obj(
             {
                 "path": {"type": "string", "description": "Relative file path"},
@@ -75,7 +78,26 @@ WORKSPACE_TOOLS: List[ToolSpec] = [
         group="workspace",
         needs_approval=True,
     ),
+    ToolSpec(
+        name="shared_folder_delete",
+        description="Delete a file, or a folder with everything in it, from the shared folder.",
+        parameters=_obj({"path": {"type": "string", "description": "Relative path of the file or folder"}}, ["path"]),
+        group="workspace",
+        needs_approval=True,
+    ),
 ]
+WORKSPACE_TOOLS = SHARED_FOLDER_TOOLS  # the group keeps its old id in bot settings
+
+# Where the computer file tools may go. /shared exists when the shared folder
+# is mounted into the computers (COMPUTER_DOCKER_HOST_SHARED_DIR).
+SHARED_IN_COMPUTER = bool(settings.COMPUTER_DOCKER_HOST_SHARED_DIR)
+
+
+def _file_roots(shared_in_computer: bool) -> str:
+    return "/workspace, /shared or the home directory" if shared_in_computer else "/workspace or the home directory"
+
+
+_FILE_ROOTS = _file_roots(SHARED_IN_COMPUTER)
 
 COMPUTER_TOOLS: List[ToolSpec] = [
     ToolSpec(
@@ -101,7 +123,7 @@ COMPUTER_TOOLS: List[ToolSpec] = [
     ),
     ToolSpec(
         name="computer_terminal_execute",
-        description="Run a shell command inside the sandbox as its unprivileged user (30 second timeout, 1 MB of output). The sandbox filesystem is separate from the shared workspace. /workspace and the home directory persist between starts; /tmp does not. There is no sudo: for apt packages use computer_install_packages; pip (in a venv), npm, cargo and similar work normally in the home directory. To create or change files use computer_write_file and computer_edit_file rather than heredocs.",
+        description="Run a shell command inside the sandbox as its unprivileged user (30 second timeout, 1 MB of output). /workspace and the home directory persist between starts; /tmp does not. There is no sudo: for apt packages use computer_install_packages; pip (in a venv), npm, cargo and similar work normally in the home directory. To create or change files use computer_write_file and computer_edit_file rather than heredocs.",
         parameters=_obj({"command": {"type": "string", "description": "Shell command to run"}}, ["command"]),
         group="computer",
         needs_approval=True,
@@ -115,14 +137,14 @@ COMPUTER_TOOLS: List[ToolSpec] = [
     ),
     ToolSpec(
         name="computer_read_file",
-        description="Read a UTF-8 text file inside the sandbox (under /workspace or the home directory, at most 512 KB).",
+        description=f"Read a UTF-8 text file inside the sandbox (under {_FILE_ROOTS}, at most 512 KB).",
         parameters=_obj({"path": {"type": "string", "description": "Absolute path inside the sandbox"}}, ["path"]),
         group="computer",
         needs_approval=False,
     ),
     ToolSpec(
         name="computer_write_file",
-        description="Create or replace a UTF-8 text file inside the sandbox (under /workspace or the home directory). Missing parent directories are created. Give the complete file contents; for a change to an existing file use computer_edit_file.",
+        description=f"Create or replace a UTF-8 text file inside the sandbox (under {_FILE_ROOTS}). Missing parent directories are created. Give the complete file contents; for a change to an existing file use computer_edit_file.",
         parameters=_obj(
             {
                 "path": {"type": "string", "description": "Absolute path inside the sandbox"},
@@ -190,8 +212,8 @@ SHARE_TOOLS: List[ToolSpec] = [
         name="share_file",
         description=(
             "Give the user a file as a download card in the chat. Use it whenever you create or find a file the user "
-            "should have (reports, exports, images, archives). `source` is 'workspace' for the shared workspace or "
-            "'computer' for your computer's /workspace; `path` is relative to that root (computer paths may start with /workspace/)."
+            "should have (reports, exports, images, archives). `source` is 'workspace' for the shared folder or "
+            "'computer' for your computer; `path` is relative to that root (computer paths may start with /workspace/ or /shared/)."
         ),
         parameters=_obj(
             {
@@ -287,7 +309,7 @@ def available_tools(
     `github` keeps the two hand-written GitHub tools, used only when no live
     connector catalog is available (they are a subset of what Composio offers).
     """
-    specs = list(WORKSPACE_TOOLS)
+    specs = list(SHARED_FOLDER_TOOLS)
     if computer:
         specs.extend(COMPUTER_TOOLS)
     specs.extend(SHARE_TOOLS)
@@ -331,6 +353,18 @@ def filter_tools(
     return kept
 
 
+def without_duplicate_routes(specs: List[ToolSpec], *, shared_in_computer: bool = SHARED_IN_COMPUTER) -> List[ToolSpec]:
+    """Drop the host-side shared folder tools when the computer reaches the folder itself.
+
+    Two routes to the same directory, one of them named like the computer's
+    own /workspace, is what kept confusing models. With /shared mounted the
+    computer tools are the only route a bot with a computer needs.
+    """
+    if shared_in_computer and any(spec.group == "computer" for spec in specs):
+        return [spec for spec in specs if spec.group != "workspace"]
+    return specs
+
+
 def openai_tool_definitions(specs: List[ToolSpec]) -> List[Dict[str, Any]]:
     return [
         {
@@ -341,11 +375,15 @@ def openai_tool_definitions(specs: List[ToolSpec]) -> List[Dict[str, Any]]:
     ]
 
 
-def describe_tools(specs: List[ToolSpec], secret_names: Optional[List[str]] = None) -> str:
+def describe_tools(
+    specs: List[ToolSpec], secret_names: Optional[List[str]] = None, *, shared_in_computer: bool = SHARED_IN_COMPUTER
+) -> str:
     """System-prompt paragraph so the model knows what it has and the rules.
 
     `secret_names` are the user's secrets set as environment variables in
     the bot's computer; the model learns the names, never the values.
+    `shared_in_computer` says whether the user's shared folder is mounted
+    at /shared inside the computer.
     """
     if not specs:
         return ""
@@ -356,14 +394,24 @@ def describe_tools(specs: List[ToolSpec], secret_names: Optional[List[str]] = No
         "Some calls need the user's approval and pause until the user allows or denies them in the chat. If a call is denied, stop and ask the user how to proceed instead of retrying.",
     ]
     if "workspace" in groups:
-        lines.append("- Shared workspace: a directory on the host the user chose. Use workspace_list, workspace_read, and workspace_write for files there.")
+        lines.append(
+            "- Shared folder: a directory on the host that the user chose and can see. "
+            "Use shared_folder_list, shared_folder_read, shared_folder_write and shared_folder_delete for files there."
+        )
     if "computer" in groups:
         lines.append(
             "- Your computer: a sandboxed Linux container with a Chromium browser and a shell, with internet access. "
             "Navigate with computer_browser_navigate, then computer_screenshot to see the page, computer_send_input to click or type, "
             "and computer_terminal_execute for commands. The computer starts itself the first time you use it (that first call can take a little longer); computer_start only warms it up. "
-            "Files: computer_read_file, computer_write_file and computer_edit_file handle project files under /workspace and the home directory; "
+            f"Files: computer_read_file, computer_write_file and computer_edit_file handle files under {_file_roots(shared_in_computer)}; "
             "use them instead of heredocs or sed in the terminal. "
+            + (
+                "/workspace is your own project space. /shared is the user's shared folder: a directory on the host that the user "
+                "and other bots see too; put anything the user should find outside the chat there, and nothing else. "
+                if shared_in_computer
+                else ""
+            )
+            +
             "Software: computer_install_packages installs apt packages (the shell has no sudo); pip in a venv, npm, cargo and the like work from the shell. "
             "/workspace and the home directory persist between starts, so installed tools and venvs stay; /tmp is wiped. "
             "The user can watch the same desktop live and take control of it; when a step needs a human, call computer_request_takeover."
@@ -476,16 +524,18 @@ def build_invocation(
     specs: Optional[List[ToolSpec]] = None,
 ) -> Union[WorkspaceToolCall, ActionInvocation]:
     """Validate a model tool call and build the gateway input for it."""
-    if name == "workspace_list":
+    if name == "shared_folder_list":
         return WorkspaceToolCall("workspace.list", _string(arguments, "path", default=".", max_len=1000))
-    if name == "workspace_read":
+    if name == "shared_folder_read":
         return WorkspaceToolCall("workspace.read", _string(arguments, "path", required=True, max_len=1000))
-    if name == "workspace_write":
+    if name == "shared_folder_write":
         return WorkspaceToolCall(
             "workspace.write",
             _string(arguments, "path", required=True, max_len=1000),
             _string(arguments, "content", required=True, max_len=200_000),
         )
+    if name == "shared_folder_delete":
+        return WorkspaceToolCall("workspace.delete", _string(arguments, "path", required=True, max_len=1000))
 
     if name == "computer_start":
         return _computer_invocation("start", bot_id, {}, f"Start the computer for {bot_id}")

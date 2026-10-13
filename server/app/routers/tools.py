@@ -13,7 +13,7 @@ from app.services.storage_service import storage_service
 router = APIRouter(prefix="/api/v1/tools", tags=["tools"])
 
 GROUP_LABELS = {
-    "workspace": "Shared workspace",
+    "workspace": "Shared folder",
     "computer": "Computer",
     "share": "File sharing",
     "memory": "Notes",

@@ -179,7 +179,7 @@ class FilterTests(unittest.TestCase):
             [],
         )
         self.assertNotIn("computer_screenshot", names(narrowed))
-        self.assertIn("workspace_read", names(narrowed))
+        self.assertIn("shared_folder_read", names(narrowed))
         self.assertNotIn("github_list_branches", names(narrowed))
         self.assertNotIn("gmail_send_email", names(narrowed))
         self.assertIn("gmail_fetch_emails", names(narrowed))

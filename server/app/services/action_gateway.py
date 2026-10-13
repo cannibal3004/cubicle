@@ -150,21 +150,28 @@ class ActionGateway:
                 name="workspace.list",
                 tool="workspace",
                 action="list",
-                intent="Inspect entries in the local workspace.",
+                intent="Inspect entries in the shared folder.",
                 risk="read",
             ),
             "workspace.read": ActionDefinition(
                 name="workspace.read",
                 tool="workspace",
                 action="read",
-                intent="Read a file from the local workspace.",
+                intent="Read a file from the shared folder.",
                 risk="read",
             ),
             "workspace.write": ActionDefinition(
                 name="workspace.write",
                 tool="workspace",
                 action="write",
-                intent="Write a file in the local workspace.",
+                intent="Write a file in the shared folder.",
+                risk="write",
+            ),
+            "workspace.delete": ActionDefinition(
+                name="workspace.delete",
+                tool="workspace",
+                action="delete",
+                intent="Delete a file or folder from the shared folder.",
                 risk="write",
             ),
         }
@@ -172,6 +179,7 @@ class ActionGateway:
             "workspace.list": self._execute_workspace,
             "workspace.read": self._execute_workspace,
             "workspace.write": self._execute_workspace,
+            "workspace.delete": self._execute_workspace,
         }
         self._pending: Dict[str, Tuple[ActionRequest, Any]] = {}
         self._decisions: Dict[str, str] = {}

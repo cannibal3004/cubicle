@@ -78,7 +78,7 @@ export default function AuditPanel() {
             <h2 className="text-sm font-bold tracking-wide">Audit Trail</h2>
           </div>
           <p className="text-[11px] text-zinc-500 mt-0.5">
-            Local record of approvals, workspace tools, and connector actions.
+            Local record of approvals, shared folder tools, and connector actions.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -107,7 +107,7 @@ export default function AuditPanel() {
           <div className="rounded-2xl border border-dashed border-[#27272a] py-16 text-center">
             <FiClock className="mx-auto text-2xl text-zinc-700" />
             <p className="mt-3 text-sm text-zinc-500">No audit events yet.</p>
-            <p className="mt-1 text-xs text-zinc-600">Approved workspace actions will appear here.</p>
+            <p className="mt-1 text-xs text-zinc-600">Approved actions will appear here.</p>
           </div>
         ) : (
           <div className="rounded-2xl border border-[#1e1e22] overflow-hidden">

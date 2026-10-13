@@ -434,7 +434,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
 
   useEffect(() => { setPickerIndex(0); }, [commandQuery, filteredCommands.length]);
 
-  // Auto-grow the composer up to ~8 lines; /workspace write needs a second line.
+  // Auto-grow the composer up to ~8 lines; /shared write needs a second line.
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -597,7 +597,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
         await runClientCommand(spec, rawText.trim().slice(name.length + 1));
         return;
       }
-      // Action commands (/workspace, /connector) go to the server as a normal
+      // Action commands (/shared, /connector) go to the server as a normal
       // message; it parses them and runs them through the gateway.
     }
     if ((!rawText.trim() && !selectedImage) || isStreaming) return;

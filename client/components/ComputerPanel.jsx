@@ -386,7 +386,7 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack }) {
             </h3>
             <div className="text-[11px] text-slate-400 leading-relaxed space-y-1.5">
               <p>Ubuntu with a Plank dock: Chromium, Files, Terminal. Node, Python with pip, git, curl, jq.</p>
-              <p>Writable: <span className="font-mono text-slate-300">/workspace</span> (kept between starts) and <span className="font-mono text-slate-300">/tmp</span>. Everything else is read-only.</p>
+              <p><span className="font-mono text-slate-300">/workspace</span> and the home directory are kept between starts; <span className="font-mono text-slate-300">/tmp</span> is wiped. <span className="font-mono text-slate-300">/shared</span> is the shared folder on the host, when one is configured.</p>
               <p>While you have control the bot cannot click, type, or navigate; it can still take screenshots.</p>
             </div>
             {loading ? (

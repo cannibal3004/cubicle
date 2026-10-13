@@ -104,11 +104,14 @@ function assertHttpUrl(value) {
   return parsed.toString();
 }
 
-// File tools reach the two places that persist between starts: /workspace
-// and the home directory. The shell can go anywhere the user can; these
-// tools are for project files, so they stay where the files belong.
+// File tools reach the places that persist between starts: /workspace, the
+// home directory, and the user's shared folder when the host mounted it
+// (SHARED). The shell can go anywhere the user can; these tools are for
+// project files, so they stay where the files belong.
 const home = path.resolve(process.env.HOME || '/home/pwuser');
-const fileRoots = [workspace, home];
+const shared = process.env.SHARED ? path.resolve(process.env.SHARED) : null;
+const fileRoots = shared ? [workspace, shared, home] : [workspace, home];
+const fileRootsText = fileRoots.join(', ').replace(/, ([^,]*)$/, ' or $1');
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_WRITE_CHARS = 200000;
 const TERMINAL_COMMAND_MAX = 60000;
@@ -124,7 +127,7 @@ function workspacePath(value) {
     return !relative.startsWith('..') && !path.isAbsolute(relative);
   });
   if (!inside) {
-    throw new Error(`Computer file paths must stay inside /workspace or ${home}.`);
+    throw new Error(`Computer file paths must stay inside ${fileRootsText}.`);
   }
   return resolved;
 }

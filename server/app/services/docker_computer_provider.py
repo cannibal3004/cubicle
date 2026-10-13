@@ -1,9 +1,10 @@
 """Docker-backed Playwright computer provider.
 
 Each bot receives one short-lived container with a private browser context,
-a writable workspace mount, a persistent home directory, and an internal
-token. The host API is the only component that knows the token or container
-id; callers continue to use the provider-neutral computer contract.
+a writable workspace mount, a persistent home directory, the user's shared
+folder at /shared when its host path is known, and an internal token. The
+host API is the only component that knows the token or container id;
+callers continue to use the provider-neutral computer contract.
 
 What persists, and where. Beside each computer's workspace directory sit
 `<id>.home` (the sandbox user's home: venvs, npm and cargo installs, dotfiles,
@@ -85,6 +86,10 @@ def validate_package_names(packages: Any) -> list:
     return names
 
 
+# Where the shared folder appears inside a computer.
+SHARED_MOUNT = "/shared"
+
+
 @dataclass
 class _RuntimeRecord:
     status: ComputerStatus
@@ -117,6 +122,7 @@ class DockerComputerProvider:
         network: Optional[str] = None,
         workspace_mode: Optional[str] = None,
         host_workspace_root: Optional[str] = None,
+        shared_dir: Optional[str] = None,
         wallpaper: Optional[str] = None,
         tmp_size: Optional[str] = None,
         install_timeout: Optional[float] = None,
@@ -148,6 +154,8 @@ class DockerComputerProvider:
             if host_workspace_root is not None
             else settings.COMPUTER_DOCKER_HOST_WORKSPACE_ROOT
         ).strip()
+        # Host path of the shared folder, mounted at /shared in every computer.
+        self.shared_dir = (shared_dir if shared_dir is not None else settings.COMPUTER_DOCKER_HOST_SHARED_DIR).strip()
         self.wallpaper = (wallpaper if wallpaper is not None else settings.COMPUTER_DOCKER_WALLPAPER).strip()
         self._docker_command = docker_command or self._run_docker
         self._runtimes: Dict[str, _RuntimeRecord] = {}
@@ -326,6 +334,16 @@ class DockerComputerProvider:
     def _runtime_url(record: _RuntimeRecord, route: str) -> str:
         return f"http://{record.host}:{record.port}{route}"
 
+    def _shared_args(self) -> list:
+        """The user's shared folder, the same directory the host-side tools use.
+
+        It is a plain bind mount even in volume mode: the point is that the
+        user (and every other bot) sees the same files from outside.
+        """
+        if not self.shared_dir:
+            return []
+        return ["--mount", f"type=bind,src={self.shared_dir},dst={SHARED_MOUNT}", "--env", f"SHARED={SHARED_MOUNT}"]
+
     def _wallpaper_args(self) -> list:
         if not self.wallpaper:
             return []
@@ -333,7 +351,7 @@ class DockerComputerProvider:
         return ["--mount", f"type=bind,src={self.wallpaper},dst=/opt/cubicle-computer/wallpaper,readonly"]
 
     # Names the runtime sets itself; a secret may not replace them.
-    _OWN_ENV = frozenset({"COMPUTER_TOKEN", "COMPUTER_ID", "PORT", "WORKSPACE", "CUBICLE_PACKAGES", "HOME", "PATH", "DISPLAY"})
+    _OWN_ENV = frozenset({"COMPUTER_TOKEN", "COMPUTER_ID", "PORT", "WORKSPACE", "SHARED", "CUBICLE_PACKAGES", "HOME", "PATH", "DISPLAY"})
 
     def _secret_env_args(self, record: _RuntimeRecord) -> list:
         if self._environment is None:
@@ -394,6 +412,7 @@ class DockerComputerProvider:
             "--mount",
             self._workspace_mount(record),
             *self._state_mounts(record),
+            *self._shared_args(),
             *self._wallpaper_args(),
             "--cpus",
             self.cpu_limit,

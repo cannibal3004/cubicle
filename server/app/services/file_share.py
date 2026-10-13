@@ -1,8 +1,9 @@
 """Files a bot can hand to the user as a download card in the chat.
 
-Two roots are shareable: the shared workspace the workspace tools use, and
-the bot's own computer workspace (its /workspace, which in bind mode is a
-directory under the API's data directory). A share never copies or moves
+Two roots are shareable: the shared folder (the host directory the user
+chose, which a computer sees at /shared), and the bot's own computer
+workspace (its /workspace, which in bind mode is a directory under the API's
+data directory). A share never copies or moves
 anything; it records a pointer the chat can download later, after the same
 confinement checks.
 """
@@ -49,7 +50,7 @@ def source_root(source: str, bot_id: Optional[str]) -> Path:
         if settings.COMPUTER_DOCKER_WORKSPACE_MODE != "bind":
             raise FileShareError(
                 "Files on the computer can only be shared when COMPUTER_DOCKER_WORKSPACE_MODE=bind; "
-                "copy the file to the shared workspace instead."
+                "copy the file to the shared folder instead."
             )
         return settings.COMPUTER_DOCKER_WORKSPACE_ROOT / computer_id_for_bot(bot_id)
     raise FileShareError("source must be 'workspace' or 'computer'.")
@@ -61,14 +62,17 @@ def resolve_shared_file(source: str, path: str, bot_id: Optional[str]) -> Shared
         raise FileShareError("A file path is required.")
     if len(path) > 1000:
         raise FileShareError("The file path is too long.")
-    root = source_root(source, bot_id).resolve()
     candidate = path.strip().replace("\\", "/")
-    # The computer sees its workspace as /workspace; accept that spelling.
+    # The computer sees its workspace as /workspace and the shared folder as
+    # /shared; accept those spellings, and treat /shared as what it is.
     if source == "computer":
-        if candidate == "/workspace":
+        if candidate == "/shared" or candidate.startswith("/shared/"):
+            source, candidate = "workspace", candidate[len("/shared"):] or "."
+        elif candidate == "/workspace":
             candidate = "."
         elif candidate.startswith("/workspace/"):
             candidate = candidate[len("/workspace/"):]
+    root = source_root(source, bot_id).resolve()
     absolute = (root / candidate.lstrip("/")).resolve()
     if absolute != root and root not in absolute.parents:
         raise FileShareError("The path is outside the shareable directory.")
@@ -104,7 +108,7 @@ action_gateway.register_action(
         name=SHARE_ACTION,
         tool="files",
         action="share",
-        intent="Offer a file from the workspace or the computer to the user as a download.",
+        intent="Offer a file from the shared folder or the computer to the user as a download.",
         risk="read",
         requires_approval=False,
     ),

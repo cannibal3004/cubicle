@@ -34,6 +34,7 @@ from app.services.llm_tools import (
     filter_tools,
     openai_tool_definitions,
     parse_arguments,
+    without_duplicate_routes,
 )
 from app.services.openai_compatible_service import openai_compatible_service
 from app.services.turn_manager import Turn, TurnBusyError, turn_manager
@@ -322,6 +323,8 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
             current_bot.get("tool_settings") if current_bot else None,
             storage_service.get_settings().get("disabled_toolkits") or [],
         )
+        # A bot whose computer has the shared folder at /shared uses it there.
+        tool_specs = without_duplicate_routes(tool_specs)
     tool_definitions = openai_tool_definitions(tool_specs) if tool_specs else None
     # The names of the user's secrets (set in the bot's computer), never the values.
     tools_prompt = describe_tools(tool_specs, secret_names=names_for(thread_id))
