@@ -29,16 +29,16 @@ This is an independent open-source project and is not affiliated with xAI.
 - **Markdown messages:** Render assistant replies as Markdown in the chat transcript.
 - **Visible thinking:** Reasoning models' thinking (`reasoning_content` or `reasoning` in the stream) is shown live in a collapsible block above the reply. It is stored for display but never replayed to the model.
 - **Voice dictation:** Use the browser's Web Speech API when the browser supports it.
-- **Model tool calling:** The model receives OpenAI-style tool definitions for the shared workspace, its sandboxed computer (when the Docker runtime is on), and connected GitHub, and can call them itself. Every call goes through the same deny-by-default gateway and approval cards as the slash commands; screenshots are shown to vision models as images.
+- **Model tool calling:** The model receives OpenAI-style tool definitions for the shared folder, its sandboxed computer (when the Docker runtime is on), and connected GitHub, and can call them itself. Every call goes through the same deny-by-default gateway and approval cards as the slash commands; screenshots are shown to vision models as images.
 - **Append-only context:** The transcript is replayed to the model exactly as it was sent before, tool results included, so a server with a prompt cache (halogen, llama.cpp, vLLM) resumes from the end of the last turn and a turn costs only what it adds. Nothing per-turn goes at the top of the prompt: the date sits at the end of the system prompt at day resolution. When the thread passes `CONTEXT_COMPACT_AT` of the window, before a turn or between its tool rounds, it is compacted: the model summarizes everything but the newest `CONTEXT_KEEP_RECENT_TOKENS` of conversation, the summary is stored as a marker in the thread, and the context starts there. A turn in progress carries on with its own tool calls intact. `/compact` does it on demand.
-- **Slash commands:** Type `/` in the composer for a picker. `/help`, `/clear`, `/compact`, `/model`, `/auto`, `/stop`, `/computer`, `/audit`, and `/settings` are handled in the app; `/workspace` and `/connector` become approval-gated actions. The list comes from `GET /api/v1/commands`.
-- **Approved workspace tools:** Explicit `/workspace list`, `/workspace read`, and `/workspace write` requests pause for user approval, stay inside `WORKSPACE_ROOT`, and produce audit events.
-- **Governed action gateway:** Workspace actions use a structured request/result contract, a deny-by-default registry, approval state, and redacted lifecycle audit records.
+- **Slash commands:** Type `/` in the composer for a picker. `/help`, `/clear`, `/compact`, `/model`, `/auto`, `/stop`, `/computer`, `/audit`, and `/settings` are handled in the app; `/shared` and `/connector` become approval-gated actions. The list comes from `GET /api/v1/commands`.
+- **Shared folder:** A directory on the host that you and every bot see. A bot's computer has it mounted at `/shared`, so the bot works there with its ordinary file tools and shell; a bot without a computer uses the approval-gated `shared_folder_*` tools, and `/shared list|read|write|delete` does the same from the composer. Everything stays inside `WORKSPACE_ROOT` and produces audit events.
+- **Governed action gateway:** Shared folder actions use a structured request/result contract, a deny-by-default registry, approval state, and redacted lifecycle audit records.
 - **Settings drawer:** Choose the provider, base URL, API key, default model, optional `reasoning_effort`, Composio key, and local profile details.
 - **Connector surface:** Browse a curated or live Composio app catalog, inspect connection status, and start OAuth authorization explicitly from Marketplace.
 - **Read-only GitHub action:** After connecting GitHub, run an explicit issue lookup from chat and pass its structured result through the action gateway.
 - **Approval-gated GitHub write:** Propose a GitHub issue from chat, inspect the repository/title/body-size preview, approve it, and receive a normalized issue result.
-- **Audit trail:** Review local approval, workspace-tool, and connector events from the sidebar.
+- **Audit trail:** Review local approval, shared-folder, and connector events from the sidebar.
 - **Sandbox desktop:** Each bot can have a sandboxed Ubuntu desktop (Plank dock with Chromium, a file manager and a terminal) that the model drives through its tools. You watch it live in the Computer tab over VNC, can take control with your own mouse and keyboard, and hand it back. The bot can ask you to take over for logins, CAPTCHAs, or checks.
 
 ## Quick start
@@ -116,16 +116,20 @@ The local server creates a mode-0600 session token in `DATA_DIR` and the browser
 The default provider is the deterministic local adapter. To enable the real sandbox desktop (browser, terminal, file manager, input, screenshots, and live VNC), build the pinned runtime image and opt in to the Docker provider:
 
 ```bash
-docker build -t cubicle-computer:2.1.0 ./runtime
+docker build -t cubicle-computer:2.3.0 ./runtime
 export COMPUTER_PROVIDER=docker
-export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.1.0
+export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.3.0
 ```
 
 The Docker daemon must be running before starting the API. Each bot gets a separate container, a separate workspace under `DATA_DIR/computers`, an ephemeral loopback-only port, and an internal runtime token. The sandbox user has no capabilities and cannot gain any; CPU, memory, process, and shared-memory limits are applied.
 
 **What persists.** Beside each computer's workspace directory the API keeps `<id>.home` (the sandbox user's home: venvs, npm and cargo installs, dotfiles, the Chromium profile), `<id>.apt` (apt's download cache) and `<id>.packages` (the Ubuntu packages the computer has installed, one per line, editable). The container's own filesystem is disposable: at every start it begins as root, installs the package list, hands the home directory to the sandbox user and drops privileges before the desktop comes up, so the image can be rebuilt at any time and every computer comes back with its packages. The bot installs system packages with `computer_install_packages` (approval required; apt runs as root through `docker exec`, the sandbox shell has no sudo), and everything user-level from the shell. `/tmp` is a tmpfs of `COMPUTER_DOCKER_TMP_SIZE` (2g) wiped at every start. "Reset" in the Computer tab empties the home directory and the package list; the workspace stays.
 
+**Secrets.** API keys and tokens a bot needs go in App Settings → Secrets (for every bot) or in the bot editor → Secrets (for one bot, overriding the app-wide value of the same name). They are stored encrypted with the same key as the provider credentials, the API never returns a value once set (`GET /api/v1/secrets` and `GET /api/v1/bots/{id}/secrets` list names and dates), and they reach a bot only as environment variables inside its computer, read at the computer's next start. The model is told the names, not the values. Since a shell can still print them, every tool result is scrubbed of the known values (`[secret NAME]`) before the model, the transcript or the screen sees it.
+
 Inside the container an Xvnc display runs a minimal desktop (xfwm4 with compositing): a centred, auto-hiding Plank dock with Chromium, Thunar and xfce4-terminal, no application menu and no session controls. Chromium is not running at boot: the dock button, the bot, and the sandbox shell all start it with the same launcher command, and the driver attaches to that one instance over the loopback DevTools port, so whoever opens a window, there is a single browser. Windows have maximize and close buttons only; there is no task list, so minimizing is disabled to keep windows from being stranded. Screenshots capture the whole desktop and input goes through xdotool, so the bot can use the terminal and file manager as well as the browser. Ubuntu 24.04 with Node, Python with pip and venv, git, curl, jq and unzip is available; `/workspace` and the home directory persist between starts and `/tmp` is wiped.
+
+**The shared folder inside the computer.** When the API knows the host path of the shared folder (`COMPUTER_DOCKER_HOST_SHARED_DIR`, which compose fills from an absolute `WORKSPACE_DIR`; an API running directly on the host uses `WORKSPACE_ROOT`), every computer gets it mounted at `/shared`. The bot is told that `/workspace` is its own project space and `/shared` is the folder you can see, and it is not offered the host-side `shared_folder_*` tools at all, so there is one filesystem to reason about. `share_file` accepts `/shared/...` paths from the computer. Because the API and the sandbox run as different unprivileged users, both sides create files in the folder writable by everyone (the API sets the modes explicitly; the sandbox runs with `umask 000`), the same arrangement as the world-writable per-computer directories. The folder itself must be writable by both users as well: a plain `chmod 777` on it is the simplest way.
 
 **Watching and taking control.** The Computer tab streams the desktop through noVNC. The WebSocket goes to the API, which checks your session and bridges to the sandbox driver using the per-computer token; the sandbox publishes no ports and its VNC server listens on loopback only. "Take control" lets your mouse and keyboard through; while you hold control the bot's click, type and navigate tools are refused (it can still take screenshots). "Hand back to bot" returns control. The bot has a `computer_request_takeover` tool: it posts a card in chat and the Computer tab with what it needs, and after you hand control back the chat input is pre-filled with a message telling it to continue.
 
@@ -155,7 +159,7 @@ HTTPS is what makes voice dictation work from another machine, since browsers on
 
 **Local model servers.** Inside the API container, `localhost` is the container. A server on the Docker host is reachable as `http://host.docker.internal:<port>/v1`; a server on another machine by its LAN address. Enter it in App Settings or as `LLM_BASE_URL` in `.env`. The same applies to the auto-approval decision server (`DECIDER_URL`, no `/v1` suffix).
 
-**Workspace.** `WORKSPACE_DIR` (default `./workspace`) is mounted as the directory the approved workspace tools can read and write. Point it at a project directory on the Docker host to let bots work on real files there.
+**Shared folder.** `WORKSPACE_DIR` (default `./workspace`) is the shared folder: the directory the approved `shared_folder_*` tools and `/shared` commands can read, write and delete in, and the one mounted at `/shared` inside every bot's computer when the path is absolute (compose cannot hand a relative path to the Docker daemon; set `COMPUTER_DOCKER_HOST_SHARED_DIR` to the absolute path instead). Point it at a project directory on the Docker host to let bots work on real files there.
 
 **Upgrading from Open Grok Bot.** The project was renamed; the API adopts a pre-rename `~/.open-grok-bot` data directory and renames an `open-grok-bot.sqlite3` database in place on first start, sessions are re-established on next login (the cookie name changed), and runtime containers and the compose project are recreated under the new name. Rebuild the runtime image (`docker compose --profile computer build computer`) and remove old sandbox containers with `docker rm -f $(docker ps -aq --filter label=open-grok-bot.runtime=computer)`.
 
@@ -195,7 +199,8 @@ The server reads these variables from the environment:
 | `LLM_BASE_URL` | per provider | API base URL. Defaults to `https://openrouter.ai/api/v1` for `openai_compatible` and `https://api.muapi.ai/api/v1` for `muapi` |
 | `LLM_REASONING_EFFORT` | empty | When set it is sent verbatim as `reasoning_effort`. Common values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; which ones work depends on the server and model. Leave empty to let the server use its default |
 | `LLM_TOOLS_ENABLED` | `1` | Offer the governed tools to the model through function calling. Set `0` to keep only the explicit slash commands |
-| `LLM_MAX_TOOL_ROUNDS` | `12` | Maximum model round-trips in one turn while it keeps calling tools. When the budget is spent the model gets one final call without tools so it still answers |
+| `LLM_MAX_TOOL_ROUNDS` | `100` | Safety net on model round-trips in one turn. A turn normally ends when the model answers, when the context is full (`CONTEXT_STOP_AT`, default 0.9 of the window, after compaction could not make room) or when it stops making progress (`LLM_STALLED_ROUNDS`, default 3 consecutive rounds that only repeat earlier calls with the same results). In every case the model gets one final call without tools so it still answers |
+| `BOT_MEMORY_MAX_CHARS` | `16000` | Size of a bot's notes in characters. They are rendered in full after a compaction and after a full rewrite, so this bounds that one-time context cost |
 | `LLM_SCREENSHOTS_TO_MODEL` | `auto` | Send sandbox screenshots to the model as images: `auto` (unless the model catalog says it has no vision), `always`, or `never` |
 | `CONTEXT_COMPACT_AT` | `0.7` | Share of the model's context window at which the thread is compacted: everything but the most recent turns is summarized into one stored message and the context starts there. Checked before a turn and between its tool rounds. `0` turns the automatic trigger off; `/compact` always works |
 | `CONTEXT_KEEP_RECENT_TOKENS` | `30000` | How much recent conversation, in tokens, is kept verbatim when compacting. Whole turns are kept, newest first, until the budget is spent; the newest turn is always kept |
@@ -213,7 +218,7 @@ The server reads these variables from the environment:
 | `AUTH_COOKIE_SECURE` | `0` | Set to `1` when serving over HTTPS |
 | `CORS_ORIGINS` | localhost and loopback client origins | Comma-separated browser origins allowed by the API |
 | `COMPUTER_PROVIDER` | `fake` | Computer adapter: `fake` or `docker` |
-| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.1.0` | Pinned local runtime image |
+| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.3.0` | Pinned local runtime image |
 | `COMPUTER_DOCKER_WORKSPACE_ROOT` | `DATA_DIR/computers` | Root for per-bot runtime workspaces |
 | `COMPUTER_DOCKER_CPU_LIMIT` | `2.0` | Docker CPU limit per computer |
 | `COMPUTER_DOCKER_MEMORY_LIMIT` | `2g` | Docker memory limit per computer |
@@ -224,8 +229,9 @@ The server reads these variables from the environment:
 | `COMPUTER_DOCKER_WORKSPACE_MODE` | `bind` | `bind` mounts a host directory per computer; `volume` uses a named Docker volume per computer |
 | `COMPUTER_DOCKER_HOST_WORKSPACE_ROOT` | empty | In `bind` mode from inside a container: the host path equivalent of `COMPUTER_DOCKER_WORKSPACE_ROOT` |
 | `COMPUTER_DOCKER_WALLPAPER` | empty | Absolute host path of a JPEG or PNG used as the sandbox desktop wallpaper (compose: `COMPUTER_WALLPAPER`). Default is a generated gradient |
-| `WORKSPACE_ROOT` | repository root | Maximum directory that approved workspace tools can access |
-| `WORKSPACE_MAX_FILE_BYTES` | `131072` | Read/write size limit for workspace files |
+| `COMPUTER_DOCKER_HOST_SHARED_DIR` | `WORKSPACE_DIR` when absolute, else `WORKSPACE_ROOT` for an API that sees host paths | Host path of the shared folder, mounted at `/shared` in every computer. Empty: no mount, and bots with a computer keep the host-side tools |
+| `WORKSPACE_ROOT` | repository root | The shared folder: the directory the `shared_folder_*` tools and `/shared` commands are confined to |
+| `WORKSPACE_MAX_FILE_BYTES` | `131072` | Read/write size limit for the host-side shared folder tools |
 | `APPROVAL_TIMEOUT_SECONDS` | `900` | How long a pending approval remains open. Turns run server-side, so this can be generous |
 | `AUTO_APPROVAL` | `off` | Default auto-approval mode: `off`, `shadow` (score and log, the user still decides), or `on`. App Settings overrides it; each bot can override that |
 | `DECIDER_URL` | empty | Base URL of the decision server used for auto-approval (a halogen-flash-server with `decider-4b`, or any server with `POST /v1/systemone`) |
@@ -245,7 +251,7 @@ A key saved before the provider setting existed is migrated automatically: the d
 | Chat | Bot roster, model selection, Markdown replies, image attachments, voice dictation, and streamed responses |
 | Computer | Bot-scoped provider lifecycle, screen metadata polling, and governed computer actions |
 | Marketplace | Searchable curated or live app catalog with explicit connect/disconnect actions |
-| Audit trail | Recent approval, workspace-tool, and connector events persisted by the local API |
+| Audit trail | Recent approval, shared-folder, and connector events persisted by the local API |
 | App Settings | Local profile values, model server connection, default model, and reasoning effort |
 
 ## Architecture
@@ -281,7 +287,7 @@ The main code areas are:
 | `server/app/services/storage_service.py` | SQLite persistence, legacy import, secrets, and default data |
 | `server/app/services/database.py` | SQLite connection management and schema migrations |
 | `server/app/services/secret_store.py` | Fernet encryption for provider credentials |
-| `server/app/services/workspace_service.py` | Confined list/read/write workspace tools |
+| `server/app/services/workspace_service.py` | Confined list/read/write/delete tools for the shared folder |
 | `server/app/services/approval_broker.py` | Pending approval coordination and audit events |
 | `server/app/services/approval_gate.py` | Auto-approval: scores pending actions with a decision model and logs every verdict |
 | `server/app/services/action_gateway.py` | Registered action policy, approval handoff, execution, and lifecycle audit |
@@ -293,18 +299,18 @@ The main code areas are:
 | `server/app/routers/computers.py` | Authenticated computer lifecycle, screen, and approval continuation routes |
 | `runtime/` | Pinned Playwright container image and authenticated runtime driver |
 | `server/app/schemas/contracts.py` | Pydantic request and response models |
-| `server/tests/` | Focused workspace, approval, persistence, auth, and provider regression tests |
+| `server/tests/` | Focused shared folder, approval, persistence, auth, and provider regression tests |
 
 ### Chat request flow
 
 1. The client posts the user message to `/api/v1/chat/send`.
 2. The server stores it in the local message store.
 3. The client starts a turn with `POST /api/v1/chat/turns/{thread_id}`. The server runs it as its own task, independent of any browser connection, and the client follows it over Server-Sent Events from `/api/v1/chat/stream/{thread_id}`. Events are numbered and buffered, so a reload, a second tab, or another machine attaches to the running turn and replays what it missed; `GET /api/v1/chat/turns` lists turns that are running or waiting on an approval, which drives the sidebar indicators.
-4. An explicit workspace or connector request becomes a structured action request and is checked against the deny-by-default gateway registry.
+4. An explicit shared folder or connector request becomes a structured action request and is checked against the deny-by-default gateway registry.
 5. The gateway pauses the stream for approval when required, then executes the registered action.
 6. The gateway emits normalized action lifecycle records; the client receives compatible tool events and the structured result.
 7. The server sends the system prompt (including a description of the available tools), full conversation history, any slash-command result, and the tool definitions to the configured provider as an OpenAI-style `messages` array (MUAPI receives a flattened prompt and no tools).
-8. If the model calls tools, each call is validated, turned into a gateway action, approved where required, executed, and its result is appended as a `tool` message; the model is then called again, up to `LLM_MAX_TOOL_ROUNDS` times.
+8. If the model calls tools, each call is validated, turned into a gateway action, approved where required, executed, and its result is appended as a `tool` message; the model is then called again, for as long as it has room and keeps making progress (see `LLM_MAX_TOOL_ROUNDS`).
 9. Provider output is forwarded as SSE deltas and the completed assistant message is persisted together with its thinking and the tools it used.
 
 ### Product direction
@@ -317,12 +323,17 @@ With an OpenAI-compatible provider the model is offered these functions. The gat
 
 | Tool | Gateway action | Approval |
 | --- | --- | --- |
-| `workspace_list`, `workspace_read`, `workspace_write` | `workspace.*` | yes |
-| `share_file` | `files.share` | no (puts a download card for a workspace or computer file in the chat) |
-| `computer_start`, `computer_screenshot`, `computer_files_list`, `computer_request_takeover` | `computer.*` | no |
-| `computer_browser_navigate`, `computer_terminal_execute`, `computer_send_input`, `computer_install_packages` | `computer.*` | yes |
+| `shared_folder_list`, `shared_folder_read`, `shared_folder_write`, `shared_folder_delete` | `workspace.*` | yes (not offered to a bot whose computer has the folder at `/shared`) |
+| `share_file` | `files.share` | no (puts a download card for a shared folder or computer file in the chat) |
+| `memory_read`, `memory_write`, `memory_edit` | `memory.*` | no (the bot's own notes, see below) |
+| `computer_start`, `computer_screenshot`, `computer_files_list`, `computer_read_file`, `computer_request_takeover` | `computer.*` | no |
+| `computer_browser_navigate`, `computer_terminal_execute`, `computer_write_file`, `computer_edit_file`, `computer_send_input`, `computer_install_packages` | `computer.*` | yes |
 | `<app>_<action>` for every app connected through Composio, e.g. `gmail_fetch_emails`, `github_create_a_pull_request` | `connector.composio_read` or `connector.composio_action` | no for tools Composio marks read-only, yes for everything else |
 | `github_list_issues`, `github_create_issue` | `connector.github_*` | no / yes (fallback when the Composio catalog cannot be fetched) |
+
+### Bot notes (memory)
+
+Each bot keeps one small document across conversations and compactions: the goal, decisions, where things are, how to run things. The bot reads it with `memory_read`, starts or reorganises it with `memory_write`, and changes one passage with `memory_edit` (an exact, unique find-and-replace; the result shows only the changed passage, so a one-line change does not cost a full rewrite). The notes are shown in the bot editor, where the user can edit them too; such edits appear in the chat so the model sees them. They are never put in the system prompt, which keeps the provider's prompt cache intact: the bot's own writes stay in the transcript and each compaction summary carries the current notes. `BOT_MEMORY_MAX_CHARS` (default 16000) bounds the size.
 
 ### Auto-approval
 
@@ -334,18 +345,19 @@ Set it up in **App Settings → Auto-approval**: the server URL (with a Test but
 
 Computer tools appear only when `COMPUTER_PROVIDER=docker`. Connector tools appear for each toolkit with an active Composio connection. If the toolkit's auth config in the Composio dashboard restricts the tools available for execution, exactly those tools are offered; otherwise only the tools Composio flags as important are, at most `COMPOSIO_TOOLS_PER_TOOLKIT` per app (see `COMPOSIO_IMPORTANT_TOOLS_ONLY`). Results are trimmed to 20 KB before they are returned to the model, and a screenshot is attached as an image message when the model accepts images.
 
-### Approved workspace commands
+### Approved shared folder commands
 
 These commands are intentionally explicit; arbitrary shell commands are not accepted:
 
 ```text
-/workspace list [path]
-/workspace read <path>
-/workspace write <path>
+/shared list [path]
+/shared read <path>
+/shared write <path>
 file content on the next line
+/shared delete <path>
 ```
 
-Paths must remain inside `WORKSPACE_ROOT`. Reads and writes are limited by `WORKSPACE_MAX_FILE_BYTES`, and every request/decision/result is recorded in the local audit store.
+Paths must remain inside `WORKSPACE_ROOT`. Reads and writes are limited by `WORKSPACE_MAX_FILE_BYTES`, delete removes a file or a whole folder, and every request/decision/result is recorded in the local audit store.
 
 Connector actions are intentionally explicit:
 
@@ -383,7 +395,7 @@ All routes are prefixed with `/api/v1`.
 | GET | `/gate/decisions?limit=200` | What the auto-approval gate was shown and concluded, with the final decision |
 | GET | `/audit?limit=100` | Read recent approval, tool, and connector events |
 | GET | `/tools/catalog` | Built-in tool groups and every connected app's tools, with the globally withheld apps |
-| GET | `/files/download?source=&path=&bot_id=` | Download (or `inline=1` preview) a file a bot shared; confined to the workspace or the bot's computer workspace |
+| GET | `/files/download?source=&path=&bot_id=` | Download (or `inline=1` preview) a file a bot shared; confined to the shared folder or the bot's computer workspace |
 | GET | `/connectors/catalog` | Return curated or Composio-backed connector cards |
 | GET | `/connectors?services=...` | Check connector connection status |
 | POST | `/connectors/{slug}/authorize` | Request an OAuth URL |
@@ -427,12 +439,12 @@ The following surfaces are present but should not be mistaken for completed infr
 - **Single local owner:** Authentication, bearer validation, and owner-scoped rows are present, but user provisioning, roles beyond the local owner, and multi-user grants are still pending.
 - **Single-user local storage:** SQLite improves restart durability, but multi-user provisioning, backups, and multi-instance coordination are still pending.
 - **Docker runtime is opt-in:** The Docker/Playwright provider and image are included, but live container startup depends on a running Docker daemon and a locally built image. The current runtime has browser screenshots and controlled operations, not a full desktop or VNC session.
-- **No durable memory or routines:** Conversations persist, but there is no separate memory store, scheduled routine engine, or background worker yet.
+- **No routines:** Bots keep notes across conversations, but there is no scheduled routine engine or background worker yet.
 - **No voice or multi-client apps:** Voice, desktop, and mobile clients are not included in this repository.
-- **Workspace and computer tools are intentionally narrow:** Workspace commands support confined file listing, reads, and writes. Docker computer operations run in a bot-scoped container and require approval for browser navigation, terminal commands, and input; human takeover and unrestricted desktop control are not implemented.
+- **Shared folder and computer tools are intentionally narrow:** Shared folder commands support confined file listing, reads, writes and deletes. Docker computer operations run in a bot-scoped container and require approval for browser navigation, terminal commands, and input; human takeover and unrestricted desktop control are not implemented.
 - **Connector actions are intentionally narrow:** Chat currently exposes only GitHub issue listing and approval-gated issue creation. Dynamic tool discovery, arbitrary connector calls, and other connector writes remain roadmap work.
 - **Provider streaming is adapter-level:** Depending on the provider response, the service may receive a completed result and emit it to the UI in small deltas.
-- **No CI workflow is included yet:** Focused workspace, approval, auth, persistence, and provider tests are present, but broader runtime integration and browser tests remain to be added.
+- **No CI workflow is included yet:** Focused shared folder, approval, auth, persistence, and provider tests are present, but broader runtime integration and browser tests remain to be added.
 
 ## Development
 
@@ -474,7 +486,7 @@ Confirm that the daemon is running, the runtime image was built, and the API use
 
 ```bash
 docker info
-docker image inspect cubicle-computer:2.1.0
+docker image inspect cubicle-computer:2.3.0
 echo "$COMPUTER_PROVIDER"
 ```
 

@@ -27,7 +27,7 @@ class CommandRegistryTests(unittest.TestCase):
     def test_only_a_leading_slash_names_a_command(self):
         self.assertEqual(command_name("/Clear"), "clear")
         self.assertEqual(command_name("  /model gpt"), "model")
-        self.assertEqual(command_name("/workspace write a.txt\nhello"), "workspace")
+        self.assertEqual(command_name("/shared write a.txt\nhello"), "shared")
         self.assertIsNone(command_name("look in /etc/hosts"))
         self.assertIsNone(command_name("type /clear to reset"))
         self.assertIsNone(command_name("/"))
@@ -40,10 +40,18 @@ class ActionCommandParsingTests(unittest.TestCase):
         self.assertIsNone(parse_action_command("please read /etc/hosts for me"))
         self.assertIsNone(parse_action_command("hello"))
 
-    def test_workspace_commands_parse_to_a_call(self):
-        call = parse_action_command("/workspace read notes.md")
+    def test_shared_folder_commands_parse_to_a_call(self):
+        call = parse_action_command("/shared read notes.md")
         self.assertEqual(call.name, "workspace.read")
         self.assertEqual(call.path, "notes.md")
+        delete = parse_action_command("/shared delete old/report.md")
+        self.assertEqual((delete.name, delete.path), ("workspace.delete", "old/report.md"))
+        self.assertIn("Delete from the shared folder", delete.summary)
+        with self.assertRaisesRegex(CommandError, "needs a path"):
+            parse_action_command("/shared delete")
+        # The old name is gone, not silently accepted.
+        with self.assertRaises(CommandError):
+            parse_action_command("/workspace read notes.md")
 
     def test_unknown_and_client_commands_are_errors(self):
         with self.assertRaises(CommandError) as unknown:
@@ -56,9 +64,9 @@ class ActionCommandParsingTests(unittest.TestCase):
 
     def test_malformed_action_commands_keep_their_tool(self):
         with self.assertRaises(CommandError) as workspace:
-            parse_action_command("/workspace burn everything")
+            parse_action_command("/shared burn everything")
         self.assertEqual(workspace.exception.tool, "workspace")
-        self.assertIn("list, read, and write", str(workspace.exception))
+        self.assertIn("list, read, write and delete", str(workspace.exception))
         with self.assertRaises(CommandError) as connector:
             parse_action_command("/connector gitlab issues a/b")
         self.assertEqual(connector.exception.tool, "connector")

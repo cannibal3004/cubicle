@@ -80,6 +80,25 @@ class BotsRouterTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             asyncio.run(bots_router.update_bot("missing", bots_router.BotUpdate(name="x")))
 
+    def test_editing_the_notes_records_a_note_in_the_thread(self):
+        bot = asyncio.run(bots_router.create_bot(bots_router.BotInput(name="Helper")))
+        before = len(self.storage.get_messages(bot["id"]))
+        updated = asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(memory="  Goal: ship.\r\n")))
+        self.assertEqual(updated["memory"], "Goal: ship.")
+        self.assertTrue(updated["memory_updated_at"])
+        messages = self.storage.get_messages(bot["id"])
+        self.assertEqual(len(messages), before + 1)
+        self.assertEqual((messages[-1]["sender"], messages[-1]["item_type"], messages[-1]["text"]), ("system", "memory", "Goal: ship."))
+        self.assertEqual(messages[-1]["raw_payload"]["by"], "user")
+
+        # Saving the same notes again (the editor sends them with every save) records nothing.
+        asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(memory="Goal: ship.", name="Helper 2")))
+        self.assertEqual(len(self.storage.get_messages(bot["id"])), before + 1)
+        # Clearing them is an edit too.
+        cleared = asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(memory="")))
+        self.assertEqual(cleared["memory"], "")
+        self.assertEqual(self.storage.get_messages(bot["id"])[-1]["text"], "")
+
     def test_auto_approval_override_is_stored_and_validated(self):
         bot = asyncio.run(bots_router.create_bot(bots_router.BotInput(name="Gated")))
         self.assertEqual(bot["auto_approval"], "inherit")

@@ -1,9 +1,10 @@
 """Docker-backed Playwright computer provider.
 
 Each bot receives one short-lived container with a private browser context,
-a writable workspace mount, a persistent home directory, and an internal
-token. The host API is the only component that knows the token or container
-id; callers continue to use the provider-neutral computer contract.
+a writable workspace mount, a persistent home directory, the user's shared
+folder at /shared when its host path is known, and an internal token. The
+host API is the only component that knows the token or container id;
+callers continue to use the provider-neutral computer contract.
 
 What persists, and where. Beside each computer's workspace directory sit
 `<id>.home` (the sandbox user's home: venvs, npm and cargo installs, dotfiles,
@@ -37,6 +38,9 @@ import httpx
 
 from app.config import settings
 from app.services.computer_provider import (
+    check_command,
+    check_file_content,
+    check_file_path,
     COMPUTER_CAPABILITIES,
     ComputerProviderError,
     ComputerStatus,
@@ -82,6 +86,10 @@ def validate_package_names(packages: Any) -> list:
     return names
 
 
+# Where the shared folder appears inside a computer.
+SHARED_MOUNT = "/shared"
+
+
 @dataclass
 class _RuntimeRecord:
     status: ComputerStatus
@@ -114,9 +122,11 @@ class DockerComputerProvider:
         network: Optional[str] = None,
         workspace_mode: Optional[str] = None,
         host_workspace_root: Optional[str] = None,
+        shared_dir: Optional[str] = None,
         wallpaper: Optional[str] = None,
         tmp_size: Optional[str] = None,
         install_timeout: Optional[float] = None,
+        environment: Optional[Callable[[str], Dict[str, str]]] = None,
         docker_command: Optional[DockerCommand] = None,
     ):
         self.docker_binary = docker_binary or settings.COMPUTER_DOCKER_BINARY
@@ -129,6 +139,9 @@ class DockerComputerProvider:
         self.command_timeout = command_timeout or settings.COMPUTER_DOCKER_COMMAND_TIMEOUT
         self.tmp_size = (tmp_size or settings.COMPUTER_DOCKER_TMP_SIZE).strip()
         self.install_timeout = install_timeout or settings.COMPUTER_DOCKER_INSTALL_TIMEOUT
+        # Extra environment for a bot's container (the user's secrets), looked
+        # up by bot id at every launch so changes apply at the next start.
+        self._environment = environment
         self.runtime_port = runtime_port or settings.COMPUTER_DOCKER_RUNTIME_PORT
         self.seccomp_profile = (seccomp_profile or settings.COMPUTER_DOCKER_SECCOMP_PROFILE).expanduser().resolve()
         self.network = (network if network is not None else settings.COMPUTER_DOCKER_NETWORK).strip()
@@ -141,6 +154,8 @@ class DockerComputerProvider:
             if host_workspace_root is not None
             else settings.COMPUTER_DOCKER_HOST_WORKSPACE_ROOT
         ).strip()
+        # Host path of the shared folder, mounted at /shared in every computer.
+        self.shared_dir = (shared_dir if shared_dir is not None else settings.COMPUTER_DOCKER_HOST_SHARED_DIR).strip()
         self.wallpaper = (wallpaper if wallpaper is not None else settings.COMPUTER_DOCKER_WALLPAPER).strip()
         self._docker_command = docker_command or self._run_docker
         self._runtimes: Dict[str, _RuntimeRecord] = {}
@@ -319,11 +334,34 @@ class DockerComputerProvider:
     def _runtime_url(record: _RuntimeRecord, route: str) -> str:
         return f"http://{record.host}:{record.port}{route}"
 
+    def _shared_args(self) -> list:
+        """The user's shared folder, the same directory the host-side tools use.
+
+        It is a plain bind mount even in volume mode: the point is that the
+        user (and every other bot) sees the same files from outside.
+        """
+        if not self.shared_dir:
+            return []
+        return ["--mount", f"type=bind,src={self.shared_dir},dst={SHARED_MOUNT}", "--env", f"SHARED={SHARED_MOUNT}"]
+
     def _wallpaper_args(self) -> list:
         if not self.wallpaper:
             return []
         # Mounted over the image's generated default; start.sh applies it.
         return ["--mount", f"type=bind,src={self.wallpaper},dst=/opt/cubicle-computer/wallpaper,readonly"]
+
+    # Names the runtime sets itself; a secret may not replace them.
+    _OWN_ENV = frozenset({"COMPUTER_TOKEN", "COMPUTER_ID", "PORT", "WORKSPACE", "SHARED", "CUBICLE_PACKAGES", "HOME", "PATH", "DISPLAY"})
+
+    def _secret_env_args(self, record: _RuntimeRecord) -> list:
+        if self._environment is None:
+            return []
+        args = []
+        for name, value in sorted(self._environment(record.status.bot_id).items()):
+            if name in self._OWN_ENV or not isinstance(value, str):
+                continue
+            args.extend(["--env", f"{name}={value}"])
+        return args
 
     async def _remove_stale_container(self, record: _RuntimeRecord) -> None:
         """Remove a leftover container that still holds this computer's name.
@@ -374,6 +412,7 @@ class DockerComputerProvider:
             "--mount",
             self._workspace_mount(record),
             *self._state_mounts(record),
+            *self._shared_args(),
             *self._wallpaper_args(),
             "--cpus",
             self.cpu_limit,
@@ -398,6 +437,7 @@ class DockerComputerProvider:
             "WORKSPACE=/workspace",
             "--env",
             f"CUBICLE_PACKAGES={' '.join(record.status.packages)}",
+            *self._secret_env_args(record),
             self.image,
         ]
         if self.seccomp_profile.is_file():
@@ -631,10 +671,7 @@ class DockerComputerProvider:
 
     async def terminal_execute(self, computer_id: str, command: str) -> Dict[str, Any]:
         record = self._active_record(computer_id)
-        if not isinstance(command, str) or not command.strip():
-            raise ComputerProviderError("A terminal command is required.")
-        if len(command) > 4000:
-            raise ComputerProviderError("Terminal commands must be at most 4000 characters.")
+        command = check_command(command)
         result = await self._request(record, "POST", "/terminal", {"command": command})
         self._touch(record.status, "terminal.exec")
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
@@ -645,6 +682,28 @@ class DockerComputerProvider:
             raise ComputerProviderError("Computer file paths must be absolute and at most 512 characters.")
         result = await self._request(record, "POST", "/files", {"path": path.strip()})
         self._touch(record.status, "files.list")
+        return {"computer_id": computer_id, "provider": self.provider_name, **result}
+
+    async def files_read(self, computer_id: str, path: str) -> Dict[str, Any]:
+        record = self._active_record(computer_id)
+        result = await self._request(record, "POST", "/files/read", {"path": check_file_path(path)})
+        self._touch(record.status, "files.read")
+        return {"computer_id": computer_id, "provider": self.provider_name, **result}
+
+    async def files_write(self, computer_id: str, path: str, content: str) -> Dict[str, Any]:
+        record = self._active_record(computer_id)
+        payload = {"path": check_file_path(path), "content": check_file_content(content)}
+        result = await self._request(record, "POST", "/files/write", payload)
+        self._touch(record.status, "files.write")
+        return {"computer_id": computer_id, "provider": self.provider_name, **result}
+
+    async def files_edit(self, computer_id: str, path: str, old_text: str, new_text: str) -> Dict[str, Any]:
+        record = self._active_record(computer_id)
+        if not isinstance(old_text, str) or not old_text:
+            raise ComputerProviderError("old_text is the exact passage to replace and cannot be empty.")
+        payload = {"path": check_file_path(path), "old_text": old_text, "new_text": check_file_content(new_text or "")}
+        result = await self._request(record, "POST", "/files/edit", payload)
+        self._touch(record.status, "files.edit")
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
 
     async def screenshot(self, computer_id: str) -> Dict[str, Any]:

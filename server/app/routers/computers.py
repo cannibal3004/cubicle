@@ -20,6 +20,7 @@ from app.services.action_gateway import (
     action_gateway,
 )
 from app.services.computer_provider import ComputerProviderError, computer_provider
+from app.services.secrets_service import redactor_for
 from app.services.storage_service import storage_service
 from app.services import computer_actions as _computer_actions  # noqa: F401 - registers actions
 
@@ -32,6 +33,9 @@ class ComputerActionRequest(BaseModel):
         "browser_navigate",
         "terminal_execute",
         "files_list",
+        "files_read",
+        "files_write",
+        "files_edit",
         "send_input",
         "cleanup",
         "request_takeover",
@@ -56,6 +60,14 @@ def _preview(action: str, bot_id: str, arguments: Dict[str, Any]) -> str:
         return f"Run a terminal command on the computer for {bot_id}"
     if action == "files_list":
         return f"List computer files for {bot_id} at {arguments.get('path') or '/workspace'}"
+    if action == "files_read":
+        return f"Read {arguments.get('path') or '[missing path]'} from the computer for {bot_id}"
+    if action == "files_write":
+        content = arguments.get("content")
+        size = len(content) if isinstance(content, str) else 0
+        return f"Write {size} characters to {arguments.get('path') or '[missing path]'} in the computer for {bot_id}"
+    if action == "files_edit":
+        return f"Edit {arguments.get('path') or '[missing path]'} in the computer for {bot_id}"
     if action == "send_input":
         return f"Send input to the computer for {bot_id}"
     if action == "cleanup":
@@ -118,7 +130,7 @@ async def _run_action(
     return {
         "status": "completed",
         "request": request.model_dump(),
-        "result": result.result or {},
+        "result": redactor_for(bot_id).apply(result.result or {}),
     }
 
 @router.get("/{bot_id}")
@@ -269,5 +281,5 @@ async def execute_approved_computer_action(bot_id: str, request_id: str):
     return {
         "status": "completed",
         "request": request.model_dump(),
-        "result": result.result or {},
+        "result": redactor_for(bot_id).apply(result.result or {}),
     }

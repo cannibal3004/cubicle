@@ -2,6 +2,12 @@
 # Boot the sandbox desktop as the sandbox user, then hand over to the driver.
 set -e
 
+# Whatever the sandbox creates in /workspace and the shared folder must stay
+# changeable by the host API, which runs as a different user, so everything
+# started from here (the driver, its shells, the desktop apps) creates files
+# writable by everyone. The API does the same for what it writes there.
+umask 000
+
 WIDTH="${VIEWPORT_WIDTH:-1280}"
 HEIGHT="${VIEWPORT_HEIGHT:-720}"
 export DISPLAY="${DISPLAY:-:1}"

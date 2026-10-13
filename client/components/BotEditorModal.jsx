@@ -1,9 +1,11 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { FiX, FiArchive, FiTrash2, FiRotateCcw, FiAlertTriangle } from 'react-icons/fi';
 import ModelPicker from './ModelPicker';
 import BotToolsSection from './BotToolsSection';
+import SecretsSection from './SecretsSection';
+import { fetchBotSecrets, setBotSecret, deleteBotSecret } from '../lib/api';
 
 const AVATARS = ['🤖', '🧠', '🦊', '🐙', '🦉', '🐝', '🧭', '🛠️', '📚', '🎯', '🧪', '🌱'];
 const ACCENTS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#f43f5e', '#a3a3a3'];
@@ -95,8 +97,14 @@ export default function BotEditorModal({
   const [accent, setAccent] = useState(ACCENTS[0]);
   const [model, setModel] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
+  const [memory, setMemory] = useState('');
   const [toolSettings, setToolSettings] = useState({});
   const [showTools, setShowTools] = useState(false);
+  const [showSecrets, setShowSecrets] = useState(false);
+  const botId = bot?.id;
+  const loadBotSecrets = useCallback(() => fetchBotSecrets(botId), [botId]);
+  const saveBotSecret = useCallback((name, value) => setBotSecret(botId, name, value), [botId]);
+  const removeBotSecret = useCallback((name) => deleteBotSecret(botId, name), [botId]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -109,8 +117,10 @@ export default function BotEditorModal({
     setAccent(bot?.accent_color || ACCENTS[0]);
     setModel(bot?.model || defaultModel || '');
     setSystemPrompt(bot?.system_prompt || '');
+    setMemory(bot?.memory || '');
     setToolSettings(bot?.tool_settings || {});
     setShowTools(false);
+    setShowSecrets(false);
     setError('');
     setConfirmingDelete(false);
   }, [bot, defaultModel]);
@@ -133,6 +143,9 @@ export default function BotEditorModal({
         model: model.trim(),
         system_prompt: systemPrompt.trim(),
         tool_settings: toolSettings,
+        // Only an existing bot has notes to edit; the server records a
+        // change in the thread so the bot sees it.
+        ...(bot ? { memory } : {}),
       });
     } catch (err) {
       setError(err?.message || 'Could not save the bot.');
@@ -304,6 +317,24 @@ export default function BotEditorModal({
             />
           </div>
 
+          {bot && (
+            <div>
+              <label className={labelClass} htmlFor="bot-memory">
+                Notes (memory) · {memory.length}/{bot.memory_limit || 16000}
+              </label>
+              <textarea
+                id="bot-memory"
+                value={memory}
+                onChange={(e) => setMemory(e.target.value)}
+                placeholder="Nothing yet. The bot writes here with memory_write and memory_edit: the goal, decisions, where things are, how to run things."
+                rows={6}
+                maxLength={bot.memory_limit || 16000}
+                className={`${inputClass} font-mono text-xs leading-relaxed resize-y min-h-[100px]`}
+              />
+              <p className="text-[11px] text-zinc-500 mt-1">The bot keeps these across conversations and compactions. Your edits are shown to it in the chat.</p>
+            </div>
+          )}
+
           <div>
             <button
               type="button"
@@ -320,6 +351,31 @@ export default function BotEditorModal({
               </div>
             )}
           </div>
+
+          {bot && (
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowSecrets((v) => !v)}
+                className="flex items-center justify-between w-full text-left"
+                aria-expanded={showSecrets}
+              >
+                <span className={labelClass + ' mb-0'}>Secrets</span>
+                <span className="text-[11px] text-zinc-500">{showSecrets ? 'Hide' : 'API keys for this bot\'s computer'}</span>
+              </button>
+              {showSecrets && (
+                <div className="mt-2">
+                  <SecretsSection
+                    scope="bot"
+                    load={loadBotSecrets}
+                    save={saveBotSecret}
+                    remove={removeBotSecret}
+                    hint="Set as environment variables in this bot's computer, on top of the app-wide secrets. Values are stored encrypted and never shown again; a running computer picks up changes at its next start."
+                  />
+                </div>
+              )}
+            </div>
+          )}
 
           {error && <p className="text-xs text-rose-400">{error}</p>}
         </div>

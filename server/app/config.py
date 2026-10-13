@@ -1,5 +1,5 @@
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 def _resolve_llm_provider() -> str:
     """Pick the LLM provider, honouring the legacy MUAPI-only environment."""
@@ -21,6 +21,14 @@ def _default_data_dir() -> str:
     return str(new)
 
 
+def _absolute_or_empty(value: str) -> str:
+    """`value` when it is an absolute path on either kind of host, else ""."""
+    value = (value or "").strip()
+    if PureWindowsPath(value).is_absolute() or PurePosixPath(value).is_absolute():
+        return value
+    return ""
+
+
 class Settings:
     # Any OpenAI-compatible chat completions server (OpenRouter, Ollama,
     # LM Studio, llama.cpp, vLLM, ...) or the legacy MUAPI prediction API.
@@ -37,7 +45,17 @@ class Settings:
     # Let the model call the governed tools (workspace, computer, connectors)
     # through OpenAI-style function calling. Approvals still apply.
     LLM_TOOLS_ENABLED: bool = os.getenv("LLM_TOOLS_ENABLED", "1").strip().lower() in {"1", "true", "yes"}
-    LLM_MAX_TOOL_ROUNDS: int = int(os.getenv("LLM_MAX_TOOL_ROUNDS", "12"))
+    # A safety net, not the working limit: a turn normally ends when the
+    # model answers, when the context is full (CONTEXT_STOP_AT) or when it
+    # stops making progress (LLM_STALLED_ROUNDS).
+    LLM_MAX_TOOL_ROUNDS: int = int(os.getenv("LLM_MAX_TOOL_ROUNDS", "100"))
+    # Consecutive tool rounds whose every call repeats an earlier call of the
+    # turn with the same result before the model is asked to answer. 0 disables.
+    LLM_STALLED_ROUNDS: int = int(os.getenv("LLM_STALLED_ROUNDS", "3"))
+    # Size of a bot's notes (memory_write / memory_edit and the bot editor).
+    # The notes are rendered in full after every compaction and after every
+    # full rewrite, so this bounds a one-time context cost, not a per-turn one.
+    BOT_MEMORY_MAX_CHARS: int = int(os.getenv("BOT_MEMORY_MAX_CHARS", "16000"))
     # Screenshots as images for the model: auto (unless the catalog says the
     # model has no vision), always, or never.
     LLM_SCREENSHOTS_TO_MODEL: str = os.getenv("LLM_SCREENSHOTS_TO_MODEL", "auto").strip().lower()
@@ -49,6 +67,9 @@ class Settings:
     # the most recent user turns. 0 disables the automatic trigger.
     CONTEXT_COMPACT_AT: float = float(os.getenv("CONTEXT_COMPACT_AT", "0.7"))
     CONTEXT_KEEP_RECENT_TOKENS: int = int(os.getenv("CONTEXT_KEEP_RECENT_TOKENS", "30000"))
+    # Share of the window at which a turn stops calling tools when compaction
+    # could not make room (nothing older to fold, or the summary failed).
+    CONTEXT_STOP_AT: float = float(os.getenv("CONTEXT_STOP_AT", "0.9"))
     CONTEXT_TOOL_RESULT_CHARS: int = int(os.getenv("CONTEXT_TOOL_RESULT_CHARS", "4000"))
     CONTEXT_TOOL_RESULTS_MESSAGE_CHARS: int = int(os.getenv("CONTEXT_TOOL_RESULTS_MESSAGE_CHARS", "24000"))
     COMPOSIO_API_KEY: str = os.getenv("COMPOSIO_API_KEY", "")
@@ -85,7 +106,7 @@ class Settings:
     AUTH_COOKIE_SECURE: bool = os.getenv("AUTH_COOKIE_SECURE", "0").lower() in {"1", "true", "yes"}
     COMPUTER_PROVIDER: str = os.getenv("COMPUTER_PROVIDER", "fake").strip().lower()
     COMPUTER_DOCKER_IMAGE: str = os.getenv(
-        "COMPUTER_DOCKER_IMAGE", "cubicle-computer:2.1.0"
+        "COMPUTER_DOCKER_IMAGE", "cubicle-computer:2.3.0"
     ).strip()
     COMPUTER_DOCKER_BINARY: str = os.getenv("COMPUTER_DOCKER_BINARY", "docker").strip()
     COMPUTER_DOCKER_WORKSPACE_ROOT: Path = Path(
@@ -112,6 +133,16 @@ class Settings:
     # COMPUTER_DOCKER_WORKSPACE_ROOT, because the daemon resolves mount sources
     # on the host.
     COMPUTER_DOCKER_HOST_WORKSPACE_ROOT: str = os.getenv("COMPUTER_DOCKER_HOST_WORKSPACE_ROOT", "").strip()
+    # The shared folder (WORKSPACE_ROOT) as the Docker daemon sees it, mounted
+    # into every computer at /shared so a bot reaches it with its computer
+    # tools. Compose passes WORKSPACE_DIR, which only works when it is an
+    # absolute host path; an API that sees host paths itself (bind mode with
+    # no translation) uses WORKSPACE_ROOT. Empty: computers get no /shared.
+    COMPUTER_DOCKER_HOST_SHARED_DIR: str = (
+        os.getenv("COMPUTER_DOCKER_HOST_SHARED_DIR", "").strip()
+        or _absolute_or_empty(os.getenv("WORKSPACE_DIR", ""))
+        or (str(WORKSPACE_ROOT) if COMPUTER_DOCKER_WORKSPACE_MODE == "bind" and not COMPUTER_DOCKER_HOST_WORKSPACE_ROOT else "")
+    )
     # Optional host path of an image file to use as the sandbox desktop
     # wallpaper. Resolved by the Docker daemon, so it is a host path even when
     # the API runs in a container.

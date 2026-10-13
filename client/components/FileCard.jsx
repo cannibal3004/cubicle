@@ -88,7 +88,7 @@ export default function FileCard({ attachment, botId }) {
           <div className="text-[10px] text-zinc-500 truncate">
             {formatSize(attachment.size)}
             {attachment.mime ? ` · ${attachment.mime}` : ''}
-            {` · ${attachment.source === 'computer' ? 'bot computer' : 'shared workspace'}`}
+            {` · ${attachment.source === 'computer' ? 'bot computer' : 'shared folder'}`}
           </div>
           {error && (
             <div className="text-[10px] text-rose-400 mt-0.5 flex items-center gap-1">

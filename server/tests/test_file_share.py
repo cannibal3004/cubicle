@@ -51,6 +51,9 @@ class FileShareTests(unittest.TestCase):
         shared = resolve_shared_file("computer", "/workspace/chart.png", "bot-1")
         self.assertEqual((shared.path, shared.mime), ("chart.png", "image/png"))
         self.assertEqual(resolve_shared_file("computer", "chart.png", "bot-1").path, "chart.png")
+        # /shared inside the computer is the shared folder; the card says so.
+        via_mount = resolve_shared_file("computer", "/shared/reports/q3.json", "bot-1")
+        self.assertEqual((via_mount.source, via_mount.path), ("workspace", "reports/q3.json"))
         with self.assertRaisesRegex(FileShareError, "bot id"):
             resolve_shared_file("computer", "chart.png", None)
         with mock.patch.object(file_share.settings, "COMPUTER_DOCKER_WORKSPACE_MODE", "volume"):

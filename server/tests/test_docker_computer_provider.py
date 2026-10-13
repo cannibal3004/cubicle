@@ -41,6 +41,7 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
             seccomp_profile=self.root / "missing-seccomp.json",
             start_timeout=0.5,
             docker_command=self.docker,
+            shared_dir="",
         )
 
     def tearDown(self):
@@ -86,6 +87,30 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("COMPUTER_TOKEN", started.to_dict())
         self.assertNotIn("token", started.to_dict())
 
+    async def test_secrets_become_environment_variables_but_cannot_replace_the_runtimes_own(self):
+        provider = DockerComputerProvider(
+            image="cubicle-computer:test",
+            workspace_root=self.root / "computers",
+            seccomp_profile=self.root / "missing-seccomp.json",
+            start_timeout=0.5,
+            environment=lambda bot_id: {"GITHUB_TOKEN": f"tok-{bot_id}", "COMPUTER_TOKEN": "hijack", "PATH": "/evil"},
+            docker_command=self.docker,
+            shared_dir="",
+        )
+        status = provider.get_or_create("bot-env")
+
+        async def ready(_record):
+            return {"status": "healthy"}
+
+        provider._wait_until_ready = ready
+        await provider.start(status.computer_id)
+        run_args = self.docker.run_args()
+        env = [run_args[i + 1] for i, a in enumerate(run_args) if a == "--env"]
+        self.assertIn("GITHUB_TOKEN=tok-bot-env", env)
+        self.assertNotIn("COMPUTER_TOKEN=hijack", env)
+        self.assertNotIn("PATH=/evil", env)
+        self.assertEqual(sum(1 for e in env if e.startswith("COMPUTER_TOKEN=")), 1)
+
     async def test_tmp_size_is_configurable(self):
         provider = DockerComputerProvider(
             image="cubicle-computer:test",
@@ -94,6 +119,7 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
             start_timeout=0.5,
             tmp_size="4g",
             docker_command=self.docker,
+            shared_dir="",
         )
         status = provider.get_or_create("bot-tmp")
 
@@ -140,6 +166,7 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
             workspace_root=self.root / "computers",
             seccomp_profile=self.root / "missing-seccomp.json",
             docker_command=self.docker,
+            shared_dir="",
         )
         self.assertEqual(again.get_or_create("bot-pkg").packages, ["ffmpeg", "libpq-dev", "jq"])
 
@@ -230,6 +257,10 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
                 return {"exit_code": 0, "stdout": "ok", "stderr": ""}
             if route == "/files":
                 return {"path": payload["path"], "entries": []}
+            if route == "/files/read":
+                return {"path": payload["path"], "content": "hello", "bytes": 5, "lines": 1}
+            if route in {"/files/write", "/files/edit"}:
+                return {"path": payload["path"], "sent": payload}
             if route == "/input":
                 return {"accepted": True, "type": payload["event"]["type"]}
             if route == "/screenshot":
@@ -252,6 +283,14 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(terminal["stdout"], "ok")
         files = await self.provider.files_list(status.computer_id, "/workspace")
         self.assertEqual(files["entries"], [])
+        read = await self.provider.files_read(status.computer_id, "/workspace/a.txt")
+        self.assertEqual(read["content"], "hello")
+        written = await self.provider.files_write(status.computer_id, "/workspace/b.txt", "x")
+        self.assertEqual(written["sent"], {"path": "/workspace/b.txt", "content": "x"})
+        edited = await self.provider.files_edit(status.computer_id, "/workspace/b.txt", "x", "y")
+        self.assertEqual(edited["sent"], {"path": "/workspace/b.txt", "old_text": "x", "new_text": "y"})
+        with self.assertRaisesRegex(ComputerProviderError, "cannot be empty"):
+            await self.provider.files_edit(status.computer_id, "/workspace/b.txt", "", "y")
         input_result = await self.provider.send_input(
             status.computer_id,
             {"type": "click", "x": 4, "y": 5},
@@ -284,6 +323,7 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
             start_timeout=0.5,
             network="cubicle-computers",
             docker_command=self.docker,
+            shared_dir="",
         )
         status = provider.get_or_create("bot-net")
 
@@ -334,6 +374,7 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
             start_timeout=0.5,
             workspace_mode="volume",
             docker_command=self.docker,
+            shared_dir="",
         )
         status = provider.get_or_create("bot-vol")
 
@@ -372,6 +413,7 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
             start_timeout=0.5,
             host_workspace_root="/srv/cubicle/computers",
             docker_command=self.docker,
+            shared_dir="",
         )
         status = provider.get_or_create("bot-bind")
 
@@ -390,6 +432,33 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("cubicle", mount.replace("\\", "/"))
             self.assertNotIn(str(self.root), mount)
             self.assertTrue(mount.endswith(f",dst={destination}"))
+
+    async def test_shared_folder_is_mounted_at_shared_when_its_host_path_is_known(self):
+        provider = DockerComputerProvider(
+            image="cubicle-computer:test",
+            workspace_root=self.root / "computers",
+            seccomp_profile=self.root / "missing-seccomp.json",
+            start_timeout=0.5,
+            workspace_mode="volume",
+            shared_dir="/srv/cubicle/shared",
+            docker_command=self.docker,
+        )
+        status = provider.get_or_create("bot-shared")
+
+        async def ready(_record):
+            return {"status": "healthy"}
+
+        provider._wait_until_ready = ready
+        await provider.start(status.computer_id)
+
+        run_args = self.docker.run_args()
+        mounts = [run_args[i + 1] for i, a in enumerate(run_args) if a == "--mount"]
+        self.assertIn("type=bind,src=/srv/cubicle/shared,dst=/shared", mounts)
+        self.assertIn("SHARED=/shared", run_args)
+        # Without a host path there is no mount and the runtime is not told of one.
+        plain = self.docker.calls_of("run")
+        self.assertEqual(len([m for m in mounts if m.endswith("dst=/shared")]), 1)
+        self.assertTrue(all("SHARED=/shared" not in c for c in plain[:-1]))
 
     async def test_user_control_blocks_bot_input_and_navigation_until_handed_back(self):
         status = self.provider.get_or_create("bot-test")
@@ -438,6 +507,7 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
             start_timeout=0.5,
             wallpaper="/srv/wallpaper.jpg",
             docker_command=self.docker,
+            shared_dir="",
         )
         status = provider.get_or_create("bot-wall")
 
@@ -455,7 +525,7 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
 
     def test_unknown_workspace_mode_is_rejected(self):
         with self.assertRaises(ValueError):
-            DockerComputerProvider(workspace_root=self.root / "computers", workspace_mode="nfs")
+            DockerComputerProvider(workspace_root=self.root / "computers", workspace_mode="nfs", shared_dir="")
 
     async def test_docker_failure_is_reported_and_marks_runtime_unhealthy(self):
         def failing_docker(_args, _timeout):

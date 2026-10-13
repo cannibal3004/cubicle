@@ -86,6 +86,20 @@ SCHEMA_MIGRATIONS = {
         CREATE INDEX IF NOT EXISTS idx_gate_decisions_created_at ON gate_decisions(created_at);
         CREATE INDEX IF NOT EXISTS idx_gate_decisions_owner ON gate_decisions(owner_id);
     """,
+    # Named secrets (API keys and the like) for bot computers: app-wide
+    # (bot_id '') or per bot. Values are Fernet-encrypted by the secret store.
+    4: """
+        CREATE TABLE IF NOT EXISTS secrets (
+            owner_id TEXT NOT NULL DEFAULT 'local-user',
+            scope TEXT NOT NULL,
+            bot_id TEXT NOT NULL DEFAULT '',
+            name TEXT NOT NULL,
+            value TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (owner_id, scope, bot_id, name)
+        );
+    """,
 }
 
 OWNER_TABLES = (

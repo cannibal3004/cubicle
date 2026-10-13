@@ -40,11 +40,11 @@ COMMANDS: Tuple[CommandSpec, ...] = (
     CommandSpec("audit", "/audit", "Open the audit trail.", "client"),
     CommandSpec("settings", "/settings", "Open App Settings.", "client"),
     CommandSpec(
-        "workspace",
-        "/workspace list [path] | read <path> | write <path> (content on the next line)",
-        "Read or write the shared workspace. Pauses for your approval.",
+        "shared",
+        "/shared list [path] | read <path> | write <path> (content on the next line) | delete <path>",
+        "List, read, write or delete in the shared folder. Pauses for your approval.",
         "action",
-        args="list|read|write",
+        args="list|read|write|delete",
     ),
     CommandSpec(
         "connector",
@@ -106,7 +106,7 @@ def parse_action_command(text: str) -> Optional[Any]:
     if spec.kind == "client":
         raise CommandError(f"/{name} is handled by the app, not the model; it was sent as text.")
     try:
-        if name == "workspace":
+        if name == "shared":
             return parse_workspace_command(text)
         if name == "connector":
             return parse_connector_command(text)

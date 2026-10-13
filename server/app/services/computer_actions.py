@@ -94,6 +94,25 @@ def register_computer_actions(
         status, started = await _ready(call, target_provider)
         return _mark_started(await target_provider.files_list(status.computer_id, str(call.arguments.get("path") or "/workspace")), started)
 
+    async def files_read(call: ActionInvocation) -> Dict[str, Any]:
+        status, started = await _ready(call, target_provider)
+        return _mark_started(await target_provider.files_read(status.computer_id, str(call.arguments.get("path") or "")), started)
+
+    async def files_write(call: ActionInvocation) -> Dict[str, Any]:
+        status, started = await _ready(call, target_provider)
+        result = await target_provider.files_write(status.computer_id, str(call.arguments.get("path") or ""), call.arguments.get("content"))
+        return _mark_started(result, started)
+
+    async def files_edit(call: ActionInvocation) -> Dict[str, Any]:
+        status, started = await _ready(call, target_provider)
+        result = await target_provider.files_edit(
+            status.computer_id,
+            str(call.arguments.get("path") or ""),
+            call.arguments.get("old_text"),
+            call.arguments.get("new_text"),
+        )
+        return _mark_started(result, started)
+
     async def install_packages(call: ActionInvocation) -> Dict[str, Any]:
         status, started = await _ready(call, target_provider)
         return _mark_started(await target_provider.install_packages(status.computer_id, call.arguments.get("packages")), started)
@@ -227,6 +246,39 @@ def register_computer_actions(
                 requires_approval=False,
             ),
             files_list,
+        ),
+        "computer.files_read": (
+            ActionDefinition(
+                name="computer.files_read",
+                tool="computer",
+                action="files_read",
+                intent="Read a text file inside the bot computer.",
+                risk="read",
+                requires_approval=False,
+            ),
+            files_read,
+        ),
+        "computer.files_write": (
+            ActionDefinition(
+                name="computer.files_write",
+                tool="computer",
+                action="files_write",
+                intent="Create or replace a text file inside the bot computer.",
+                risk="write",
+                requires_approval=True,
+            ),
+            files_write,
+        ),
+        "computer.files_edit": (
+            ActionDefinition(
+                name="computer.files_edit",
+                tool="computer",
+                action="files_edit",
+                intent="Change one passage of a text file inside the bot computer.",
+                risk="write",
+                requires_approval=True,
+            ),
+            files_edit,
         ),
         "computer.install_packages": (
             ActionDefinition(

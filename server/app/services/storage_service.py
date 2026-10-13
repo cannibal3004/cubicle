@@ -357,6 +357,59 @@ class StorageService:
                 (message_id, thread_id, self.owner_id, json.dumps(message)),
             )
 
+    # ---- named secrets for bot computers --------------------------------
+
+    def list_secrets(self, scope: str, bot_id: str = "") -> List[Dict[str, Any]]:
+        """Names and timestamps only; values stay encrypted in the row."""
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT name, created_at, updated_at FROM secrets WHERE owner_id = ? AND scope = ? AND bot_id = ? ORDER BY name",
+                (self.owner_id, scope, bot_id),
+            ).fetchall()
+        return [{"name": row[0], "created_at": row[1], "updated_at": row[2]} for row in rows]
+
+    def set_secret(self, scope: str, bot_id: str, name: str, value: str) -> Dict[str, Any]:
+        now = _now()
+        encrypted = self.secret_store.encrypt(value)
+        with self.database.connect() as connection:
+            connection.execute(
+                "INSERT INTO secrets(owner_id, scope, bot_id, name, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(owner_id, scope, bot_id, name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                (self.owner_id, scope, bot_id, name, encrypted, now, now),
+            )
+        return {"name": name, "updated_at": now}
+
+    def delete_secret(self, scope: str, bot_id: str, name: str) -> bool:
+        with self.database.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM secrets WHERE owner_id = ? AND scope = ? AND bot_id = ? AND name = ?",
+                (self.owner_id, scope, bot_id, name),
+            )
+        return cursor.rowcount > 0
+
+    def delete_bot_secrets(self, bot_id: str) -> int:
+        with self.database.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM secrets WHERE owner_id = ? AND scope = 'bot' AND bot_id = ?", (self.owner_id, bot_id)
+            )
+        return cursor.rowcount
+
+    def secret_values(self, bot_id: str = "") -> Dict[str, str]:
+        """Decrypted app secrets with the bot's own on top (same name: the bot's wins)."""
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT scope, name, value FROM secrets WHERE owner_id = ? AND (scope = 'app' OR (scope = 'bot' AND bot_id = ?)) "
+                "ORDER BY CASE scope WHEN 'app' THEN 0 ELSE 1 END, name",
+                (self.owner_id, bot_id),
+            ).fetchall()
+        values: Dict[str, str] = {}
+        for _scope, name, raw in rows:
+            try:
+                values[name] = self.secret_store.decrypt(raw)
+            except SecretStoreError:
+                continue  # A rotated key: the secret is unusable until replaced.
+        return values
+
     def delete_messages(self, thread_id: str) -> int:
         """Remove every message in a thread; returns how many were deleted."""
         with self.database.connect() as connection:

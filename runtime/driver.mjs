@@ -15,7 +15,7 @@ import net from 'node:net';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:http';
-import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { WebSocketServer } from 'ws';
@@ -60,6 +60,12 @@ function json(response, statusCode, payload) {
   response.end(body);
 }
 
+// What a terminal command runs with: the container's environment (which
+// carries the user's secrets as variables) plus the desktop settings, minus
+// the driver's own token, which a shell has no business holding.
+const { COMPUTER_TOKEN: _driverToken, ...inheritedEnv } = process.env;
+const terminalEnv = { ...inheritedEnv, ...desktopEnv };
+
 function errorPayload(error) {
   return { error: error instanceof Error ? error.message : String(error) };
 }
@@ -98,17 +104,75 @@ function assertHttpUrl(value) {
   return parsed.toString();
 }
 
+// File tools reach the places that persist between starts: /workspace, the
+// home directory, and the user's shared folder when the host mounted it
+// (SHARED). The shell can go anywhere the user can; these tools are for
+// project files, so they stay where the files belong.
+const home = path.resolve(process.env.HOME || '/home/pwuser');
+const shared = process.env.SHARED ? path.resolve(process.env.SHARED) : null;
+const fileRoots = shared ? [workspace, shared, home] : [workspace, home];
+const fileRootsText = fileRoots.join(', ').replace(/, ([^,]*)$/, ' or $1');
+const MAX_FILE_BYTES = 512 * 1024;
+const MAX_WRITE_CHARS = 200000;
+const TERMINAL_COMMAND_MAX = 60000;
+
 function workspacePath(value) {
   const requested = typeof value === 'string' && value.trim() ? value.trim() : '/workspace';
   if (requested.length > 512 || !requested.startsWith('/')) {
     throw new Error('Computer file paths must be absolute and at most 512 characters.');
   }
   const resolved = path.resolve(requested);
-  const relative = path.relative(workspace, resolved);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error('Computer file paths must stay inside /workspace.');
+  const inside = fileRoots.some((root) => {
+    const relative = path.relative(root, resolved);
+    return !relative.startsWith('..') && !path.isAbsolute(relative);
+  });
+  if (!inside) {
+    throw new Error(`Computer file paths must stay inside ${fileRootsText}.`);
   }
   return resolved;
+}
+
+function textStats(content) {
+  return { bytes: Buffer.byteLength(content, 'utf8'), lines: content ? content.split('\n').length : 0 };
+}
+
+async function readTextFile(requestedPath) {
+  const target = workspacePath(requestedPath);
+  const info = await stat(target).catch(() => null);
+  if (!info) throw new Error(`No file at ${target}.`);
+  if (!info.isFile()) throw new Error(`${target} is not a file.`);
+  if (info.size > MAX_FILE_BYTES) throw new Error(`${target} is ${info.size} bytes; files over ${MAX_FILE_BYTES} bytes cannot be read with this tool.`);
+  const buffer = await readFile(target);
+  if (buffer.includes(0)) throw new Error(`${target} is not a text file.`);
+  const content = buffer.toString('utf8');
+  return { path: target, content, ...textStats(content) };
+}
+
+async function writeTextFile(requestedPath, content) {
+  const target = workspacePath(requestedPath);
+  if (typeof content !== 'string') throw new Error('File content must be text.');
+  if (content.length > MAX_WRITE_CHARS) throw new Error(`File content must be at most ${MAX_WRITE_CHARS} characters.`);
+  const existing = await stat(target).catch(() => null);
+  if (existing && !existing.isFile()) throw new Error(`${target} exists and is not a file.`);
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, content, 'utf8');
+  return { path: target, created: !existing, ...textStats(content) };
+}
+
+async function editTextFile(requestedPath, oldText, newText) {
+  if (typeof oldText !== 'string' || !oldText) throw new Error('old_text is the exact passage to replace and cannot be empty.');
+  if (newText == null) newText = '';
+  if (typeof newText !== 'string') throw new Error('new_text must be text.');
+  const current = await readTextFile(requestedPath);
+  const count = current.content.split(oldText).length - 1;
+  if (count === 0) throw new Error(`The passage to replace is not in ${current.path}. Read the file and copy it exactly.`);
+  if (count > 1) throw new Error(`The passage to replace appears ${count} times in ${current.path}; include more surrounding text so it matches once.`);
+  const at = current.content.indexOf(oldText);
+  const updated = current.content.slice(0, at) + newText + current.content.slice(at + oldText.length);
+  if (updated.length > MAX_WRITE_CHARS) throw new Error(`The edited file would exceed ${MAX_WRITE_CHARS} characters.`);
+  await writeFile(current.path, updated, 'utf8');
+  const line = current.content.slice(0, at).split('\n').length;
+  return { path: current.path, line, replaced: oldText.length, inserted: newText.length, ...textStats(updated) };
 }
 
 async function listFiles(requestedPath) {
@@ -122,13 +186,13 @@ async function listFiles(requestedPath) {
 
 async function executeCommand(command) {
   if (typeof command !== 'string' || !command.trim()) throw new Error('A terminal command is required.');
-  if (command.length > 4000) throw new Error('Terminal commands must be at most 4000 characters.');
+  if (command.length > TERMINAL_COMMAND_MAX) throw new Error(`Terminal commands must be at most ${TERMINAL_COMMAND_MAX} characters.`);
   try {
     const result = await execFileAsync('/bin/sh', ['-lc', command], {
       cwd: workspace,
       timeout: 30000,
       maxBuffer: 1024 * 1024,
-      env: desktopEnv,
+      env: terminalEnv,
     });
     return { exit_code: 0, stdout: result.stdout, stderr: result.stderr };
   } catch (error) {
@@ -385,6 +449,18 @@ async function handle(request, response) {
           path: workspacePath(body.path),
           entries: await listFiles(body.path),
         };
+      }
+
+      if (request.method === 'POST' && request.url === '/files/read') {
+        return { operation: 'files.read', ...(await readTextFile(body.path)) };
+      }
+
+      if (request.method === 'POST' && request.url === '/files/write') {
+        return { operation: 'files.write', ...(await writeTextFile(body.path, body.content)) };
+      }
+
+      if (request.method === 'POST' && request.url === '/files/edit') {
+        return { operation: 'files.edit', ...(await editTextFile(body.path, body.old_text, body.new_text)) };
       }
 
       if (request.method === 'POST' && request.url === '/input') {

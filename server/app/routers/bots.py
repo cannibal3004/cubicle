@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.schemas.contracts import Bot
 from app.services import llm_service
+from app.services.bot_memory import MEMORY_MAX_CHARS, MemoryError, clean_memory, memory_note_message
 from app.services.computer_provider import ComputerProviderError, computer_id_for_bot, computer_provider
 from app.services.storage_service import storage_service
 from app.services.turn_manager import turn_manager
@@ -23,7 +24,7 @@ MAX_SHORT = 200
 MAX_PROMPT = 20_000
 # Only these fields can be changed from the client; ids, counters, and
 # timestamps are the server's.
-EDITABLE_FIELDS = {"name", "role", "description", "avatar", "model", "accent_color", "system_prompt", "tools", "pinned", "tool_settings", "auto_approval"}
+EDITABLE_FIELDS = {"name", "role", "description", "avatar", "model", "accent_color", "system_prompt", "tools", "pinned", "tool_settings", "auto_approval"}  # memory is handled separately
 MAX_TOOL_SETTINGS_ENTRIES = 2000
 
 
@@ -78,6 +79,7 @@ class BotUpdate(BaseModel):
     archived: Optional[bool] = None
     tool_settings: Optional[Dict[str, Any]] = None
     auto_approval: Optional[Literal["inherit", "off", "shadow", "on"]] = None
+    memory: Optional[str] = Field(default=None, max_length=MEMORY_MAX_CHARS)
 
 
 def _find(bots: List[Dict[str, Any]], bot_id: str) -> int:
@@ -134,6 +136,18 @@ async def update_bot(bot_id: str, updates: BotUpdate):
         changes.pop("model")
     if "tool_settings" in changes:
         changes["tool_settings"] = clean_tool_settings(changes["tool_settings"])
+    memory_note = None
+    if "memory" in changes:
+        try:
+            memory = clean_memory(changes.pop("memory"))
+        except MemoryError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if memory != str(bots[index].get("memory") or ""):
+            bots[index]["memory"] = memory
+            bots[index]["memory_updated_at"] = datetime.now().isoformat()
+            # Recorded in the thread so the model sees the edit where it
+            # happened, without the system prompt (and the cache) changing.
+            memory_note = memory_note_message(bot_id, memory, message_id=f"msg-{uuid.uuid4().hex[:6]}")
     archived = changes.pop("archived", None)
     bots[index].update({key: value for key, value in changes.items() if key in EDITABLE_FIELDS})
     if archived is not None:
@@ -143,6 +157,8 @@ async def update_bot(bot_id: str, updates: BotUpdate):
             # An archived bot should not keep working in the background.
             turn_manager.cancel(bot_id)
     storage_service.save_bots(bots)
+    if memory_note is not None:
+        storage_service.add_message(memory_note)
     return bots[index]
 
 
@@ -159,6 +175,7 @@ async def delete_bot(bot_id: str):
     except Exception as exc:  # The deletion must not fail because a container misbehaves.
         logger.warning("Could not stop the computer for %s during deletion: %s", bot_id, exc)
     deleted_messages = storage_service.delete_messages(bot_id)
+    storage_service.delete_bot_secrets(bot_id)
     bots.pop(index)
     storage_service.save_bots(bots)
     return {"status": "ok", "deleted_id": bot_id, "deleted_messages": deleted_messages}

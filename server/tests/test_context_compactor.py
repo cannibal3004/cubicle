@@ -167,6 +167,19 @@ class CompactThreadTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(context[0]["content"].startswith("Summary of the conversation so far"))
         self.assertEqual(context[-1]["content"], "ship it")
 
+    async def test_the_bots_notes_travel_with_the_summary(self):
+        bot = self.storage.get_bots()[0]
+        bot["memory"] = "Repo: ~/proj\nRun: make test"
+        self.storage.save_bots(self.storage.get_bots()[:0] + [bot] + self.storage.get_bots()[1:])
+        thread = bot["id"]
+        for message in [_user(1, "a"), _bot(1, "A", prompt_tokens=90_000), _user(2, "b"), _bot(2, "B", prompt_tokens=95_000), _user(3, "c")]:
+            self.storage.add_message({**message, "thread_id": thread, "bot_id": thread})
+        with mock.patch.object(context_compactor.llm_service, "stream_chat_completion", self._fake_stream()):
+            stored = await compact_thread(thread, reason="auto", model="m", system_prompt="SYS", storage=self.storage, keep_recent_tokens=0)
+        self.assertEqual(stored["raw_payload"]["memory"], "Repo: ~/proj\nRun: make test")
+        context = build_history_messages(self.storage.get_messages(thread_id=thread), replay_tools=True)
+        self.assertIn("Your notes (memory) at this point:\n\nRepo: ~/proj\nRun: make test", context[0]["content"])
+
     async def test_the_budget_decides_how_much_stays_verbatim(self):
         for message in [_user(1, "a"), _bot(1, "A", prompt_tokens=1000), _user(2, "b"), _bot(2, "B", prompt_tokens=2000), _user(3, "c")]:
             self.storage.add_message(message)

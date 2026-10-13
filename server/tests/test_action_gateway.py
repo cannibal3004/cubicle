@@ -66,7 +66,7 @@ class ActionGatewayTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_workspace_action_has_contract_and_redacted_lifecycle(self):
         (self.root / "notes.txt").write_text("private workspace content", encoding="utf-8")
-        call = parse_workspace_command("/workspace read notes.txt")
+        call = parse_workspace_command("/shared read notes.txt")
 
         request, approval = self.gateway.open("thread-test", "bot-test", call)
         self.assertEqual(request.tool, "workspace")

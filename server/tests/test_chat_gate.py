@@ -72,7 +72,7 @@ class ScriptedDecider:
         return dict(ScriptedDecider.scores or {key: 0.01 for key in questions})
 
 
-WRITE_CALL = {"id": "c1", "name": "workspace_write", "arguments": "{\"path\": \"a.txt\", \"content\": \"hello\"}"}
+WRITE_CALL = {"id": "c1", "name": "shared_folder_write", "arguments": "{\"path\": \"a.txt\", \"content\": \"hello\"}"}
 
 
 class ChatGateTests(unittest.TestCase):

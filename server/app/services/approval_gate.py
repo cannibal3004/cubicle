@@ -203,7 +203,7 @@ class ApprovalGate:
         }
         if request.target:
             state["target"] = _clip(dict(request.target))
-        if request.tool == "workspace" and request.action == "write":
+        if request.tool == "workspace" and request.action in ("write", "delete"):
             path = str(request.arguments.get("path") or getattr(call, "path", "") or "")
             existing = self.workspace.existing_size(path) if path else None
             state["file_exists"] = existing is not None

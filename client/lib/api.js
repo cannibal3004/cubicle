@@ -530,3 +530,52 @@ export async function executeComputerAction(botId, requestId) {
   if (!res.ok) throw new Error(payload.detail || 'Computer action execution failed');
   return payload;
 }
+
+// ---- secrets: names in, names out; values are write-only -------------------
+
+async function secretsCall(path, options = {}) {
+  const res = await apiFetch(`${API_BASE_URL}${path}`, options);
+  if (!res.ok) {
+    let detail = 'The request failed.';
+    try {
+      const body = await res.json();
+      detail = typeof body?.detail === 'string' ? body.detail : detail;
+    } catch (_) {
+      // not JSON
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+export async function fetchSecrets() {
+  return secretsCall('/secrets');
+}
+
+export async function setSecret(name, value) {
+  return secretsCall(`/secrets/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  });
+}
+
+export async function deleteSecret(name) {
+  return secretsCall(`/secrets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+export async function fetchBotSecrets(botId) {
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/secrets`);
+}
+
+export async function setBotSecret(botId, name, value) {
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/secrets/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  });
+}
+
+export async function deleteBotSecret(botId, name) {
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/secrets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}

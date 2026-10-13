@@ -2,8 +2,9 @@
 
 import React, { useState, useEffect } from "react";
 import { FiX, FiCheck, FiEye, FiEyeOff } from "react-icons/fi";
-import { fetchSettings, saveSettings, logout, checkDecider } from "../lib/api";
+import { fetchSettings, saveSettings, logout, checkDecider, fetchSecrets, setSecret, deleteSecret } from "../lib/api";
 import ModelPicker from "./ModelPicker";
+import SecretsSection from "./SecretsSection";
 
 const PROVIDERS = [
   {
@@ -583,6 +584,17 @@ export default function AppSettingsDrawer({
               Enables live connector catalog and OAuth links in Marketplace. Leave blank to keep the stored key.
             </p>
           </div>
+        </div>
+
+        {/* Secrets for bot computers */}
+        <div className="bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm">
+          <div>
+            <h3 className="text-sm font-bold text-zinc-100">Secrets</h3>
+            <p className="text-[11px] text-zinc-500 mt-1">
+              API keys and tokens every bot may use. Each one is set as an environment variable inside the bot computers; a bot can add its own or override these in its editor.
+            </p>
+          </div>
+          <SecretsSection scope="app" load={fetchSecrets} save={setSecret} remove={deleteSecret} />
         </div>
       </div>
     </aside>

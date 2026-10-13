@@ -84,6 +84,39 @@ class ComputerStatus:
         return value
 
 
+# A shell command is one argument to `sh -lc`; Linux allows 128 KiB per
+# argument, so this leaves room for multi-byte text. File tools exist so that
+# source files do not have to travel through the shell at all.
+TERMINAL_COMMAND_MAX_CHARS = 60000
+FILE_CONTENT_MAX_CHARS = 200_000
+FILE_PATH_MAX_CHARS = 512
+
+
+def check_file_path(path: Any) -> str:
+    if not isinstance(path, str) or not path.strip() or len(path) > FILE_PATH_MAX_CHARS:
+        raise ComputerProviderError(f"A file path is required and must be at most {FILE_PATH_MAX_CHARS} characters.")
+    normalized = posixpath.normpath(path.strip())
+    if not normalized.startswith("/"):
+        raise ComputerProviderError("Computer file paths must be absolute.")
+    return normalized
+
+
+def check_command(command: Any) -> str:
+    if not isinstance(command, str) or not command.strip():
+        raise ComputerProviderError("A terminal command is required.")
+    if len(command) > TERMINAL_COMMAND_MAX_CHARS:
+        raise ComputerProviderError(f"Terminal commands must be at most {TERMINAL_COMMAND_MAX_CHARS} characters.")
+    return command
+
+
+def check_file_content(content: Any) -> str:
+    if not isinstance(content, str):
+        raise ComputerProviderError("File content must be text.")
+    if len(content) > FILE_CONTENT_MAX_CHARS:
+        raise ComputerProviderError(f"File content must be at most {FILE_CONTENT_MAX_CHARS} characters.")
+    return content
+
+
 class ComputerProviderError(RuntimeError):
     """Raised when a computer adapter cannot satisfy a requested operation."""
 
@@ -122,6 +155,15 @@ class ComputerProvider(Protocol):
         ...
 
     async def files_list(self, computer_id: str, path: str = "/workspace") -> Dict[str, Any]:
+        ...
+
+    async def files_read(self, computer_id: str, path: str) -> Dict[str, Any]:
+        ...
+
+    async def files_write(self, computer_id: str, path: str, content: str) -> Dict[str, Any]:
+        ...
+
+    async def files_edit(self, computer_id: str, path: str, old_text: str, new_text: str) -> Dict[str, Any]:
         ...
 
     async def screenshot(self, computer_id: str) -> Dict[str, Any]:
@@ -180,6 +222,8 @@ class FakeComputerProvider:
         self.fps = fps
         self._computers: Dict[str, ComputerStatus] = {}
         self._frame_counts: Dict[str, int] = {}
+        # Files the fake computer "holds": {computer_id: {path: content}}.
+        self._files: Dict[str, Dict[str, str]] = {}
 
     def get_or_create(self, bot_id: str) -> ComputerStatus:
         computer_id = _computer_id(bot_id)
@@ -330,10 +374,7 @@ class FakeComputerProvider:
 
     async def terminal_execute(self, computer_id: str, command: str) -> Dict[str, Any]:
         status = self._require_active(computer_id)
-        if not isinstance(command, str) or not command.strip():
-            raise ComputerProviderError("A terminal command is required.")
-        if len(command) > 4000:
-            raise ComputerProviderError("Terminal commands must be at most 4000 characters.")
+        command = check_command(command)
         self._touch(status, "terminal.exec")
         return {
             "computer_id": status.computer_id,
@@ -362,6 +403,71 @@ class FakeComputerProvider:
                 {"name": "workspace", "kind": "directory"},
                 {"name": "README.md", "kind": "file"},
             ],
+        }
+
+    async def files_read(self, computer_id: str, path: str) -> Dict[str, Any]:
+        status = self._require_active(computer_id)
+        normalized = check_file_path(path)
+        content = self._files.get(computer_id, {}).get(normalized)
+        if content is None:
+            raise ComputerProviderError(f"No file at {normalized}.")
+        self._touch(status, "files.read")
+        return {
+            "computer_id": status.computer_id,
+            "provider": self.provider_name,
+            "operation": "files.read",
+            "path": normalized,
+            "content": content,
+            "bytes": len(content.encode("utf-8")),
+            "lines": content.count("\n") + 1 if content else 0,
+        }
+
+    async def files_write(self, computer_id: str, path: str, content: str) -> Dict[str, Any]:
+        status = self._require_active(computer_id)
+        normalized = check_file_path(path)
+        content = check_file_content(content)
+        files = self._files.setdefault(computer_id, {})
+        created = normalized not in files
+        files[normalized] = content
+        self._touch(status, "files.write")
+        return {
+            "computer_id": status.computer_id,
+            "provider": self.provider_name,
+            "operation": "files.write",
+            "path": normalized,
+            "created": created,
+            "bytes": len(content.encode("utf-8")),
+            "lines": content.count("\n") + 1 if content else 0,
+        }
+
+    async def files_edit(self, computer_id: str, path: str, old_text: str, new_text: str) -> Dict[str, Any]:
+        status = self._require_active(computer_id)
+        normalized = check_file_path(path)
+        if not isinstance(old_text, str) or not old_text:
+            raise ComputerProviderError("old_text is the exact passage to replace and cannot be empty.")
+        new_text = check_file_content(new_text or "")
+        current = self._files.get(computer_id, {}).get(normalized)
+        if current is None:
+            raise ComputerProviderError(f"No file at {normalized}.")
+        count = current.count(old_text)
+        if count == 0:
+            raise ComputerProviderError(f"The passage to replace is not in {normalized}. Read the file and copy it exactly.")
+        if count > 1:
+            raise ComputerProviderError(f"The passage to replace appears {count} times in {normalized}; include more surrounding text so it matches once.")
+        at = current.index(old_text)
+        updated = check_file_content(current[:at] + new_text + current[at + len(old_text):])
+        self._files[computer_id][normalized] = updated
+        self._touch(status, "files.edit")
+        return {
+            "computer_id": status.computer_id,
+            "provider": self.provider_name,
+            "operation": "files.edit",
+            "path": normalized,
+            "line": current[:at].count("\n") + 1,
+            "replaced": len(old_text),
+            "inserted": len(new_text),
+            "bytes": len(updated.encode("utf-8")),
+            "lines": updated.count("\n") + 1 if updated else 0,
         }
 
     async def screenshot(self, computer_id: str) -> Dict[str, Any]:
@@ -450,8 +556,11 @@ def build_computer_provider() -> ComputerProvider:
 
     if settings.COMPUTER_PROVIDER == "docker":
         from app.services.docker_computer_provider import DockerComputerProvider
+        from app.services.secrets_service import environment_for
 
-        return DockerComputerProvider()
+        # The user's named secrets become environment variables in each
+        # bot's sandbox, read at every start.
+        return DockerComputerProvider(environment=environment_for)
     return FakeComputerProvider()
 
 

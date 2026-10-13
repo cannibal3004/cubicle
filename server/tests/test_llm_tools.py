@@ -8,6 +8,7 @@ from app.services.llm_tools import (
     describe_tools,
     openai_tool_definitions,
     parse_arguments,
+    without_duplicate_routes,
 )
 from app.services.workspace_service import WorkspaceToolCall
 
@@ -16,7 +17,7 @@ class ToolCatalogTests(unittest.TestCase):
     def test_tool_groups_follow_what_is_configured(self):
         names = lambda specs: [s.name for s in specs]  # noqa: E731
         base = names(available_tools(computer=False, github=False))
-        self.assertEqual(base, ["workspace_list", "workspace_read", "workspace_write", "share_file"])
+        self.assertEqual(base, ["shared_folder_list", "shared_folder_read", "shared_folder_write", "shared_folder_delete", "share_file", "memory_read", "memory_write", "memory_edit"])
         with_computer = names(available_tools(computer=True, github=False))
         self.assertIn("computer_screenshot", with_computer)
         self.assertNotIn("github_list_issues", with_computer)
@@ -33,12 +34,31 @@ class ToolCatalogTests(unittest.TestCase):
             self.assertEqual(function["parameters"]["type"], "object")
             self.assertFalse(function["parameters"]["additionalProperties"])
 
+    def test_shared_folder_tools_step_aside_when_the_computer_has_the_folder(self):
+        names = lambda specs: [s.name for s in specs]  # noqa: E731
+        everything = available_tools(computer=True, github=False)
+        slim = without_duplicate_routes(everything, shared_in_computer=True)
+        self.assertNotIn("shared_folder_write", names(slim))
+        self.assertIn("computer_write_file", names(slim))
+        self.assertIn("share_file", names(slim))
+        # Without the mount, or without a computer, the host-side tools stay.
+        self.assertEqual(without_duplicate_routes(everything, shared_in_computer=False), everything)
+        no_computer = available_tools(computer=False, github=False)
+        self.assertEqual(without_duplicate_routes(no_computer, shared_in_computer=True), no_computer)
+
+    def test_description_tells_the_computer_what_shared_is(self):
+        specs = available_tools(computer=True, github=False)
+        with_mount = describe_tools(specs, shared_in_computer=True)
+        self.assertIn("/shared is the user's shared folder", with_mount)
+        self.assertIn("/workspace is your own project space", with_mount)
+        self.assertNotIn("/shared", describe_tools(specs, shared_in_computer=False))
+
     def test_description_explains_approvals_and_the_computer(self):
         text = describe_tools(available_tools(computer=True, github=False))
         self.assertIn("starts itself the first time you use it", text)
         self.assertIn("computer_request_takeover", text)
         self.assertIn("Tools that need approval:", text)
-        self.assertIn("workspace_write", text)
+        self.assertIn("shared_folder_write", text)
         self.assertNotIn("github", text)
         self.assertEqual(describe_tools([]), "")
 
@@ -57,17 +77,22 @@ class ArgumentParsingTests(unittest.TestCase):
 
 class BuildInvocationTests(unittest.TestCase):
     def test_workspace_calls_become_workspace_tool_calls(self):
-        listing = build_invocation("workspace_list", {}, "bot-1")
+        listing = build_invocation("shared_folder_list", {}, "bot-1")
         self.assertIsInstance(listing, WorkspaceToolCall)
         self.assertEqual((listing.name, listing.path), ("workspace.list", "."))
 
-        write = build_invocation("workspace_write", {"path": "notes/a.md", "content": "hi"}, "bot-1")
+        write = build_invocation("shared_folder_write", {"path": "notes/a.md", "content": "hi"}, "bot-1")
         self.assertEqual((write.name, write.path, write.content), ("workspace.write", "notes/a.md", "hi"))
 
+        delete = build_invocation("shared_folder_delete", {"path": "old/report.md"}, "bot-1")
+        self.assertEqual((delete.name, delete.path), ("workspace.delete", "old/report.md"))
+
         with self.assertRaisesRegex(ToolCallError, "'path' is required"):
-            build_invocation("workspace_read", {}, "bot-1")
+            build_invocation("shared_folder_read", {}, "bot-1")
+        with self.assertRaisesRegex(ToolCallError, "'path' is required"):
+            build_invocation("shared_folder_delete", {}, "bot-1")
         with self.assertRaisesRegex(ToolCallError, "must be a string"):
-            build_invocation("workspace_read", {"path": 5}, "bot-1")
+            build_invocation("shared_folder_read", {"path": 5}, "bot-1")
 
     def test_computer_calls_are_scoped_to_the_bot(self):
         nav = build_invocation("computer_browser_navigate", {"url": "https://example.com"}, "bot-1")
@@ -91,6 +116,24 @@ class BuildInvocationTests(unittest.TestCase):
 
         files = build_invocation("computer_files_list", {}, "bot-1")
         self.assertEqual(files.arguments["path"], "/workspace")
+
+        read = build_invocation("computer_read_file", {"path": "/workspace/app/main.py"}, "bot-1")
+        self.assertEqual((read.name, read.arguments["path"]), ("computer.files_read", "/workspace/app/main.py"))
+        write = build_invocation("computer_write_file", {"path": "/workspace/a.txt", "content": "hello\n"}, "bot-1")
+        self.assertEqual(write.name, "computer.files_write")
+        self.assertIn("Write 6 characters to /workspace/a.txt", write.preview)
+        edit = build_invocation("computer_edit_file", {"path": "/workspace/a.txt", "old_text": "hello", "new_text": ""}, "bot-1")
+        self.assertEqual(edit.arguments["new_text"], "")
+        self.assertIn("5 characters become 0", edit.preview)
+        with self.assertRaisesRegex(ToolCallError, "absolute path"):
+            build_invocation("computer_read_file", {"path": "app/main.py"}, "bot-1")
+        with self.assertRaisesRegex(ToolCallError, "'old_text' is required"):
+            build_invocation("computer_edit_file", {"path": "/workspace/a.txt", "new_text": "x"}, "bot-1")
+        # A long heredoc-style command is accepted now; files should not need it anyway.
+        long_command = build_invocation("computer_terminal_execute", {"command": "x" * 50000}, "bot-1")
+        self.assertEqual(len(long_command.arguments["command"]), 50000)
+        with self.assertRaisesRegex(ToolCallError, "longer than 60000"):
+            build_invocation("computer_terminal_execute", {"command": "x" * 60001}, "bot-1")
 
         install = build_invocation("computer_install_packages", {"packages": ["ffmpeg", "Libpq-dev", "ffmpeg"]}, "bot-1")
         self.assertEqual(install.name, "computer.install_packages")
