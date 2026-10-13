@@ -88,6 +88,36 @@ class ContextBuilderTests(unittest.TestCase):
         self.assertEqual(json.loads(messages[2]["content"])["note"], "result not retained")
         self.assertEqual(len(messages[1]["tool_calls"]), 1)
 
+    def test_user_edits_of_the_notes_are_shown_where_they_happened(self):
+        from app.services.context_builder import MEMORY_EDIT_LEAD
+
+        history = [
+            _user("start"), _bot("Started."),
+            {"sender": "system", "item_type": "memory", "text": "Goal: ship v2."},
+            _user("go on"), _bot("Going."),
+            {"sender": "system", "item_type": "memory", "text": ""},
+            _user("and?"),
+        ]
+        messages = build_history_messages(history, replay_tools=True)
+        self.assertEqual([m["role"] for m in messages], ["user", "assistant", "user", "assistant", "user", "assistant", "user", "assistant", "user"])
+        self.assertEqual(messages[2]["content"], f"{MEMORY_EDIT_LEAD}\n\nGoal: ship v2.")
+        self.assertEqual(messages[3]["content"], "Noted.")
+        self.assertIn("cleared your notes", messages[6]["content"])
+
+    def test_a_compaction_carries_the_notes_snapshot(self):
+        from app.services.context_builder import MEMORY_LEAD
+
+        history = [
+            _user("old"), _bot("Old."),
+            {"sender": "system", "item_type": "compaction", "text": "summary", "raw_payload": {"memory": "Repo: ~/proj"}},
+            _user("recent"),
+        ]
+        messages = build_history_messages(history, replay_tools=True)
+        self.assertEqual(messages[0]["content"], f"{SUMMARY_LEAD}\n\nsummary\n\n{MEMORY_LEAD}\n\nRepo: ~/proj")
+        # Without notes the summary message is unchanged.
+        history[2]["raw_payload"] = {"memory": ""}
+        self.assertEqual(build_history_messages(history, replay_tools=True)[0]["content"], f"{SUMMARY_LEAD}\n\nsummary")
+
     def test_context_starts_at_the_latest_compaction(self):
         history = [
             _user("old 1"), _bot("Old 1."), _compaction("first summary"),

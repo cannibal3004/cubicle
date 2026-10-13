@@ -22,7 +22,8 @@ from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs
 from app.services.context_builder import build_history_messages, cap_message_results, trim_result_text
-from app.services.context_compactor import compact_thread, last_prompt_tokens, over_budget
+from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
+from app.services import bot_memory as _bot_memory  # noqa: F401 - registers memory.read/write
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
 from app.services.llm_tools import (
     ToolCallError,
@@ -41,6 +42,19 @@ router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 # Tool results are fed back to the model as text. Keep them bounded so one
 # large file does not blow the context window.
 MAX_TOOL_RESULT_CHARS = 20_000
+
+# Why a turn's tools were withdrawn, as told to the model with its last call,
+# and the note shown when even that call produced no text.
+_STOP_PROMPTS = {
+    "rounds": "The tool budget for this turn is used up.",
+    "context": "The context window is nearly full and the older history has already been compacted as far as it can be.",
+    "stalled": "Your last tool calls repeated earlier calls of this turn and returned the same results, so they are not making progress.",
+}
+_STOP_NOTES = {
+    "rounds": "[Stopped after {rounds} tool rounds without a final answer.]",
+    "context": "[Stopped: the context window is full and could not be compacted further.]",
+    "stalled": "[Stopped: the last tool rounds only repeated earlier calls with the same results.]",
+}
 
 
 class StartTurnRequest(BaseModel):
@@ -427,19 +441,41 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         # Where the stored history ends and this turn's own rounds begin.
         prefix_len = len(messages)
         max_rounds = max(1, settings.LLM_MAX_TOOL_ROUNDS)
+        stall_limit = max(0, settings.LLM_STALLED_ROUNDS)
         rounds = 0
-        # Once the tool budget is spent the model gets one last call without
-        # tools so the user always receives an answer rather than a cut-off.
+        # The loop ends when the model answers. Tools are withdrawn, and the
+        # model gets one last call without them so the user always receives
+        # an answer, when the context is full and compaction could not make
+        # room, when the model only repeats itself, or at the round cap (a
+        # safety net). The reason is told to the model.
         final_answer_only = False
+        stop_reason = ""
+        # (name, arguments) -> what the call returned, to spot rounds that
+        # add nothing: every call a repeat with the same result.
+        seen_results: Dict[tuple, Any] = {}
+        stalled_rounds = 0
+
+        def withdraw_tools(reason: str, tool_rounds: int) -> None:
+            nonlocal final_answer_only, stop_reason
+            final_answer_only = True
+            stop_reason = reason
+            turn.emit({"type": "turn.limit", "botMsgId": bot_msg_id, "reason": reason, "rounds": tool_rounds})
+
         while True:
             rounds += 1
-            # Between rounds the previous round has reported how big the
-            # prompt grew. A turn of many tool calls can cross the line on
-            # its own, so fold the stored history here too, and carry this
-            # turn's rounds over verbatim as the pending work.
-            if rounds > 1 and await compact_if_needed(usage_prompt):
-                messages = list(formatted_history) + messages[prefix_len:]
-                prefix_len = len(formatted_history)
+            if rounds > 1:
+                # Between rounds the previous round has reported how big the
+                # prompt grew. A turn of many tool calls can cross the line
+                # on its own, so fold the stored history here too, and carry
+                # this turn's rounds over verbatim as the pending work.
+                if await compact_if_needed(usage_prompt):
+                    messages = list(formatted_history) + messages[prefix_len:]
+                    prefix_len = len(formatted_history)
+                elif not final_answer_only:
+                    if at_hard_limit(usage_prompt, context_window):
+                        withdraw_tools("context", rounds - 1)
+                    elif stall_limit and stalled_rounds >= stall_limit:
+                        withdraw_tools("stalled", rounds - 1)
             round_text = ""
             pending_calls: List[Dict[str, Any]] = []
             round_ok = True
@@ -449,7 +485,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             if final_answer_only:
                 round_tools = None
                 round_prompt = (
-                    f"{turn_system_prompt}\n\nThe tool budget for this turn is used up. "
+                    f"{turn_system_prompt}\n\n{_STOP_PROMPTS[stop_reason]} "
                     "Do not call tools. Reply to the user now with what you found, and say what is still unverified."
                 )
 
@@ -481,7 +517,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
 
             if final_answer_only:
                 if not round_text.strip():
-                    note = f"[Stopped after {max_rounds} tool rounds without a final answer.]"
+                    note = _STOP_NOTES[stop_reason].format(rounds=max_rounds)
                     text_pieces.append(note)
                     turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": note})
                 break
@@ -514,10 +550,11 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         "tool_call_id": call["id"],
                         "content": _tool_result_text({"status": "skipped", "error": "Tool budget used up; answer the user now."}),
                     })
-                final_answer_only = True
+                withdraw_tools("rounds", rounds)
                 continue
 
             image_messages: List[Dict[str, Any]] = []
+            replies_start = len(messages)
             for call in pending_calls:
                 call_id = call["id"]
                 call_name = call["name"]
@@ -585,6 +622,15 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         "tool_call_id": call_id,
                         "content": _tool_result_text({"status": status, "error": outcome.get("error")}),
                     })
+            # Every call above appended exactly one tool reply. A round in
+            # which each call is a repeat with the same reply made no progress.
+            progress = False
+            for call, reply in zip(pending_calls, messages[replies_start:]):
+                key = (call["name"], call.get("arguments") or "{}")
+                if seen_results.get(key) != reply.get("content"):
+                    progress = True
+                seen_results[key] = reply.get("content")
+            stalled_rounds = 0 if progress else stalled_rounds + 1
             messages.extend(image_messages)
 
         raw_payload: Dict[str, Any] = {}

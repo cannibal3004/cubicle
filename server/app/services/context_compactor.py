@@ -129,7 +129,15 @@ def last_prompt_tokens(history: List[Dict[str, Any]]) -> Optional[int]:
 
 def over_budget(prompt_tokens: Optional[int], context_window: Optional[int]) -> bool:
     """True when a reported prompt size crossed the configured share of the window."""
-    share = settings.CONTEXT_COMPACT_AT
+    return _past(prompt_tokens, context_window, settings.CONTEXT_COMPACT_AT)
+
+
+def at_hard_limit(prompt_tokens: Optional[int], context_window: Optional[int]) -> bool:
+    """True when a reported prompt size leaves no safe room for another tool round."""
+    return _past(prompt_tokens, context_window, settings.CONTEXT_STOP_AT)
+
+
+def _past(prompt_tokens: Optional[int], context_window: Optional[int], share: float) -> bool:
     if not context_window or share <= 0 or not prompt_tokens:
         return False
     return prompt_tokens >= share * context_window
@@ -177,6 +185,11 @@ async def compact_thread(
     if not summary:
         raise RuntimeError("the model returned an empty summary")
 
+    # The bot's notes as they stand now travel with the summary, so after the
+    # cut the model still sees them (their earlier edits are gone with the
+    # older turns), and sees the same text every turn until the next cut.
+    memory = next((str(b.get("memory") or "") for b in storage.get_bots() if b.get("id") == thread_id), "")
+
     message = {
         "id": f"msg-{uuid.uuid4().hex[:6]}",
         "thread_id": thread_id,
@@ -192,6 +205,7 @@ async def compact_thread(
             "covers_through": older[-1].get("id"),
             "prompt_tokens_before": last_prompt_tokens(history),
             "summary_usage": usage or None,
+            "memory": memory,
         },
     }
     storage.add_message(message)

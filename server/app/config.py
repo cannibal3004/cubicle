@@ -37,7 +37,13 @@ class Settings:
     # Let the model call the governed tools (workspace, computer, connectors)
     # through OpenAI-style function calling. Approvals still apply.
     LLM_TOOLS_ENABLED: bool = os.getenv("LLM_TOOLS_ENABLED", "1").strip().lower() in {"1", "true", "yes"}
-    LLM_MAX_TOOL_ROUNDS: int = int(os.getenv("LLM_MAX_TOOL_ROUNDS", "12"))
+    # A safety net, not the working limit: a turn normally ends when the
+    # model answers, when the context is full (CONTEXT_STOP_AT) or when it
+    # stops making progress (LLM_STALLED_ROUNDS).
+    LLM_MAX_TOOL_ROUNDS: int = int(os.getenv("LLM_MAX_TOOL_ROUNDS", "100"))
+    # Consecutive tool rounds whose every call repeats an earlier call of the
+    # turn with the same result before the model is asked to answer. 0 disables.
+    LLM_STALLED_ROUNDS: int = int(os.getenv("LLM_STALLED_ROUNDS", "3"))
     # Screenshots as images for the model: auto (unless the catalog says the
     # model has no vision), always, or never.
     LLM_SCREENSHOTS_TO_MODEL: str = os.getenv("LLM_SCREENSHOTS_TO_MODEL", "auto").strip().lower()
@@ -49,6 +55,9 @@ class Settings:
     # the most recent user turns. 0 disables the automatic trigger.
     CONTEXT_COMPACT_AT: float = float(os.getenv("CONTEXT_COMPACT_AT", "0.7"))
     CONTEXT_KEEP_RECENT_TOKENS: int = int(os.getenv("CONTEXT_KEEP_RECENT_TOKENS", "30000"))
+    # Share of the window at which a turn stops calling tools when compaction
+    # could not make room (nothing older to fold, or the summary failed).
+    CONTEXT_STOP_AT: float = float(os.getenv("CONTEXT_STOP_AT", "0.9"))
     CONTEXT_TOOL_RESULT_CHARS: int = int(os.getenv("CONTEXT_TOOL_RESULT_CHARS", "4000"))
     CONTEXT_TOOL_RESULTS_MESSAGE_CHARS: int = int(os.getenv("CONTEXT_TOOL_RESULTS_MESSAGE_CHARS", "24000"))
     COMPOSIO_API_KEY: str = os.getenv("COMPOSIO_API_KEY", "")

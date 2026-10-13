@@ -167,6 +167,19 @@ export default function MessageItem({ message, botId }) {
     );
   }
 
+  // The user edited the bot's notes from the bot editor; the model sees the
+  // new notes from this point of the conversation.
+  if (message.sender === 'system' && message.item_type === 'memory') {
+    return (
+      <details className="my-3 mx-auto max-w-xl rounded-xl border border-amber-500/20 bg-amber-500/5 text-[11px] text-zinc-300 shadow-sm">
+        <summary className="cursor-pointer select-none px-3 py-1.5 font-mono text-amber-300/90">
+          Notes edited{message.text ? ` · ${message.text.length} characters` : ' · cleared'}{formattedTime ? ` · ${formattedTime}` : ''}
+        </summary>
+        <div className="px-3 pb-3 leading-relaxed whitespace-pre-wrap break-words">{message.text || 'The notes are empty.'}</div>
+      </details>
+    );
+  }
+
   if (message.sender === 'system') {
     return (
       <div className="flex justify-center my-2">

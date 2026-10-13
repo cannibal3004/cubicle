@@ -195,7 +195,7 @@ The server reads these variables from the environment:
 | `LLM_BASE_URL` | per provider | API base URL. Defaults to `https://openrouter.ai/api/v1` for `openai_compatible` and `https://api.muapi.ai/api/v1` for `muapi` |
 | `LLM_REASONING_EFFORT` | empty | When set it is sent verbatim as `reasoning_effort`. Common values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; which ones work depends on the server and model. Leave empty to let the server use its default |
 | `LLM_TOOLS_ENABLED` | `1` | Offer the governed tools to the model through function calling. Set `0` to keep only the explicit slash commands |
-| `LLM_MAX_TOOL_ROUNDS` | `12` | Maximum model round-trips in one turn while it keeps calling tools. When the budget is spent the model gets one final call without tools so it still answers |
+| `LLM_MAX_TOOL_ROUNDS` | `100` | Safety net on model round-trips in one turn. A turn normally ends when the model answers, when the context is full (`CONTEXT_STOP_AT`, default 0.9 of the window, after compaction could not make room) or when it stops making progress (`LLM_STALLED_ROUNDS`, default 3 consecutive rounds that only repeat earlier calls with the same results). In every case the model gets one final call without tools so it still answers |
 | `LLM_SCREENSHOTS_TO_MODEL` | `auto` | Send sandbox screenshots to the model as images: `auto` (unless the model catalog says it has no vision), `always`, or `never` |
 | `CONTEXT_COMPACT_AT` | `0.7` | Share of the model's context window at which the thread is compacted: everything but the most recent turns is summarized into one stored message and the context starts there. Checked before a turn and between its tool rounds. `0` turns the automatic trigger off; `/compact` always works |
 | `CONTEXT_KEEP_RECENT_TOKENS` | `30000` | How much recent conversation, in tokens, is kept verbatim when compacting. Whole turns are kept, newest first, until the budget is spent; the newest turn is always kept |
@@ -304,7 +304,7 @@ The main code areas are:
 5. The gateway pauses the stream for approval when required, then executes the registered action.
 6. The gateway emits normalized action lifecycle records; the client receives compatible tool events and the structured result.
 7. The server sends the system prompt (including a description of the available tools), full conversation history, any slash-command result, and the tool definitions to the configured provider as an OpenAI-style `messages` array (MUAPI receives a flattened prompt and no tools).
-8. If the model calls tools, each call is validated, turned into a gateway action, approved where required, executed, and its result is appended as a `tool` message; the model is then called again, up to `LLM_MAX_TOOL_ROUNDS` times.
+8. If the model calls tools, each call is validated, turned into a gateway action, approved where required, executed, and its result is appended as a `tool` message; the model is then called again, for as long as it has room and keeps making progress (see `LLM_MAX_TOOL_ROUNDS`).
 9. Provider output is forwarded as SSE deltas and the completed assistant message is persisted together with its thinking and the tools it used.
 
 ### Product direction

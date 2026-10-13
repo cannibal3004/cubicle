@@ -176,7 +176,7 @@ class ChatStreamRouteTests(unittest.TestCase):
         self.assertEqual(recorder["model"], bot["model"])
         self.assertIn(bot["system_prompt"], recorder["system_prompt"])
         self.assertIn("## Tools", recorder["system_prompt"])
-        self.assertEqual([t["function"]["name"] for t in recorder["tools"]], ["workspace_list", "workspace_read", "workspace_write", "share_file"])
+        self.assertEqual([t["function"]["name"] for t in recorder["tools"]], ["workspace_list", "workspace_read", "workspace_write", "share_file", "memory_read", "memory_write"])
         self.assertEqual(recorder["messages"][-1], {"role": "user", "content": "hi", "image_url": None})
 
         saved = self.storage.get_messages(bot["id"])
@@ -327,6 +327,124 @@ class ChatStreamRouteTests(unittest.TestCase):
         self.assertIn("Stopped after 2 tool rounds", "".join(e.get("delta", "") for e in events if e["type"] == "content.delta"))
         saved = self.storage.get_messages(bot["id"])[-1]
         self.assertEqual([r["status"] for r in saved["raw_payload"]["tool_calls"]], ["completed", "skipped"])
+
+    def test_rounds_that_only_repeat_earlier_calls_end_the_tool_loop(self):
+        bot = self.storage.get_bots()[0]
+        self.storage.add_message(
+            {"id": "m1", "thread_id": bot["id"], "bot_id": bot["id"], "sender": "user", "text": "loop"}
+        )
+        gateway, _ = self._gateway("allow")
+        recorder = {}
+        same_call = [
+            {"type": "tool_calls", "calls": [{"id": "c", "name": "workspace_list", "arguments": "{\"path\": \".\"}"}]},
+            {"type": "turn.completed", "ok": True},
+        ]
+        patches = [
+            mock.patch.object(chat_router.settings, "LLM_MAX_TOOL_ROUNDS", 50),
+            mock.patch.object(chat_router.settings, "LLM_STALLED_ROUNDS", 2),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            _, events = self._run_turn(bot["id"], stream=_scripted_stream(recorder, [same_call]), gateway=gateway)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        # Round 1 is new; rounds 2 and 3 repeat it with the same listing; then the final call.
+        self.assertEqual(len(recorder["rounds"]), 4)
+        self.assertIsNotNone(recorder["rounds"][2]["tools"])
+        self.assertIsNone(recorder["rounds"][3]["tools"])
+        self.assertIn("not making progress", recorder["rounds"][3]["system_prompt"])
+        self.assertEqual([e["type"] for e in events].count("tool.started"), 3)
+        limit = next(e for e in events if e["type"] == "turn.limit")
+        self.assertEqual((limit["reason"], limit["rounds"]), ("stalled", 3))
+        self.assertIn("only repeated earlier calls", "".join(e.get("delta", "") for e in events if e["type"] == "content.delta"))
+
+    def test_calls_whose_results_change_are_progress(self):
+        bot = self.storage.get_bots()[0]
+        self.storage.add_message(
+            {"id": "m1", "thread_id": bot["id"], "bot_id": bot["id"], "sender": "user", "text": "loop"}
+        )
+        gateway, _ = self._gateway("allow")
+        recorder = {}
+        write = [
+            {"type": "tool_calls", "calls": [{"id": "w", "name": "workspace_write", "arguments": "{\"path\": \"n.txt\", \"content\": \"1\"}"}]},
+            {"type": "turn.completed", "ok": True},
+        ]
+        look = [
+            {"type": "tool_calls", "calls": [{"id": "r", "name": "workspace_read", "arguments": "{\"path\": \"n.txt\"}"}]},
+            {"type": "turn.completed", "ok": True},
+        ]
+        append = [
+            {"type": "tool_calls", "calls": [{"id": "w2", "name": "workspace_write", "arguments": "{\"path\": \"n.txt\", \"content\": \"12\"}"}]},
+            {"type": "turn.completed", "ok": True},
+        ]
+        done = [{"type": "content.delta", "delta": "Done."}, {"type": "turn.completed", "ok": True}]
+        with mock.patch.object(chat_router.settings, "LLM_STALLED_ROUNDS", 1):
+            _, events = self._run_turn(bot["id"], stream=_scripted_stream(recorder, [write, look, append, look, done]), gateway=gateway)
+        # The second read returns different content, so nothing stalled.
+        self.assertEqual(len(recorder["rounds"]), 5)
+        self.assertNotIn("turn.limit", [e["type"] for e in events])
+        self.assertEqual("".join(e.get("delta", "") for e in events if e["type"] == "content.delta").strip(), "Done.")
+
+    def test_a_full_context_that_cannot_be_compacted_ends_the_tool_loop(self):
+        bot = self.storage.get_bots()[0]
+        # Only this turn's own user message: there is nothing older to fold.
+        self.storage.add_message(
+            {"id": "m1", "thread_id": bot["id"], "bot_id": bot["id"], "sender": "user", "text": "dig"}
+        )
+        gateway, _ = self._gateway("allow")
+        recorder = {}
+        stream = _scripted_stream(
+            recorder,
+            [
+                [{"type": "tool_calls", "calls": [{"id": "c1", "name": "workspace_list", "arguments": "{}"}]},
+                 {"type": "usage", "prompt_tokens": 29_500, "completion_tokens": 20},
+                 {"type": "turn.completed", "ok": True}],
+                [{"type": "content.delta", "delta": "Here is what I have."},
+                 {"type": "usage", "prompt_tokens": 29_600, "completion_tokens": 5},
+                 {"type": "turn.completed", "ok": True}],
+            ],
+        )
+        _, events = self._run_turn(bot["id"], stream=stream, gateway=gateway)
+        kinds = [e["type"] for e in events]
+        self.assertIn("context.compacting", kinds)
+        self.assertNotIn("context.compacted", kinds)
+        limit = next(e for e in events if e["type"] == "turn.limit")
+        self.assertEqual((limit["reason"], limit["rounds"]), ("context", 1))
+        self.assertEqual(len(recorder["rounds"]), 2)
+        self.assertIsNone(recorder["rounds"][1]["tools"])
+        self.assertIn("context window is nearly full", recorder["rounds"][1]["system_prompt"])
+        # The last round's tool result was still fed back before the answer.
+        self.assertEqual(recorder["rounds"][1]["messages"][-1]["tool_call_id"], "c1")
+        self.assertEqual("".join(e.get("delta", "") for e in events if e["type"] == "content.delta").strip(), "Here is what I have.")
+
+    def test_the_bot_can_write_its_notes_during_a_turn(self):
+        from app.services.bot_memory import register_memory_actions
+
+        bot = self.storage.get_bots()[0]
+        self.storage.add_message(
+            {"id": "m1", "thread_id": bot["id"], "bot_id": bot["id"], "sender": "user", "text": "remember the repo"}
+        )
+        gateway, _ = self._gateway("allow")
+        register_memory_actions(gateway)
+        recorder = {}
+        stream = _scripted_stream(
+            recorder,
+            [
+                [{"type": "tool_calls", "calls": [{"id": "n1", "name": "memory_write", "arguments": "{\"text\": \"Repo: ~/proj\"}"}]},
+                 {"type": "turn.completed", "ok": True}],
+                [{"type": "content.delta", "delta": "Noted the repo."}, {"type": "turn.completed", "ok": True}],
+            ],
+        )
+        with mock.patch("app.services.bot_memory.storage_service", self.storage):
+            _, events = self._run_turn(bot["id"], stream=stream, gateway=gateway)
+        self.assertEqual(next(b for b in self.storage.get_bots() if b["id"] == bot["id"])["memory"], "Repo: ~/proj")
+        # No approval was needed, and the result echoed the notes.
+        self.assertNotIn("approval.requested", [e["type"] for e in events])
+        self.assertIn("Repo: ~/proj", recorder["rounds"][1]["messages"][-1]["content"])
+        self.assertIn("Your notes", recorder["rounds"][0]["system_prompt"])
 
     def test_forced_final_round_answer_is_used_when_the_model_gives_one(self):
         bot = self.storage.get_bots()[0]

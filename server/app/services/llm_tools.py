@@ -203,6 +203,24 @@ GITHUB_TOOLS: List[ToolSpec] = [
 ]
 
 
+MEMORY_TOOLS: List[ToolSpec] = [
+    ToolSpec(
+        name="memory_read",
+        description="Show your notes: the document you keep for this bot across conversations and compactions.",
+        parameters=_obj({}),
+        group="memory",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="memory_write",
+        description="Replace your notes with new text (at most 6000 characters; the result echoes the stored notes). Keep what you will need again later and would otherwise have to rediscover: the project goal, decisions and the reasons, where things are, how to run and test things, the user's preferences. Rewrite the whole document, do not append fragments; drop what is no longer true.",
+        parameters=_obj({"text": {"type": "string", "description": "The complete new notes"}}, ["text"]),
+        group="memory",
+        needs_approval=False,
+    ),
+]
+
+
 def available_tools(
     *, computer: bool, github: bool = False, connectors: Optional[List[ToolSpec]] = None
 ) -> List[ToolSpec]:
@@ -215,6 +233,7 @@ def available_tools(
     if computer:
         specs.extend(COMPUTER_TOOLS)
     specs.extend(SHARE_TOOLS)
+    specs.extend(MEMORY_TOOLS)
     if connectors:
         taken = {spec.name for spec in specs}
         specs.extend(spec for spec in connectors if spec.name not in taken)
@@ -289,6 +308,13 @@ def describe_tools(specs: List[ToolSpec]) -> str:
         lines.append(
             "- Sharing files: share_file puts a download card for a file in the chat. Do it for anything you produce that the user "
             "should keep, then mention the file by name; do not paste large file contents into the reply instead."
+        )
+    if "memory" in groups:
+        lines.append(
+            "- Your notes: a document that persists across conversations and compactions. memory_read shows it; memory_write replaces it. "
+            "Your own writes stay visible in the conversation, the user's edits appear as notes, and after a compaction the current notes "
+            "come with the summary, so you do not need to read them at the start of every turn. Update them when something durable changes "
+            "(the goal, a decision, where things are, how to run things), not for transient state."
         )
     if "github" in groups:
         lines.append("- GitHub: github_list_issues and github_create_issue act through the user's connected GitHub account.")
@@ -455,6 +481,19 @@ def build_invocation(
             arguments={"source": source, "path": path},
             target={"bot_id": bot_id, "source": source},
             preview=f"Share {path} from {where} with the user",
+        )
+
+    if name == "memory_read":
+        return ActionInvocation(
+            name="memory.read", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the notes of {bot_id}"
+        )
+    if name == "memory_write":
+        text = _string(arguments, "text", required=True, max_len=6000)
+        return ActionInvocation(
+            name="memory.write",
+            arguments={"bot_id": bot_id, "text": text},
+            target={"bot_id": bot_id},
+            preview=f"Update the notes of {bot_id} ({len(text)} characters)",
         )
 
     if name in {"github_list_issues", "github_create_issue"}:
