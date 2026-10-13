@@ -104,6 +104,19 @@ class ContextBuilderTests(unittest.TestCase):
         self.assertEqual(messages[3]["content"], "Noted.")
         self.assertIn("cleared your notes", messages[6]["content"])
 
+    def test_user_edits_of_the_todo_list_are_shown_where_they_happened(self):
+        from app.services.context_builder import TODO_EDIT_LEAD
+
+        history = [
+            _user("start"), _bot("Started."),
+            {"sender": "system", "item_type": "todo", "text": "- [ ] t1: write tests", "raw_payload": {"by": "user", "items": [{"id": "t1", "text": "write tests", "state": "open"}]}},
+            _user("go on"),
+        ]
+        messages = build_history_messages(history, replay_tools=True)
+        self.assertEqual([m["role"] for m in messages], ["user", "assistant", "user", "assistant", "user"])
+        self.assertEqual(messages[2]["content"], f"{TODO_EDIT_LEAD}\n\n- [ ] t1: write tests")
+        self.assertEqual(messages[3]["content"], "Noted.")
+
     def test_a_compaction_carries_the_notes_snapshot(self):
         from app.services.context_builder import MEMORY_LEAD
 
@@ -117,6 +130,14 @@ class ContextBuilderTests(unittest.TestCase):
         # Without notes the summary message is unchanged.
         history[2]["raw_payload"] = {"memory": ""}
         self.assertEqual(build_history_messages(history, replay_tools=True)[0]["content"], f"{SUMMARY_LEAD}\n\nsummary")
+        # The to-do list travels the same way, rendered as a checklist.
+        from app.services.context_builder import TODO_LEAD
+
+        history[2]["raw_payload"] = {"todo": [{"id": "t1", "text": "a", "state": "done"}, {"id": "t2", "text": "b", "state": "doing"}]}
+        self.assertEqual(
+            build_history_messages(history, replay_tools=True)[0]["content"],
+            f"{SUMMARY_LEAD}\n\nsummary\n\n{TODO_LEAD}\n\n- [x] t1: a\n- [~] t2: b",
+        )
 
     def test_context_starts_at_the_latest_compaction(self):
         history = [

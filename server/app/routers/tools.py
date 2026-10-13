@@ -17,6 +17,7 @@ GROUP_LABELS = {
     "computer": "Computer",
     "share": "File sharing",
     "memory": "Notes",
+    "todo": "To-do list",
     "github": "GitHub (built-in)",
 }
 

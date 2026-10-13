@@ -80,6 +80,24 @@ class BotsRouterTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             asyncio.run(bots_router.update_bot("missing", bots_router.BotUpdate(name="x")))
 
+    def test_editing_the_todo_list_records_a_note_in_the_thread(self):
+        bot = asyncio.run(bots_router.create_bot(bots_router.BotInput(name="Helper")))
+        before = len(self.storage.get_messages(bot["id"]))
+        items = [{"id": "t1", "text": "  write   tests ", "state": "doing"}, {"text": "ship", "state": "open"}]
+        updated = asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(todo=items)))
+        self.assertEqual(updated["todo"], [{"id": "t1", "text": "write tests", "state": "doing"}, {"id": "t2", "text": "ship", "state": "open"}])
+        self.assertTrue(updated["todo_updated_at"])
+        messages = self.storage.get_messages(bot["id"])
+        self.assertEqual(len(messages), before + 1)
+        self.assertEqual((messages[-1]["sender"], messages[-1]["item_type"]), ("system", "todo"))
+        self.assertEqual(messages[-1]["text"], "- [~] t1: write tests\n- [ ] t2: ship")
+        self.assertEqual(messages[-1]["raw_payload"]["by"], "user")
+        # The same list again records nothing; a bad state is refused.
+        asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(todo=updated["todo"])))
+        self.assertEqual(len(self.storage.get_messages(bot["id"])), before + 1)
+        with self.assertRaises(HTTPException):
+            asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(todo=[{"text": "x", "state": "later"}])))
+
     def test_editing_the_notes_records_a_note_in_the_thread(self):
         bot = asyncio.run(bots_router.create_bot(bots_router.BotInput(name="Helper")))
         before = len(self.storage.get_messages(bot["id"]))

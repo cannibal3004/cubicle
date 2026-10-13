@@ -24,6 +24,7 @@ from app.services.connector_tools import connector_tool_specs
 from app.services.context_builder import build_history_messages, cap_message_results, trim_result_text
 from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
 from app.services import bot_memory as _bot_memory  # noqa: F401 - registers memory.read/write
+from app.services.bot_todo import get_todo
 from app.services.secrets_service import names_for, redactor_for
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
 from app.services.llm_tools import (
@@ -497,6 +498,10 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     f"{turn_system_prompt}\n\n{_STOP_PROMPTS[stop_reason]} "
                     "Do not call tools. Reply to the user now with what you found, and say what is still unverified."
                 )
+                # The list is the handoff to the next turn: name what is left.
+                left = [item for item in get_todo(thread_id) if item["state"] != "done"]
+                if left:
+                    round_prompt += f" Your to-do list still has {len(left)} unfinished item(s); say which they are so the next turn can pick them up."
 
             async for event in llm_service.stream_chat_completion(
                 model=selected_model,

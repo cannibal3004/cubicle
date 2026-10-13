@@ -21,6 +21,7 @@ from app.services.computer_provider import (
     computer_id_for_bot,
 )
 from app.services.workspace_service import WorkspaceToolCall
+from app.services.bot_todo import STATES as TODO_STATES
 
 
 class ToolCallError(ValueError):
@@ -307,6 +308,49 @@ MEMORY_TOOLS: List[ToolSpec] = [
 ]
 
 
+TODO_TOOLS: List[ToolSpec] = [
+    ToolSpec(
+        name="todo_list",
+        description="Show your to-do list: the items you are working through, each with its id and state (open, doing, done).",
+        parameters=_obj({}),
+        group="todo",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="todo_add",
+        description=(
+            f"Add one or more items to your to-do list (at most {settings.BOT_TODO_MAX_ITEMS} items in all; the result shows the whole list "
+            "with the new ids). Write the list before starting a job with several steps, one short item per step, and add steps as "
+            "you discover them."
+        ),
+        parameters=_obj(
+            {"items": {"type": "array", "items": {"type": "string"}, "description": "The new items, one short line each"}},
+            ["items"],
+        ),
+        group="todo",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="todo_update",
+        description=(
+            "Change one item of your to-do list by id: set its state (open, doing, done), reword it, or remove it. Mark an item doing "
+            "when you start it and done as soon as it is finished, so the list always says where you are. The result shows the whole list."
+        ),
+        parameters=_obj(
+            {
+                "id": {"type": "string", "description": "The item's id, e.g. t3"},
+                "state": {"type": "string", "enum": ["open", "doing", "done"], "description": "The new state"},
+                "text": {"type": "string", "description": "New wording for the item"},
+                "remove": {"type": "boolean", "description": "true to remove the item instead"},
+            },
+            ["id"],
+        ),
+        group="todo",
+        needs_approval=False,
+    ),
+]
+
+
 def available_tools(
     *, computer: bool, github: bool = False, connectors: Optional[List[ToolSpec]] = None
 ) -> List[ToolSpec]:
@@ -320,6 +364,7 @@ def available_tools(
         specs.extend(COMPUTER_TOOLS)
     specs.extend(SHARE_TOOLS)
     specs.extend(MEMORY_TOOLS)
+    specs.extend(TODO_TOOLS)
     if connectors:
         taken = {spec.name for spec in specs}
         specs.extend(spec for spec in connectors if spec.name not in taken)
@@ -441,6 +486,13 @@ def describe_tools(
             "appear as notes, and after a compaction the current notes come with the summary, so you do not need to read them at the start "
             "of every turn. Update them when something durable changes (the goal, a decision, where things are, how to run things), not for "
             "transient state, and change the passage concerned with memory_edit rather than rewriting everything."
+        )
+    if "todo" in groups:
+        lines.append(
+            "- Your to-do list: the steps of the job you are on, kept across tool rounds and compactions. For any job with several "
+            "steps, todo_add the steps first, mark each doing when you start it and done when it is finished (todo_update), and add "
+            "steps you discover. Every todo result shows the whole list, the user sees and can edit it, and after a compaction the "
+            "current list comes with the summary. Keep items short; it is a checklist, not notes."
         )
     if "github" in groups:
         lines.append("- GitHub: github_list_issues and github_create_issue act through the user's connected GitHub account.")
@@ -629,6 +681,38 @@ def build_invocation(
             preview=f"Share {path} from {where} with the user",
         )
 
+    if name == "todo_list":
+        return ActionInvocation(name="todo.list", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the to-do list of {bot_id}")
+    if name == "todo_add":
+        items = arguments.get("items")
+        if isinstance(items, str):
+            items = [items]
+        if not isinstance(items, list) or not items or not all(isinstance(i, str) and i.strip() for i in items):
+            raise ToolCallError("'items' must be a list of one or more item texts.")
+        if len(items) > settings.BOT_TODO_MAX_ITEMS:
+            raise ToolCallError(f"At most {settings.BOT_TODO_MAX_ITEMS} items can be added.")
+        return ActionInvocation(
+            name="todo.add",
+            arguments={"bot_id": bot_id, "items": [i.strip() for i in items]},
+            target={"bot_id": bot_id},
+            preview=f"Add {len(items)} item(s) to the to-do list of {bot_id}",
+        )
+    if name == "todo_update":
+        item_id = _string(arguments, "id", required=True, max_len=20)
+        state = _string(arguments, "state", default="", max_len=20).lower()
+        if state and state not in TODO_STATES:
+            raise ToolCallError("'state' must be open, doing or done.")
+        text = _string(arguments, "text", default="", max_len=1000)
+        remove = bool(arguments.get("remove"))
+        if not remove and not state and not text:
+            raise ToolCallError("Give a new state, a new text, or remove=true.")
+        changes: Dict[str, Any] = {"bot_id": bot_id, "id": item_id, "remove": remove}
+        if state:
+            changes["state"] = state
+        if text:
+            changes["text"] = text
+        what = "Remove" if remove else "Update"
+        return ActionInvocation(name="todo.update", arguments=changes, target={"bot_id": bot_id}, preview=f"{what} to-do item {item_id} of {bot_id}")
     if name == "memory_read":
         return ActionInvocation(
             name="memory.read", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the notes of {bot_id}"

@@ -27,6 +27,10 @@ class Bot(BaseModel):
     memory: str = ""
     memory_updated_at: Optional[str] = None
     memory_limit: int = Field(default_factory=lambda: settings.BOT_MEMORY_MAX_CHARS)
+    # The bot's working list for the job at hand: [{id, text, state}].
+    todo: List[Dict[str, Any]] = Field(default_factory=list)
+    todo_updated_at: Optional[str] = None
+    todo_limit: int = Field(default_factory=lambda: settings.BOT_TODO_MAX_ITEMS)
     unread_count: int = 0
     created_at: str
 

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.schemas.contracts import Bot
 from app.services import llm_service
 from app.services.bot_memory import MEMORY_MAX_CHARS, MemoryError, clean_memory, memory_note_message
+from app.services.bot_todo import TODO_MAX_ITEMS, TodoError, clean_todo, todo_note_message
 from app.services.computer_provider import ComputerProviderError, computer_id_for_bot, computer_provider
 from app.services.storage_service import storage_service
 from app.services.turn_manager import turn_manager
@@ -80,6 +81,7 @@ class BotUpdate(BaseModel):
     tool_settings: Optional[Dict[str, Any]] = None
     auto_approval: Optional[Literal["inherit", "off", "shadow", "on"]] = None
     memory: Optional[str] = Field(default=None, max_length=MEMORY_MAX_CHARS)
+    todo: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=TODO_MAX_ITEMS)
 
 
 def _find(bots: List[Dict[str, Any]], bot_id: str) -> int:
@@ -148,6 +150,16 @@ async def update_bot(bot_id: str, updates: BotUpdate):
             # Recorded in the thread so the model sees the edit where it
             # happened, without the system prompt (and the cache) changing.
             memory_note = memory_note_message(bot_id, memory, message_id=f"msg-{uuid.uuid4().hex[:6]}")
+    todo_note = None
+    if "todo" in changes:
+        try:
+            todo = clean_todo(changes.pop("todo"))
+        except TodoError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if todo != list(bots[index].get("todo") or []):
+            bots[index]["todo"] = todo
+            bots[index]["todo_updated_at"] = datetime.now().isoformat()
+            todo_note = todo_note_message(bot_id, todo, message_id=f"msg-{uuid.uuid4().hex[:6]}")
     archived = changes.pop("archived", None)
     bots[index].update({key: value for key, value in changes.items() if key in EDITABLE_FIELDS})
     if archived is not None:
@@ -159,6 +171,8 @@ async def update_bot(bot_id: str, updates: BotUpdate):
     storage_service.save_bots(bots)
     if memory_note is not None:
         storage_service.add_message(memory_note)
+    if todo_note is not None:
+        storage_service.add_message(todo_note)
     return bots[index]
 
 

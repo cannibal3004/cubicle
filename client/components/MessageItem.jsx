@@ -180,6 +180,20 @@ function MessageItem({ message, botId }) {
     );
   }
 
+  // The user edited the bot's to-do list from the card above the chat.
+  if (message.sender === 'system' && message.item_type === 'todo') {
+    const items = message.raw_payload?.items || [];
+    const done = items.filter((i) => i.state === 'done').length;
+    return (
+      <details className="my-3 mx-auto max-w-xl rounded-xl border border-cyan-500/20 bg-cyan-500/5 text-[11px] text-zinc-300 shadow-sm">
+        <summary className="cursor-pointer select-none px-3 py-1.5 font-mono text-cyan-300/90">
+          To-do list edited{items.length ? ` · ${done} of ${items.length} done` : ' · cleared'}{formattedTime ? ` · ${formattedTime}` : ''}
+        </summary>
+        <div className="px-3 pb-3 leading-relaxed whitespace-pre-wrap break-words font-mono">{message.text || '(empty)'}</div>
+      </details>
+    );
+  }
+
   if (message.sender === 'system') {
     return (
       <div className="flex justify-center my-2">

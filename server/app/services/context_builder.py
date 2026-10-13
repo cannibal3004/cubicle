@@ -21,6 +21,10 @@ MEMORY_ITEM_TYPE = "memory"
 SUMMARY_LEAD = "Summary of the conversation so far (earlier messages were compacted):"
 MEMORY_LEAD = "Your notes (memory) at this point:"
 MEMORY_EDIT_LEAD = "The user edited your notes (memory). They now read:"
+# A user edit of the bot's to-do list, recorded in the thread where it happened.
+TODO_ITEM_TYPE = "todo"
+TODO_LEAD = "Your to-do list at this point:"
+TODO_EDIT_LEAD = "The user edited your to-do list. It is now:"
 
 
 def is_compaction(message: Dict[str, Any]) -> bool:
@@ -31,8 +35,12 @@ def is_memory_note(message: Dict[str, Any]) -> bool:
     return message.get("sender") == "system" and message.get("item_type") == MEMORY_ITEM_TYPE
 
 
+def is_todo_note(message: Dict[str, Any]) -> bool:
+    return message.get("sender") == "system" and message.get("item_type") == TODO_ITEM_TYPE
+
+
 def _in_context(message: Dict[str, Any]) -> bool:
-    return message.get("sender") in ("user", "bot") or is_memory_note(message)
+    return message.get("sender") in ("user", "bot") or is_memory_note(message) or is_todo_note(message)
 
 
 def latest_compaction(history: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -123,6 +131,11 @@ def summary_messages(compaction: Dict[str, Any]) -> List[Dict[str, Any]]:
     memory = (compaction.get("raw_payload") or {}).get("memory")
     if memory:
         content = f"{content}\n\n{MEMORY_LEAD}\n\n{memory}"
+    todo = (compaction.get("raw_payload") or {}).get("todo")
+    if todo:
+        from app.services.bot_todo import render_todo
+
+        content = f"{content}\n\n{TODO_LEAD}\n\n{render_todo(todo)}"
     return [
         {"role": "user", "content": content, "image_url": None},
         {"role": "assistant", "content": "Understood. I will continue from that summary.", "image_url": None},
@@ -135,6 +148,15 @@ def memory_note_messages(note: Dict[str, Any]) -> List[Dict[str, Any]]:
     body = f"{MEMORY_EDIT_LEAD}\n\n{text}" if text else "The user cleared your notes (memory)."
     return [
         {"role": "user", "content": body, "image_url": None},
+        {"role": "assistant", "content": "Noted.", "image_url": None},
+    ]
+
+
+def todo_note_messages(note: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """How a user edit of the to-do list is shown to the model, in place."""
+    text = note.get("text") or "(empty)"
+    return [
+        {"role": "user", "content": f"{TODO_EDIT_LEAD}\n\n{text}", "image_url": None},
         {"role": "assistant", "content": "Noted.", "image_url": None},
     ]
 
@@ -156,6 +178,9 @@ def build_history_messages(history: List[Dict[str, Any]], *, replay_tools: bool)
             continue
         if is_memory_note(message):
             messages.extend(memory_note_messages(message))
+            continue
+        if is_todo_note(message):
+            messages.extend(todo_note_messages(message))
             continue
         if sender != "bot":
             continue

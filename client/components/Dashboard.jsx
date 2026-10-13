@@ -265,6 +265,7 @@ export default function Dashboard() {
             onUpdateBotModel={handleUpdateBotModel}
             onEditBot={() => activeBot && setBotEditor({ mode: 'edit', bot: activeBot })}
             onUpdateBot={handleUpdateBot}
+            onBotPatched={(botId, patch) => setBots((prev) => prev.map((b) => (b.id === botId ? { ...b, ...patch } : b)))}
             onToggleComputer={() => setActiveTab('computer')}
             onOpenAudit={() => setActiveTab('audit')}
             onOpenSettings={() => setIsSettingsOpen(true)}

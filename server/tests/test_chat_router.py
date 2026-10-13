@@ -176,7 +176,7 @@ class ChatStreamRouteTests(unittest.TestCase):
         self.assertEqual(recorder["model"], bot["model"])
         self.assertIn(bot["system_prompt"], recorder["system_prompt"])
         self.assertIn("## Tools", recorder["system_prompt"])
-        self.assertEqual([t["function"]["name"] for t in recorder["tools"]], ["shared_folder_list", "shared_folder_read", "shared_folder_write", "shared_folder_delete", "share_file", "memory_read", "memory_write", "memory_edit"])
+        self.assertEqual([t["function"]["name"] for t in recorder["tools"]], ["shared_folder_list", "shared_folder_read", "shared_folder_write", "shared_folder_delete", "share_file", "memory_read", "memory_write", "memory_edit", "todo_list", "todo_add", "todo_update"])
         self.assertEqual(recorder["messages"][-1], {"role": "user", "content": "hi", "image_url": None})
 
         saved = self.storage.get_messages(bot["id"])
@@ -419,6 +419,36 @@ class ChatStreamRouteTests(unittest.TestCase):
         # The last round's tool result was still fed back before the answer.
         self.assertEqual(recorder["rounds"][1]["messages"][-1]["tool_call_id"], "c1")
         self.assertEqual("".join(e.get("delta", "") for e in events if e["type"] == "content.delta").strip(), "Here is what I have.")
+
+    def test_unfinished_todo_items_are_named_when_tools_are_withdrawn(self):
+        bots = self.storage.get_bots()
+        bot = bots[0]
+        bot["todo"] = [
+            {"id": "t1", "text": "read", "state": "done"},
+            {"id": "t2", "text": "write", "state": "doing"},
+            {"id": "t3", "text": "test", "state": "open"},
+        ]
+        self.storage.save_bots(bots)
+        self.storage.add_message(
+            {"id": "m1", "thread_id": bot["id"], "bot_id": bot["id"], "sender": "user", "text": "dig"}
+        )
+        gateway, _ = self._gateway("allow")
+        recorder = {}
+        stream = _scripted_stream(
+            recorder,
+            [
+                [{"type": "tool_calls", "calls": [{"id": "c1", "name": "shared_folder_list", "arguments": "{}"}]},
+                 {"type": "usage", "prompt_tokens": 29_500, "completion_tokens": 20},
+                 {"type": "turn.completed", "ok": True}],
+                [{"type": "content.delta", "delta": "Left: write, test."},
+                 {"type": "usage", "prompt_tokens": 29_600, "completion_tokens": 5},
+                 {"type": "turn.completed", "ok": True}],
+            ],
+        )
+        with mock.patch("app.services.bot_todo.storage_service", self.storage):
+            _, events = self._run_turn(bot["id"], stream=stream, gateway=gateway)
+        self.assertEqual(next(e for e in events if e["type"] == "turn.limit")["reason"], "context")
+        self.assertIn("still has 2 unfinished item(s)", recorder["rounds"][1]["system_prompt"])
 
     def test_the_bot_can_write_its_notes_during_a_turn(self):
         from app.services.bot_memory import register_memory_actions
