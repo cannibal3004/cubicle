@@ -31,7 +31,12 @@ RUN CHROME="$(node -e "console.log(require('playwright').chromium.executablePath
     && chmod 0755 start.sh desktop.sh install-packages.sh \
     && python3 make_wallpaper.py wallpaper \
     && mkdir -p /workspace /var/lib/cubicle/apt \
-    && chown -R pwuser:pwuser /opt/cubicle-computer /workspace
+    && chown -R pwuser:pwuser /opt/cubicle-computer /workspace \
+    # The scripts root runs (at boot, and install-packages.sh through a root
+    # docker exec) and the directory holding them must not be writable by
+    # the sandbox user, or it could put its own code where root will run it.
+    && chown root:root /opt/cubicle-computer /opt/cubicle-computer/start.sh \
+        /opt/cubicle-computer/desktop.sh /opt/cubicle-computer/install-packages.sh
 
 # No USER: start.sh begins as root to restore the computer's packages and
 # own the mounted home, then drops to pwuser (with no capabilities left)
