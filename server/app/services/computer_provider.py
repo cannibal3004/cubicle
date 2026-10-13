@@ -8,11 +8,11 @@ launching processes; the optional Docker adapter supplies the isolated runtime.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import posixpath
 import re
-from typing import Any, Dict, Literal, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Literal, Optional, Protocol, Tuple
 from urllib.parse import urlparse
 
 
@@ -75,6 +75,8 @@ class ComputerStatus:
     # Set when the bot asked the user to take over; cleared when control
     # returns to the bot.
     takeover_request: Optional[Dict[str, Any]] = None
+    # Ubuntu packages this computer installed; restored at every start.
+    packages: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         value = asdict(self)
@@ -135,6 +137,9 @@ class ComputerProvider(Protocol):
         ...
 
     async def request_takeover(self, computer_id: str, reason: str) -> Dict[str, Any]:
+        ...
+
+    async def install_packages(self, computer_id: str, packages: Any) -> Dict[str, Any]:
         ...
 
     def vnc_target(self, computer_id: str) -> Optional[Dict[str, Any]]:
@@ -242,6 +247,24 @@ class FakeComputerProvider:
 
     async def create(self, bot_id: str) -> ComputerStatus:
         return self.get_or_create(bot_id)
+
+    async def install_packages(self, computer_id: str, packages: Any) -> Dict[str, Any]:
+        status = self._require_active(computer_id)
+        if isinstance(packages, str):
+            packages = packages.split()
+        if not isinstance(packages, (list, tuple)) or not packages or not all(isinstance(p, str) and p.strip() for p in packages):
+            raise ComputerProviderError("A list of package names is required.")
+        names = [p.strip().lower() for p in packages]
+        status.packages = status.packages + [n for n in names if n not in status.packages]
+        self._touch(status, "packages.install")
+        return {
+            "computer_id": status.computer_id,
+            "provider": self.provider_name,
+            "operation": "packages.install",
+            "installed": names,
+            "packages": list(status.packages),
+            "output": "[fake computer] packages recorded; nothing was installed.",
+        }
 
     async def start(self, computer_id: str) -> ComputerStatus:
         status = self._get(computer_id)

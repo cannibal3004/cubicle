@@ -85,7 +85,7 @@ class Settings:
     AUTH_COOKIE_SECURE: bool = os.getenv("AUTH_COOKIE_SECURE", "0").lower() in {"1", "true", "yes"}
     COMPUTER_PROVIDER: str = os.getenv("COMPUTER_PROVIDER", "fake").strip().lower()
     COMPUTER_DOCKER_IMAGE: str = os.getenv(
-        "COMPUTER_DOCKER_IMAGE", "cubicle-computer:2.0.0"
+        "COMPUTER_DOCKER_IMAGE", "cubicle-computer:2.1.0"
     ).strip()
     COMPUTER_DOCKER_BINARY: str = os.getenv("COMPUTER_DOCKER_BINARY", "docker").strip()
     COMPUTER_DOCKER_WORKSPACE_ROOT: Path = Path(
@@ -116,6 +116,13 @@ class Settings:
     # wallpaper. Resolved by the Docker daemon, so it is a host path even when
     # the API runs in a container.
     COMPUTER_DOCKER_WALLPAPER: str = os.getenv("COMPUTER_DOCKER_WALLPAPER", "").strip()
+    # Size of the sandbox's /tmp (a tmpfs, wiped at every start). The home
+    # directory and /workspace are on disk and persist, so this only needs to
+    # hold builds and scratch files.
+    COMPUTER_DOCKER_TMP_SIZE: str = os.getenv("COMPUTER_DOCKER_TMP_SIZE", "2g").strip()
+    # How long one apt install (computer_install_packages, or restoring the
+    # package list at start) may take.
+    COMPUTER_DOCKER_INSTALL_TIMEOUT: float = float(os.getenv("COMPUTER_DOCKER_INSTALL_TIMEOUT", "600"))
     COMPUTER_DOCKER_SECCOMP_PROFILE: Path = Path(
         os.getenv(
             "COMPUTER_DOCKER_SECCOMP_PROFILE",

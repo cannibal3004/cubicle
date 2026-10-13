@@ -8,7 +8,7 @@ Comment=Web browser
 # instance. The DevTools port is loopback-only and is how the driver attaches.
 # --no-sandbox: Chrome's own process sandbox needs privileges the container
 # deliberately lacks; the container is the sandbox (Playwright passes it too).
-Exec=__CHROME__ --class=CubicleBrowser --user-data-dir=/tmp/profile --remote-debugging-port=9222 --no-sandbox --no-first-run --no-default-browser-check --disable-infobars --disable-session-crashed-bubble --start-maximized %U
+Exec=__CHROME__ --class=CubicleBrowser --user-data-dir=/home/pwuser/.config/cubicle-chromium --remote-debugging-port=9222 --no-sandbox --no-first-run --no-default-browser-check --disable-infobars --disable-session-crashed-bubble --start-maximized %U
 Icon=__CHROME_ICON__
 Terminal=false
 StartupNotify=false

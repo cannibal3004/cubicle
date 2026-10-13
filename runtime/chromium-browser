@@ -1,4 +1,4 @@
 #!/bin/sh
 # Command-line convenience for the sandbox shell: start or reuse the shared
 # Chromium instance with the same command the dock launcher uses.
-exec "__CHROME__" --class=CubicleBrowser --user-data-dir=/tmp/profile --remote-debugging-port=9222 --no-sandbox --no-first-run --no-default-browser-check "$@"
+exec "__CHROME__" --class=CubicleBrowser --user-data-dir="${HOME:-/home/pwuser}/.config/cubicle-chromium" --remote-debugging-port=9222 --no-sandbox --no-first-run --no-default-browser-check "$@"

@@ -1,9 +1,18 @@
 """Docker-backed Playwright computer provider.
 
 Each bot receives one short-lived container with a private browser context,
-one writable workspace mount, and an internal token. The host API is the only
-component that knows the token or container id; callers continue to use the
-provider-neutral computer contract.
+a writable workspace mount, a persistent home directory, and an internal
+token. The host API is the only component that knows the token or container
+id; callers continue to use the provider-neutral computer contract.
+
+What persists, and where. Beside each computer's workspace directory sit
+`<id>.home` (the sandbox user's home: venvs, npm and cargo installs, dotfiles,
+the browser profile), `<id>.apt` (apt's download and index caches), and
+`<id>.packages` (the Ubuntu packages this computer has installed, one per
+line). The container's own filesystem is disposable: system packages are
+re-installed from the list at every boot, which is what lets the image be
+rebuilt freely. `reset` wipes the home directory and the package list; the
+workspace stays.
 
 Two connection layouts are supported. When the API runs directly on the Docker
 host, each container publishes an ephemeral port on 127.0.0.1. When the API is
@@ -44,6 +53,34 @@ def _now() -> str:
 
 DockerCommand = Callable[[Sequence[str], float], str]
 
+# The container starts as root to restore packages and fix up the mounted
+# home, then drops to the sandbox user with an empty bounding set (see
+# runtime/start.sh). These are the capabilities that root stage, and the
+# root `docker exec` behind install_packages, keep: enough for dpkg and apt
+# to install files and switch users, nothing that reaches the host.
+SETUP_CAPABILITIES = ("CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SETGID", "SETUID", "SETPCAP")
+
+INSTALL_SCRIPT = "/opt/cubicle-computer/install-packages.sh"
+PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9+.:~-]{0,99}$")
+MAX_PACKAGES_PER_CALL = 50
+
+
+def validate_package_names(packages: Any) -> list:
+    if isinstance(packages, str):
+        packages = packages.split()
+    if not isinstance(packages, (list, tuple)) or not packages:
+        raise ComputerProviderError("A list of package names is required.")
+    if len(packages) > MAX_PACKAGES_PER_CALL:
+        raise ComputerProviderError(f"At most {MAX_PACKAGES_PER_CALL} packages can be installed in one call.")
+    names = []
+    for name in packages:
+        cleaned = name.strip().lower() if isinstance(name, str) else ""
+        if not PACKAGE_NAME.match(cleaned):
+            raise ComputerProviderError(f"Invalid package name: {str(name)[:60]!r}.")
+        if cleaned not in names:
+            names.append(cleaned)
+    return names
+
 
 @dataclass
 class _RuntimeRecord:
@@ -78,6 +115,8 @@ class DockerComputerProvider:
         workspace_mode: Optional[str] = None,
         host_workspace_root: Optional[str] = None,
         wallpaper: Optional[str] = None,
+        tmp_size: Optional[str] = None,
+        install_timeout: Optional[float] = None,
         docker_command: Optional[DockerCommand] = None,
     ):
         self.docker_binary = docker_binary or settings.COMPUTER_DOCKER_BINARY
@@ -88,6 +127,8 @@ class DockerComputerProvider:
         self.pids_limit = pids_limit or settings.COMPUTER_DOCKER_PIDS_LIMIT
         self.start_timeout = start_timeout or settings.COMPUTER_DOCKER_START_TIMEOUT
         self.command_timeout = command_timeout or settings.COMPUTER_DOCKER_COMMAND_TIMEOUT
+        self.tmp_size = (tmp_size or settings.COMPUTER_DOCKER_TMP_SIZE).strip()
+        self.install_timeout = install_timeout or settings.COMPUTER_DOCKER_INSTALL_TIMEOUT
         self.runtime_port = runtime_port or settings.COMPUTER_DOCKER_RUNTIME_PORT
         self.seccomp_profile = (seccomp_profile or settings.COMPUTER_DOCKER_SECCOMP_PROFILE).expanduser().resolve()
         self.network = (network if network is not None else settings.COMPUTER_DOCKER_NETWORK).strip()
@@ -144,13 +185,52 @@ class DockerComputerProvider:
         workspace.mkdir(parents=True, exist_ok=True)
         self._set_workspace_permissions(workspace)
         status = self._new_status(bot_id, generation=1)
-        self._runtimes[computer_id] = _RuntimeRecord(
+        record = _RuntimeRecord(
             status=status,
             token=secrets.token_urlsafe(32),
             workspace=workspace,
             volume=self._volume_name(computer_id) if self.workspace_mode == "volume" else None,
         )
+        status.packages = self._read_packages(record)
+        self._runtimes[computer_id] = record
         return status
+
+    # Persistent state beside the workspace directory.
+
+    @staticmethod
+    def _home_dir(record: _RuntimeRecord) -> Path:
+        return record.workspace.with_name(record.workspace.name + ".home")
+
+    @staticmethod
+    def _apt_dir(record: _RuntimeRecord) -> Path:
+        return record.workspace.with_name(record.workspace.name + ".apt")
+
+    @staticmethod
+    def _packages_file(record: _RuntimeRecord) -> Path:
+        return record.workspace.with_name(record.workspace.name + ".packages")
+
+    def _read_packages(self, record: _RuntimeRecord) -> list:
+        try:
+            text = self._packages_file(record).read_text(encoding="utf-8")
+        except OSError:
+            return []
+        names = []
+        for line in text.splitlines():
+            name = line.strip().lower()
+            if name and not name.startswith("#") and PACKAGE_NAME.match(name) and name not in names:
+                names.append(name)
+        return names
+
+    def _write_packages(self, record: _RuntimeRecord, names: list) -> None:
+        path = self._packages_file(record)
+        try:
+            if names:
+                path.write_text("".join(f"{name}\n" for name in names), encoding="utf-8")
+            elif path.exists():
+                path.unlink()
+        except OSError as exc:
+            raise ComputerProviderError(f"Could not update the package list: {exc}") from exc
+        record.status.packages = list(names)
 
     def _record_for(self, computer_id: str) -> _RuntimeRecord:
         record = self._runtimes.get(computer_id)
@@ -200,23 +280,40 @@ class DockerComputerProvider:
         return f"cubicle-computer-{record.status.computer_id[-70:]}"
 
     @staticmethod
-    def _volume_name(computer_id: str) -> str:
-        return f"cubicle-computer-ws-{computer_id[-60:]}"
+    def _volume_name(computer_id: str, kind: str = "ws") -> str:
+        return f"cubicle-computer-{kind}-{computer_id[-60:]}"
 
     def _network_args(self) -> list:
         if self.network:
             return ["--network", self.network]
         return ["--publish", f"127.0.0.1::{self.runtime_port}"]
 
-    def _workspace_mount(self, record: _RuntimeRecord) -> str:
-        if self.workspace_mode == "volume":
-            return f"type=volume,src={record.volume},dst=/workspace"
-        source = record.workspace
+    def _host_path(self, path: Path) -> Path:
         if self.host_workspace_root:
             # The daemon resolves bind sources on the host, so translate the
             # path the API sees into the equivalent host path.
-            source = Path(self.host_workspace_root) / record.workspace.name
-        return f"type=bind,src={source},dst=/workspace"
+            return Path(self.host_workspace_root) / path.name
+        return path
+
+    def _mount(self, record: _RuntimeRecord, kind: str, source: Path, destination: str) -> str:
+        if self.workspace_mode == "volume":
+            return f"type=volume,src={self._volume_name(record.status.computer_id, kind)},dst={destination}"
+        return f"type=bind,src={self._host_path(source)},dst={destination}"
+
+    def _workspace_mount(self, record: _RuntimeRecord) -> str:
+        return self._mount(record, "ws", record.workspace, "/workspace")
+
+    def _state_mounts(self, record: _RuntimeRecord) -> list:
+        """The sandbox user's home and apt's caches, both kept between starts."""
+        if self.workspace_mode == "bind":
+            for path in (self._home_dir(record), self._apt_dir(record)):
+                path.mkdir(parents=True, exist_ok=True)
+        return [
+            "--mount",
+            self._mount(record, "home", self._home_dir(record), "/home/pwuser"),
+            "--mount",
+            self._mount(record, "apt", self._apt_dir(record), "/var/lib/cubicle/apt"),
+        ]
 
     @staticmethod
     def _runtime_url(record: _RuntimeRecord, route: str) -> str:
@@ -269,15 +366,14 @@ class DockerComputerProvider:
             "--label",
             f"cubicle.bot-id={record.status.bot_id}",
             *self._network_args(),
-            "--read-only",
+            # The root filesystem is the container's own writable layer so
+            # apt can install into it; it is thrown away with the container
+            # and rebuilt from the package list at the next start.
             "--tmpfs",
-            "/tmp:rw,nosuid,size=512m",
-            # uid/gid match the image's pwuser so the sandbox user can write to
-            # its own home directory (npm, pip, and desktop config need it).
-            "--tmpfs",
-            "/home/pwuser:rw,nosuid,size=1g,uid=1001,gid=1001",
+            f"/tmp:rw,nosuid,size={self.tmp_size}",
             "--mount",
             self._workspace_mount(record),
+            *self._state_mounts(record),
             *self._wallpaper_args(),
             "--cpus",
             self.cpu_limit,
@@ -287,12 +383,11 @@ class DockerComputerProvider:
             str(self.pids_limit),
             "--cap-drop",
             "ALL",
+            *[arg for cap in SETUP_CAPABILITIES for arg in ("--cap-add", cap)],
             "--security-opt",
             "no-new-privileges:true",
             "--shm-size",
             "2g",
-            "--user",
-            "pwuser",
             "--env",
             f"COMPUTER_TOKEN={record.token}",
             "--env",
@@ -301,6 +396,8 @@ class DockerComputerProvider:
             f"PORT={self.runtime_port}",
             "--env",
             "WORKSPACE=/workspace",
+            "--env",
+            f"CUBICLE_PACKAGES={' '.join(record.status.packages)}",
             self.image,
         ]
         if self.seccomp_profile.is_file():
@@ -372,7 +469,10 @@ class DockerComputerProvider:
         return result
 
     async def _wait_until_ready(self, record: _RuntimeRecord) -> Dict[str, Any]:
-        deadline = asyncio.get_running_loop().time() + self.start_timeout
+        # Packages are restored before the desktop comes up, so a computer
+        # with a package list is allowed the install budget as well.
+        budget = self.start_timeout + (self.install_timeout if record.status.packages else 0)
+        deadline = asyncio.get_running_loop().time() + budget
         last_error = "Computer runtime did not become ready."
         while asyncio.get_running_loop().time() < deadline:
             try:
@@ -441,10 +541,57 @@ class DockerComputerProvider:
             record.status.health = "healthy"
             return self._touch(record.status, "pause")
 
+    async def _wipe_home(self, record: _RuntimeRecord) -> None:
+        """Return the home directory to the image's skeleton.
+
+        Its files belong to the sandbox user, not the API, so the deletion
+        runs in a throwaway container over the same mount. The apt caches
+        are kept: they only make the next install faster.
+        """
+        if self.workspace_mode == "volume":
+            try:
+                await self._docker(["volume", "rm", "-f", self._volume_name(record.status.computer_id, "home")])
+            except ComputerProviderError:
+                pass  # The volume is created on first start; it may not exist yet.
+            return
+        home = self._home_dir(record)
+        if not home.is_dir():
+            return
+        await self._docker(
+            [
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--user",
+                "root",
+                "--cap-drop",
+                "ALL",
+                "--cap-add",
+                "DAC_OVERRIDE",
+                "--cap-add",
+                "FOWNER",
+                "--security-opt",
+                "no-new-privileges:true",
+                "--entrypoint",
+                "find",
+                "--mount",
+                f"type=bind,src={self._host_path(home)},dst=/wipe",
+                self.image,
+                "/wipe",
+                "-mindepth",
+                "1",
+                "-delete",
+            ],
+            timeout=self.start_timeout,
+        )
+
     async def reset(self, computer_id: str) -> ComputerStatus:
         async with self._lock:
             record = self._record_for(computer_id)
             await self._remove_container(record)
+            await self._wipe_home(record)
+            self._write_packages(record, [])
             status = record.status
             status.generation += 1
             status.state = "stopped"
@@ -550,6 +697,31 @@ class DockerComputerProvider:
             "reason": record.status.takeover_request["reason"],
             "controlled_by": record.status.controlled_by,
             "next": "Tell the user what to do and end your turn; they will message you when they hand control back.",
+        }
+
+    async def install_packages(self, computer_id: str, packages: Any) -> Dict[str, Any]:
+        """Install Ubuntu packages into the running sandbox and remember them.
+
+        Runs as root through `docker exec`; the sandbox user itself has no
+        way to escalate. Names that succeed are added to the computer's
+        package list, which every later start restores.
+        """
+        record = self._active_record(computer_id)
+        names = validate_package_names(packages)
+        output = await self._docker(
+            ["exec", "--user", "root", record.container_id or "", INSTALL_SCRIPT, *names],
+            timeout=self.install_timeout,
+        )
+        current = self._read_packages(record)
+        self._write_packages(record, current + [name for name in names if name not in current])
+        self._touch(record.status, "packages.install")
+        return {
+            "computer_id": computer_id,
+            "provider": self.provider_name,
+            "operation": "packages.install",
+            "installed": names,
+            "packages": list(record.status.packages),
+            "output": output[-4000:],
         }
 
     def vnc_target(self, computer_id: str) -> Optional[Dict[str, Any]]:
