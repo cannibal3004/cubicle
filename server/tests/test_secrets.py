@@ -101,6 +101,24 @@ class SecretsTests(unittest.TestCase):
         set_secret("app", "", "token", "tok-123456", self.storage)
         self.assertEqual(redactor_for(self.bot, self.storage)("echo tok-123456"), "echo [secret TOKEN]")
 
+    def test_redactor_catches_the_encodings_a_shell_prints(self):
+        redactor = Redactor({"KEY": "sk-live-abc123/+="})
+        # What `echo $KEY | base64` and `echo -n $KEY | base64` print.
+        self.assertEqual(redactor("c2stbGl2ZS1hYmMxMjMvKz0K"), "[secret KEY as base64]")
+        self.assertEqual(redactor("out: c2stbGl2ZS1hYmMxMjMvKz0="), "out: [secret KEY as base64]")
+        # URL-safe base64, hex as xxd and od print it, and a percent-encoded query string.
+        self.assertEqual(redactor("c2stbGl2ZS1hYmMxMjMvKz0=".replace("/", "_").replace("+", "-")), "[secret KEY as base64]")
+        self.assertEqual(redactor("736b2d6c6976652d616263313233 2f2b3d".replace(" ", "")), "[secret KEY as hex]")
+        self.assertEqual(redactor("736B2D6C6976652D6162633132332F2B3D"), "[secret KEY as hex]")
+        self.assertEqual(redactor("GET /v1?key=sk-live-abc123%2F%2B%3D HTTP/1.1"), "GET /v1?key=[secret KEY as url-encoded] HTTP/1.1")
+        # The plain value still wins its own label, and unrelated text is untouched.
+        self.assertEqual(redactor("sk-live-abc123/+="), "[secret KEY]")
+        self.assertEqual(redactor("c2stbGl2ZS1hYmMxMjM="), "c2stbGl2ZS1hYmMxMjM=")
+        # A value with no special characters has no separate url-encoded form, and
+        # another secret whose plain value equals an encoding keeps its own name.
+        both = Redactor({"PLAIN": "YWJjZGVm", "RAW": "abcdef"})
+        self.assertEqual(both("YWJjZGVm abcdef"), "[secret PLAIN] [secret RAW]")
+
     def test_the_model_learns_names_only(self):
         specs = available_tools(computer=True)
         prompt = describe_tools(specs, secret_names=["GITHUB_TOKEN", "OPENAI_KEY"])
