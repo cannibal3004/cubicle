@@ -253,6 +253,10 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
                 return {"exit_code": 0, "stdout": "ok", "stderr": ""}
             if route == "/files":
                 return {"path": payload["path"], "entries": []}
+            if route == "/files/read":
+                return {"path": payload["path"], "content": "hello", "bytes": 5, "lines": 1}
+            if route in {"/files/write", "/files/edit"}:
+                return {"path": payload["path"], "sent": payload}
             if route == "/input":
                 return {"accepted": True, "type": payload["event"]["type"]}
             if route == "/screenshot":
@@ -275,6 +279,14 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(terminal["stdout"], "ok")
         files = await self.provider.files_list(status.computer_id, "/workspace")
         self.assertEqual(files["entries"], [])
+        read = await self.provider.files_read(status.computer_id, "/workspace/a.txt")
+        self.assertEqual(read["content"], "hello")
+        written = await self.provider.files_write(status.computer_id, "/workspace/b.txt", "x")
+        self.assertEqual(written["sent"], {"path": "/workspace/b.txt", "content": "x"})
+        edited = await self.provider.files_edit(status.computer_id, "/workspace/b.txt", "x", "y")
+        self.assertEqual(edited["sent"], {"path": "/workspace/b.txt", "old_text": "x", "new_text": "y"})
+        with self.assertRaisesRegex(ComputerProviderError, "cannot be empty"):
+            await self.provider.files_edit(status.computer_id, "/workspace/b.txt", "", "y")
         input_result = await self.provider.send_input(
             status.computer_id,
             {"type": "click", "x": 4, "y": 5},

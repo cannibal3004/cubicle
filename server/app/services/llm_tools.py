@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from app.config import settings
 from app.services.action_gateway import ActionInvocation
-from app.services.computer_provider import computer_id_for_bot
+from app.services.computer_provider import FILE_CONTENT_MAX_CHARS, TERMINAL_COMMAND_MAX_CHARS, computer_id_for_bot
 from app.services.workspace_service import WorkspaceToolCall
 
 
@@ -101,7 +101,7 @@ COMPUTER_TOOLS: List[ToolSpec] = [
     ),
     ToolSpec(
         name="computer_terminal_execute",
-        description="Run a shell command inside the sandbox as its unprivileged user (30 second timeout, 1 MB of output). The sandbox filesystem is separate from the shared workspace. /workspace and the home directory persist between starts; /tmp does not. There is no sudo: for apt packages use computer_install_packages; pip (in a venv), npm, cargo and similar work normally in the home directory.",
+        description="Run a shell command inside the sandbox as its unprivileged user (30 second timeout, 1 MB of output). The sandbox filesystem is separate from the shared workspace. /workspace and the home directory persist between starts; /tmp does not. There is no sudo: for apt packages use computer_install_packages; pip (in a venv), npm, cargo and similar work normally in the home directory. To create or change files use computer_write_file and computer_edit_file rather than heredocs.",
         parameters=_obj({"command": {"type": "string", "description": "Shell command to run"}}, ["command"]),
         group="computer",
         needs_approval=True,
@@ -112,6 +112,40 @@ COMPUTER_TOOLS: List[ToolSpec] = [
         parameters=_obj({"path": {"type": "string", "description": "Absolute path inside the sandbox"}}),
         group="computer",
         needs_approval=False,
+    ),
+    ToolSpec(
+        name="computer_read_file",
+        description="Read a UTF-8 text file inside the sandbox (under /workspace or the home directory, at most 512 KB).",
+        parameters=_obj({"path": {"type": "string", "description": "Absolute path inside the sandbox"}}, ["path"]),
+        group="computer",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="computer_write_file",
+        description="Create or replace a UTF-8 text file inside the sandbox (under /workspace or the home directory). Missing parent directories are created. Give the complete file contents; for a change to an existing file use computer_edit_file.",
+        parameters=_obj(
+            {
+                "path": {"type": "string", "description": "Absolute path inside the sandbox"},
+                "content": {"type": "string", "description": "Full file contents"},
+            },
+            ["path", "content"],
+        ),
+        group="computer",
+        needs_approval=True,
+    ),
+    ToolSpec(
+        name="computer_edit_file",
+        description="Change one passage of a text file inside the sandbox: old_text is replaced by new_text. old_text must match the file exactly and only once, so copy it verbatim (computer_read_file shows the file) and include enough surrounding lines to be unique; an empty new_text removes the passage.",
+        parameters=_obj(
+            {
+                "path": {"type": "string", "description": "Absolute path inside the sandbox"},
+                "old_text": {"type": "string", "description": "The exact passage to replace"},
+                "new_text": {"type": "string", "description": "What it becomes; empty to remove the passage"},
+            },
+            ["path", "old_text", "new_text"],
+        ),
+        group="computer",
+        needs_approval=True,
     ),
     ToolSpec(
         name="computer_install_packages",
@@ -328,6 +362,8 @@ def describe_tools(specs: List[ToolSpec], secret_names: Optional[List[str]] = No
             "- Your computer: a sandboxed Linux container with a Chromium browser and a shell, with internet access. "
             "Navigate with computer_browser_navigate, then computer_screenshot to see the page, computer_send_input to click or type, "
             "and computer_terminal_execute for commands. The computer starts itself the first time you use it (that first call can take a little longer); computer_start only warms it up. "
+            "Files: computer_read_file, computer_write_file and computer_edit_file handle project files under /workspace and the home directory; "
+            "use them instead of heredocs or sed in the terminal. "
             "Software: computer_install_packages installs apt packages (the shell has no sudo); pip in a venv, npm, cargo and the like work from the shell. "
             "/workspace and the home directory persist between starts, so installed tools and venvs stay; /tmp is wiped. "
             "The user can watch the same desktop live and take control of it; when a step needs a human, call computer_request_takeover."
@@ -414,6 +450,13 @@ def _number(args: Dict[str, Any], key: str, *, required: bool = False, default: 
     return float(value)
 
 
+def _computer_file_path(arguments: Dict[str, Any]) -> str:
+    path = _string(arguments, "path", required=True, max_len=512).strip()
+    if not path.startswith("/"):
+        raise ToolCallError("'path' must be an absolute path inside the sandbox, e.g. /workspace/app/main.py.")
+    return path
+
+
 def _computer_invocation(action: str, bot_id: str, arguments: Dict[str, Any], preview: str) -> ActionInvocation:
     computer_id = computer_id_for_bot(bot_id)
     payload = dict(arguments)
@@ -459,8 +502,27 @@ def build_invocation(
             raise ToolCallError("'url' must be an absolute http or https URL.")
         return _computer_invocation("browser_navigate", bot_id, {"url": url}, f"Navigate the computer for {bot_id} to {url}")
     if name == "computer_terminal_execute":
-        command = _string(arguments, "command", required=True, max_len=4000)
+        command = _string(arguments, "command", required=True, max_len=TERMINAL_COMMAND_MAX_CHARS)
         return _computer_invocation("terminal_execute", bot_id, {"command": command}, f"Run in the computer for {bot_id}: {command[:120]}")
+    if name == "computer_read_file":
+        path = _computer_file_path(arguments)
+        return _computer_invocation("files_read", bot_id, {"path": path}, f"Read {path} from the computer for {bot_id}")
+    if name == "computer_write_file":
+        path = _computer_file_path(arguments)
+        content = _string(arguments, "content", required=True, max_len=FILE_CONTENT_MAX_CHARS)
+        return _computer_invocation(
+            "files_write", bot_id, {"path": path, "content": content}, f"Write {len(content)} characters to {path} in the computer for {bot_id}"
+        )
+    if name == "computer_edit_file":
+        path = _computer_file_path(arguments)
+        old_text = _string(arguments, "old_text", required=True, max_len=FILE_CONTENT_MAX_CHARS)
+        new_text = _string(arguments, "new_text", default="", max_len=FILE_CONTENT_MAX_CHARS)
+        return _computer_invocation(
+            "files_edit",
+            bot_id,
+            {"path": path, "old_text": old_text, "new_text": new_text},
+            f"Edit {path} in the computer for {bot_id} ({len(old_text)} characters become {len(new_text)})",
+        )
     if name == "computer_files_list":
         path = _string(arguments, "path", default="/workspace", max_len=1000)
         return _computer_invocation("files_list", bot_id, {"path": path}, f"List computer files for {bot_id} at {path}")

@@ -7,7 +7,7 @@ import httpx
 
 from app.services.action_gateway import ActionGateway, ActionInvocation
 from app.services.computer_actions import register_computer_actions
-from app.services.computer_provider import FakeComputerProvider
+from app.services.computer_provider import ComputerProviderError, FakeComputerProvider
 from app.services.workspace_service import WorkspaceService
 
 try:
@@ -86,6 +86,28 @@ class FakeComputerProviderTests(unittest.IsolatedAsyncioTestCase):
 
         files = await provider.files_list(created.computer_id)
         self.assertEqual(files["path"], "/workspace")
+
+        written = await provider.files_write(created.computer_id, "/workspace/src/a.py", "print(1)\nprint(2)\n")
+        self.assertEqual((written["created"], written["lines"], written["bytes"]), (True, 3, 18))
+        self.assertFalse((await provider.files_write(created.computer_id, "/workspace/src/a.py", "print(1)\n"))["created"])
+        read = await provider.files_read(created.computer_id, "/workspace/src/../src/a.py")
+        self.assertEqual((read["path"], read["content"]), ("/workspace/src/a.py", "print(1)\n"))
+        edited = await provider.files_edit(created.computer_id, "/workspace/src/a.py", "print(1)", "print(42)")
+        self.assertEqual((edited["line"], edited["replaced"], edited["inserted"]), (1, 8, 9))
+        self.assertEqual((await provider.files_read(created.computer_id, "/workspace/src/a.py"))["content"], "print(42)\n")
+        with self.assertRaisesRegex(ComputerProviderError, "not in /workspace/src/a.py"):
+            await provider.files_edit(created.computer_id, "/workspace/src/a.py", "print(1)", "x")
+        await provider.files_write(created.computer_id, "/workspace/src/b.py", "a\na\n")
+        with self.assertRaisesRegex(ComputerProviderError, "appears 2 times"):
+            await provider.files_edit(created.computer_id, "/workspace/src/b.py", "a\n", "b\n")
+        with self.assertRaisesRegex(ComputerProviderError, "No file at"):
+            await provider.files_read(created.computer_id, "/workspace/missing.py")
+        with self.assertRaisesRegex(ComputerProviderError, "must be absolute"):
+            await provider.files_read(created.computer_id, "src/a.py")
+        with self.assertRaisesRegex(ComputerProviderError, "at most 200000"):
+            await provider.files_write(created.computer_id, "/workspace/big.txt", "x" * 200_001)
+        with self.assertRaisesRegex(ComputerProviderError, "at most 60000"):
+            await provider.terminal_execute(created.computer_id, "x" * 60001)
         input_result = await provider.send_input(
             created.computer_id,
             {"type": "click", "x": 10, "y": 20},

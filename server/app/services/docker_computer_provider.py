@@ -37,6 +37,9 @@ import httpx
 
 from app.config import settings
 from app.services.computer_provider import (
+    check_command,
+    check_file_content,
+    check_file_path,
     COMPUTER_CAPABILITIES,
     ComputerProviderError,
     ComputerStatus,
@@ -649,10 +652,7 @@ class DockerComputerProvider:
 
     async def terminal_execute(self, computer_id: str, command: str) -> Dict[str, Any]:
         record = self._active_record(computer_id)
-        if not isinstance(command, str) or not command.strip():
-            raise ComputerProviderError("A terminal command is required.")
-        if len(command) > 4000:
-            raise ComputerProviderError("Terminal commands must be at most 4000 characters.")
+        command = check_command(command)
         result = await self._request(record, "POST", "/terminal", {"command": command})
         self._touch(record.status, "terminal.exec")
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
@@ -663,6 +663,28 @@ class DockerComputerProvider:
             raise ComputerProviderError("Computer file paths must be absolute and at most 512 characters.")
         result = await self._request(record, "POST", "/files", {"path": path.strip()})
         self._touch(record.status, "files.list")
+        return {"computer_id": computer_id, "provider": self.provider_name, **result}
+
+    async def files_read(self, computer_id: str, path: str) -> Dict[str, Any]:
+        record = self._active_record(computer_id)
+        result = await self._request(record, "POST", "/files/read", {"path": check_file_path(path)})
+        self._touch(record.status, "files.read")
+        return {"computer_id": computer_id, "provider": self.provider_name, **result}
+
+    async def files_write(self, computer_id: str, path: str, content: str) -> Dict[str, Any]:
+        record = self._active_record(computer_id)
+        payload = {"path": check_file_path(path), "content": check_file_content(content)}
+        result = await self._request(record, "POST", "/files/write", payload)
+        self._touch(record.status, "files.write")
+        return {"computer_id": computer_id, "provider": self.provider_name, **result}
+
+    async def files_edit(self, computer_id: str, path: str, old_text: str, new_text: str) -> Dict[str, Any]:
+        record = self._active_record(computer_id)
+        if not isinstance(old_text, str) or not old_text:
+            raise ComputerProviderError("old_text is the exact passage to replace and cannot be empty.")
+        payload = {"path": check_file_path(path), "old_text": old_text, "new_text": check_file_content(new_text or "")}
+        result = await self._request(record, "POST", "/files/edit", payload)
+        self._touch(record.status, "files.edit")
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
 
     async def screenshot(self, computer_id: str) -> Dict[str, Any]:

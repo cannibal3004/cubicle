@@ -92,6 +92,24 @@ class BuildInvocationTests(unittest.TestCase):
         files = build_invocation("computer_files_list", {}, "bot-1")
         self.assertEqual(files.arguments["path"], "/workspace")
 
+        read = build_invocation("computer_read_file", {"path": "/workspace/app/main.py"}, "bot-1")
+        self.assertEqual((read.name, read.arguments["path"]), ("computer.files_read", "/workspace/app/main.py"))
+        write = build_invocation("computer_write_file", {"path": "/workspace/a.txt", "content": "hello\n"}, "bot-1")
+        self.assertEqual(write.name, "computer.files_write")
+        self.assertIn("Write 6 characters to /workspace/a.txt", write.preview)
+        edit = build_invocation("computer_edit_file", {"path": "/workspace/a.txt", "old_text": "hello", "new_text": ""}, "bot-1")
+        self.assertEqual(edit.arguments["new_text"], "")
+        self.assertIn("5 characters become 0", edit.preview)
+        with self.assertRaisesRegex(ToolCallError, "absolute path"):
+            build_invocation("computer_read_file", {"path": "app/main.py"}, "bot-1")
+        with self.assertRaisesRegex(ToolCallError, "'old_text' is required"):
+            build_invocation("computer_edit_file", {"path": "/workspace/a.txt", "new_text": "x"}, "bot-1")
+        # A long heredoc-style command is accepted now; files should not need it anyway.
+        long_command = build_invocation("computer_terminal_execute", {"command": "x" * 50000}, "bot-1")
+        self.assertEqual(len(long_command.arguments["command"]), 50000)
+        with self.assertRaisesRegex(ToolCallError, "longer than 60000"):
+            build_invocation("computer_terminal_execute", {"command": "x" * 60001}, "bot-1")
+
         install = build_invocation("computer_install_packages", {"packages": ["ffmpeg", "Libpq-dev", "ffmpeg"]}, "bot-1")
         self.assertEqual(install.name, "computer.install_packages")
         self.assertEqual(install.arguments["packages"], ["ffmpeg", "libpq-dev"])
