@@ -176,7 +176,7 @@ class ChatStreamRouteTests(unittest.TestCase):
         self.assertEqual(recorder["model"], bot["model"])
         self.assertIn(bot["system_prompt"], recorder["system_prompt"])
         self.assertIn("## Tools", recorder["system_prompt"])
-        self.assertEqual([t["function"]["name"] for t in recorder["tools"]], ["workspace_list", "workspace_read", "workspace_write", "share_file", "memory_read", "memory_write"])
+        self.assertEqual([t["function"]["name"] for t in recorder["tools"]], ["workspace_list", "workspace_read", "workspace_write", "share_file", "memory_read", "memory_write", "memory_edit"])
         self.assertEqual(recorder["messages"][-1], {"role": "user", "content": "hi", "image_url": None})
 
         saved = self.storage.get_messages(bot["id"])

@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
+from app.config import settings
 from app.services.action_gateway import ActionInvocation
 from app.services.computer_provider import computer_id_for_bot
 from app.services.workspace_service import WorkspaceToolCall
@@ -213,8 +214,31 @@ MEMORY_TOOLS: List[ToolSpec] = [
     ),
     ToolSpec(
         name="memory_write",
-        description="Replace your notes with new text (at most 6000 characters; the result echoes the stored notes). Keep what you will need again later and would otherwise have to rediscover: the project goal, decisions and the reasons, where things are, how to run and test things, the user's preferences. Rewrite the whole document, do not append fragments; drop what is no longer true.",
+        description=(
+            f"Replace your notes with new text (at most {settings.BOT_MEMORY_MAX_CHARS} characters; the result echoes the stored notes). "
+            "Keep what you will need again later and would otherwise have to rediscover: the project goal, decisions and the reasons, "
+            "where things are, how to run and test things, the user's preferences. Organise them as a document with headings so that "
+            "later changes can be made with memory_edit; use memory_write only to start the notes or to reorganise them. Drop what is no longer true."
+        ),
         parameters=_obj({"text": {"type": "string", "description": "The complete new notes"}}, ["text"]),
+        group="memory",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="memory_edit",
+        description=(
+            "Change one passage of your notes: old_text is replaced by new_text. old_text must match the current notes exactly and "
+            "only once, so copy it verbatim and include enough surrounding text to be unique; an empty new_text removes the passage. "
+            "The result shows the changed passage and the new size, not the whole notes. Prefer this over memory_write for any change "
+            "smaller than a reorganisation."
+        ),
+        parameters=_obj(
+            {
+                "old_text": {"type": "string", "description": "The exact passage to replace, copied from the current notes"},
+                "new_text": {"type": "string", "description": "What it becomes; empty to remove the passage"},
+            },
+            ["old_text", "new_text"],
+        ),
         group="memory",
         needs_approval=False,
     ),
@@ -322,10 +346,11 @@ def describe_tools(specs: List[ToolSpec], secret_names: Optional[List[str]] = No
         )
     if "memory" in groups:
         lines.append(
-            "- Your notes: a document that persists across conversations and compactions. memory_read shows it; memory_write replaces it. "
-            "Your own writes stay visible in the conversation, the user's edits appear as notes, and after a compaction the current notes "
-            "come with the summary, so you do not need to read them at the start of every turn. Update them when something durable changes "
-            "(the goal, a decision, where things are, how to run things), not for transient state."
+            "- Your notes: a document that persists across conversations and compactions. memory_read shows it, memory_edit changes one "
+            "passage, memory_write replaces the whole document. Your own writes and edits stay visible in the conversation, the user's edits "
+            "appear as notes, and after a compaction the current notes come with the summary, so you do not need to read them at the start "
+            "of every turn. Update them when something durable changes (the goal, a decision, where things are, how to run things), not for "
+            "transient state, and change the passage concerned with memory_edit rather than rewriting everything."
         )
     if "github" in groups:
         lines.append("- GitHub: github_list_issues and github_create_issue act through the user's connected GitHub account.")
@@ -499,12 +524,23 @@ def build_invocation(
             name="memory.read", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the notes of {bot_id}"
         )
     if name == "memory_write":
-        text = _string(arguments, "text", required=True, max_len=6000)
+        text = _string(arguments, "text", required=True, max_len=settings.BOT_MEMORY_MAX_CHARS)
         return ActionInvocation(
             name="memory.write",
             arguments={"bot_id": bot_id, "text": text},
             target={"bot_id": bot_id},
             preview=f"Update the notes of {bot_id} ({len(text)} characters)",
+        )
+    if name == "memory_edit":
+        old_text = _string(arguments, "old_text", required=True, max_len=settings.BOT_MEMORY_MAX_CHARS)
+        new_text = _string(arguments, "new_text", default="", max_len=settings.BOT_MEMORY_MAX_CHARS)
+        if not old_text.strip():
+            raise ToolCallError("'old_text' is the passage to replace and cannot be empty.")
+        return ActionInvocation(
+            name="memory.edit",
+            arguments={"bot_id": bot_id, "old_text": old_text, "new_text": new_text},
+            target={"bot_id": bot_id},
+            preview=f"Edit the notes of {bot_id} ({len(old_text)} characters become {len(new_text)})",
         )
 
     if name in {"github_list_issues", "github_create_issue"}:

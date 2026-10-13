@@ -26,6 +26,7 @@ class Bot(BaseModel):
     # bot writes them with memory_write; the user can edit them too.
     memory: str = ""
     memory_updated_at: Optional[str] = None
+    memory_limit: int = Field(default_factory=lambda: settings.BOT_MEMORY_MAX_CHARS)
     unread_count: int = 0
     created_at: str
 

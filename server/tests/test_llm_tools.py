@@ -16,7 +16,7 @@ class ToolCatalogTests(unittest.TestCase):
     def test_tool_groups_follow_what_is_configured(self):
         names = lambda specs: [s.name for s in specs]  # noqa: E731
         base = names(available_tools(computer=False, github=False))
-        self.assertEqual(base, ["workspace_list", "workspace_read", "workspace_write", "share_file", "memory_read", "memory_write"])
+        self.assertEqual(base, ["workspace_list", "workspace_read", "workspace_write", "share_file", "memory_read", "memory_write", "memory_edit"])
         with_computer = names(available_tools(computer=True, github=False))
         self.assertIn("computer_screenshot", with_computer)
         self.assertNotIn("github_list_issues", with_computer)

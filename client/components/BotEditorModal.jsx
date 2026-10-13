@@ -320,15 +320,15 @@ export default function BotEditorModal({
           {bot && (
             <div>
               <label className={labelClass} htmlFor="bot-memory">
-                Notes (memory) · {memory.length}/6000
+                Notes (memory) · {memory.length}/{bot.memory_limit || 16000}
               </label>
               <textarea
                 id="bot-memory"
                 value={memory}
                 onChange={(e) => setMemory(e.target.value)}
-                placeholder="Nothing yet. The bot writes here with memory_write: the goal, decisions, where things are, how to run things."
+                placeholder="Nothing yet. The bot writes here with memory_write and memory_edit: the goal, decisions, where things are, how to run things."
                 rows={6}
-                maxLength={6000}
+                maxLength={bot.memory_limit || 16000}
                 className={`${inputClass} font-mono text-xs leading-relaxed resize-y min-h-[100px]`}
               />
               <p className="text-[11px] text-zinc-500 mt-1">The bot keeps these across conversations and compactions. Your edits are shown to it in the chat.</p>

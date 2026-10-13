@@ -44,6 +44,10 @@ class Settings:
     # Consecutive tool rounds whose every call repeats an earlier call of the
     # turn with the same result before the model is asked to answer. 0 disables.
     LLM_STALLED_ROUNDS: int = int(os.getenv("LLM_STALLED_ROUNDS", "3"))
+    # Size of a bot's notes (memory_write / memory_edit and the bot editor).
+    # The notes are rendered in full after every compaction and after every
+    # full rewrite, so this bounds a one-time context cost, not a per-turn one.
+    BOT_MEMORY_MAX_CHARS: int = int(os.getenv("BOT_MEMORY_MAX_CHARS", "16000"))
     # Screenshots as images for the model: auto (unless the catalog says the
     # model has no vision), always, or never.
     LLM_SCREENSHOTS_TO_MODEL: str = os.getenv("LLM_SCREENSHOTS_TO_MODEL", "auto").strip().lower()
