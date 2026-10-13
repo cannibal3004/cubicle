@@ -156,7 +156,7 @@ services:
   # as a service. The API starts one container per bot from this image.
   computer-runtime:
     build: ./runtime
-    image: ${COMPUTER_DOCKER_IMAGE:-cubicle-computer:2.2.0}
+    image: ${COMPUTER_DOCKER_IMAGE:-cubicle-computer:2.3.0}
     profiles:
       - computer
     deploy:
