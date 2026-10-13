@@ -60,6 +60,12 @@ function json(response, statusCode, payload) {
   response.end(body);
 }
 
+// What a terminal command runs with: the container's environment (which
+// carries the user's secrets as variables) plus the desktop settings, minus
+// the driver's own token, which a shell has no business holding.
+const { COMPUTER_TOKEN: _driverToken, ...inheritedEnv } = process.env;
+const terminalEnv = { ...inheritedEnv, ...desktopEnv };
+
 function errorPayload(error) {
   return { error: error instanceof Error ? error.message : String(error) };
 }
@@ -128,7 +134,7 @@ async function executeCommand(command) {
       cwd: workspace,
       timeout: 30000,
       maxBuffer: 1024 * 1024,
-      env: desktopEnv,
+      env: terminalEnv,
     });
     return { exit_code: 0, stdout: result.stdout, stderr: result.stderr };
   } catch (error) {
