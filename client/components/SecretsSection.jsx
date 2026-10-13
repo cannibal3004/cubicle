@@ -35,6 +35,8 @@ export default function SecretsSection({ scope, load, save, remove, hint }) {
     refresh();
   }, [refresh]);
 
+  // Not a <form>: the bot editor is one already, and a form inside a form is
+  // dropped by the browser, which would make Add submit the whole editor.
   const submit = async (event) => {
     event?.preventDefault();
     const target = (replacing || name).trim().toUpperCase();
@@ -51,6 +53,14 @@ export default function SecretsSection({ scope, load, save, remove, hint }) {
       setError(err?.message || 'Could not save the secret.');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const onEnter = (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      event.stopPropagation();
+      submit();
     }
   };
 
@@ -113,7 +123,7 @@ export default function SecretsSection({ scope, load, save, remove, hint }) {
         </ul>
       )}
 
-      <form onSubmit={submit} className="flex items-stretch gap-2">
+      <div className="flex items-stretch gap-2">
         <input
           suppressHydrationWarning={true}
           type="text"
@@ -123,6 +133,7 @@ export default function SecretsSection({ scope, load, save, remove, hint }) {
           maxLength={64}
           autoComplete="off"
           spellCheck={false}
+          onKeyDown={onEnter}
           className={`${inputClass} w-40 uppercase`}
         />
         <input
@@ -132,16 +143,18 @@ export default function SecretsSection({ scope, load, save, remove, hint }) {
           onChange={(e) => setValue(e.target.value)}
           placeholder={replacing ? `New value for ${replacing}` : 'value'}
           autoComplete="new-password"
+          onKeyDown={onEnter}
           className={`${inputClass} flex-1 min-w-0`}
         />
         <button
-          type="submit"
+          type="button"
+          onClick={submit}
           disabled={busy || !name.trim() || !value}
           className="px-3 py-2 rounded-xl text-xs font-medium bg-zinc-100 text-black hover:bg-white disabled:opacity-40 transition flex items-center gap-1.5 flex-shrink-0"
         >
           <FiPlus className="text-xs" /> {replacing ? 'Replace' : 'Add'}
         </button>
-      </form>
+      </div>
       {error && <p className="text-[11px] text-rose-400">{error}</p>}
       <p className="text-[10px] leading-relaxed text-zinc-500">
         {hint || 'Available inside the bot computer as environment variables with these names. Values are stored encrypted and never shown again; a running computer picks up changes at its next start.'}
