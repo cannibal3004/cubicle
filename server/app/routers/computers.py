@@ -19,7 +19,7 @@ from app.services.action_gateway import (
     ActionPolicyError,
     action_gateway,
 )
-from app.services.computer_provider import ComputerProviderError, computer_provider
+from app.services.computer_provider import ComputerProviderError, check_package_names, computer_provider
 from app.services.secrets_service import redactor_for
 from app.services.storage_service import storage_service
 from app.services import computer_actions as _computer_actions  # noqa: F401 - registers actions
@@ -76,7 +76,7 @@ def _preview(action: str, bot_id: str, arguments: Dict[str, Any]) -> str:
         return f"Ask the user to take over the computer for {bot_id}"
     if action == "install_packages":
         packages = arguments.get("packages")
-        listed = " ".join(packages) if isinstance(packages, list) else str(packages or "")
+        listed = ", ".join(packages) if isinstance(packages, list) else str(packages or "")
         return f"Install packages in the computer for {bot_id}: {listed[:160]}"
     if action == "set_control":
         return f"Give control of the computer for {bot_id} to the {arguments.get('owner') or 'bot'}"
@@ -96,6 +96,14 @@ async def _run_action(
     action_arguments.pop("bot_id", None)
     action_arguments.pop("computer_id", None)
     action_arguments.update({"bot_id": bot_id, "computer_id": status.computer_id})
+    if action == "install_packages":
+        # Checked here, as the model's path does, so a bad name is refused
+        # before anyone is asked to approve it and the preview shows the
+        # cleaned list that would actually be installed.
+        try:
+            action_arguments["packages"] = check_package_names(action_arguments.get("packages"))
+        except ComputerProviderError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     call = ActionInvocation(
         name=f"computer.{action}",
         arguments=action_arguments,

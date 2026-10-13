@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 
-from app.services.action_gateway import ActionGateway, ActionInvocation
+from app.services.action_gateway import ActionGateway, ActionInvocation, action_gateway
 from app.services.computer_actions import register_computer_actions
 from app.services.computer_provider import ComputerProviderError, FakeComputerProvider
 from app.services.workspace_service import WorkspaceService
@@ -267,6 +267,33 @@ class ComputerRouterTests(unittest.IsolatedAsyncioTestCase):
 
             paused = await client.post(f"/api/v1/computers/{bot_id}/pause")
             self.assertEqual(paused.json()["result"]["state"], "paused")
+
+    @unittest.skipIf(app is None, "FastAPI dependencies are not installed")
+    async def test_bad_package_names_are_refused_before_an_approval_is_opened(self):
+        bot_id = storage_service.get_bots()[0]["id"]
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 43125))
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+            await client.get("/api/v1/auth/session")
+            before = len(action_gateway._pending)
+            for bad in ({"packages": ["ffmpeg; rm -rf /"]}, {"packages": ["--reinstall"]}, {"packages": []}, {}):
+                refused = await client.post(
+                    f"/api/v1/computers/{bot_id}/actions",
+                    json={"action": "install_packages", "arguments": bad},
+                )
+                self.assertEqual(refused.status_code, 400, bad)
+                self.assertIn("package", refused.json()["detail"].lower())
+            self.assertEqual(len(action_gateway._pending), before)
+
+            # A good request opens an approval whose preview shows the cleaned list.
+            opened = await client.post(
+                f"/api/v1/computers/{bot_id}/actions",
+                json={"action": "install_packages", "arguments": {"packages": [" FFmpeg ", "jq", "ffmpeg"]}},
+            )
+            self.assertEqual(opened.status_code, 202)
+            request = opened.json()["request"]
+            self.assertEqual(request["arguments"]["packages"], ["ffmpeg", "jq"])
+            self.assertEqual(request["preview"], f"Install packages in the computer for {bot_id}: ffmpeg, jq")
+            await client.post("/api/v1/approvals/respond", json={"request_id": request["request_id"], "action": "deny"})
 
 
 if __name__ == "__main__":
