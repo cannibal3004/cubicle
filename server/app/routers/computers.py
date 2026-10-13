@@ -20,6 +20,7 @@ from app.services.action_gateway import (
     action_gateway,
 )
 from app.services.computer_provider import ComputerProviderError, computer_provider
+from app.services.secrets_service import redactor_for
 from app.services.storage_service import storage_service
 from app.services import computer_actions as _computer_actions  # noqa: F401 - registers actions
 
@@ -118,7 +119,7 @@ async def _run_action(
     return {
         "status": "completed",
         "request": request.model_dump(),
-        "result": result.result or {},
+        "result": redactor_for(bot_id).apply(result.result or {}),
     }
 
 @router.get("/{bot_id}")
@@ -269,5 +270,5 @@ async def execute_approved_computer_action(bot_id: str, request_id: str):
     return {
         "status": "completed",
         "request": request.model_dump(),
-        "result": result.result or {},
+        "result": redactor_for(bot_id).apply(result.result or {}),
     }

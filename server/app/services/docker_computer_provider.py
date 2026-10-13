@@ -117,6 +117,7 @@ class DockerComputerProvider:
         wallpaper: Optional[str] = None,
         tmp_size: Optional[str] = None,
         install_timeout: Optional[float] = None,
+        environment: Optional[Callable[[str], Dict[str, str]]] = None,
         docker_command: Optional[DockerCommand] = None,
     ):
         self.docker_binary = docker_binary or settings.COMPUTER_DOCKER_BINARY
@@ -129,6 +130,9 @@ class DockerComputerProvider:
         self.command_timeout = command_timeout or settings.COMPUTER_DOCKER_COMMAND_TIMEOUT
         self.tmp_size = (tmp_size or settings.COMPUTER_DOCKER_TMP_SIZE).strip()
         self.install_timeout = install_timeout or settings.COMPUTER_DOCKER_INSTALL_TIMEOUT
+        # Extra environment for a bot's container (the user's secrets), looked
+        # up by bot id at every launch so changes apply at the next start.
+        self._environment = environment
         self.runtime_port = runtime_port or settings.COMPUTER_DOCKER_RUNTIME_PORT
         self.seccomp_profile = (seccomp_profile or settings.COMPUTER_DOCKER_SECCOMP_PROFILE).expanduser().resolve()
         self.network = (network if network is not None else settings.COMPUTER_DOCKER_NETWORK).strip()
@@ -325,6 +329,19 @@ class DockerComputerProvider:
         # Mounted over the image's generated default; start.sh applies it.
         return ["--mount", f"type=bind,src={self.wallpaper},dst=/opt/cubicle-computer/wallpaper,readonly"]
 
+    # Names the runtime sets itself; a secret may not replace them.
+    _OWN_ENV = frozenset({"COMPUTER_TOKEN", "COMPUTER_ID", "PORT", "WORKSPACE", "CUBICLE_PACKAGES", "HOME", "PATH", "DISPLAY"})
+
+    def _secret_env_args(self, record: _RuntimeRecord) -> list:
+        if self._environment is None:
+            return []
+        args = []
+        for name, value in sorted(self._environment(record.status.bot_id).items()):
+            if name in self._OWN_ENV or not isinstance(value, str):
+                continue
+            args.extend(["--env", f"{name}={value}"])
+        return args
+
     async def _remove_stale_container(self, record: _RuntimeRecord) -> None:
         """Remove a leftover container that still holds this computer's name.
 
@@ -398,6 +415,7 @@ class DockerComputerProvider:
             "WORKSPACE=/workspace",
             "--env",
             f"CUBICLE_PACKAGES={' '.join(record.status.packages)}",
+            *self._secret_env_args(record),
             self.image,
         ]
         if self.seccomp_profile.is_file():

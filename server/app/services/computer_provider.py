@@ -450,8 +450,11 @@ def build_computer_provider() -> ComputerProvider:
 
     if settings.COMPUTER_PROVIDER == "docker":
         from app.services.docker_computer_provider import DockerComputerProvider
+        from app.services.secrets_service import environment_for
 
-        return DockerComputerProvider()
+        # The user's named secrets become environment variables in each
+        # bot's sandbox, read at every start.
+        return DockerComputerProvider(environment=environment_for)
     return FakeComputerProvider()
 
 

@@ -1,9 +1,11 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { FiX, FiArchive, FiTrash2, FiRotateCcw, FiAlertTriangle } from 'react-icons/fi';
 import ModelPicker from './ModelPicker';
 import BotToolsSection from './BotToolsSection';
+import SecretsSection from './SecretsSection';
+import { fetchBotSecrets, setBotSecret, deleteBotSecret } from '../lib/api';
 
 const AVATARS = ['🤖', '🧠', '🦊', '🐙', '🦉', '🐝', '🧭', '🛠️', '📚', '🎯', '🧪', '🌱'];
 const ACCENTS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#f43f5e', '#a3a3a3'];
@@ -98,6 +100,11 @@ export default function BotEditorModal({
   const [memory, setMemory] = useState('');
   const [toolSettings, setToolSettings] = useState({});
   const [showTools, setShowTools] = useState(false);
+  const [showSecrets, setShowSecrets] = useState(false);
+  const botId = bot?.id;
+  const loadBotSecrets = useCallback(() => fetchBotSecrets(botId), [botId]);
+  const saveBotSecret = useCallback((name, value) => setBotSecret(botId, name, value), [botId]);
+  const removeBotSecret = useCallback((name) => deleteBotSecret(botId, name), [botId]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -113,6 +120,7 @@ export default function BotEditorModal({
     setMemory(bot?.memory || '');
     setToolSettings(bot?.tool_settings || {});
     setShowTools(false);
+    setShowSecrets(false);
     setError('');
     setConfirmingDelete(false);
   }, [bot, defaultModel]);
@@ -343,6 +351,31 @@ export default function BotEditorModal({
               </div>
             )}
           </div>
+
+          {bot && (
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowSecrets((v) => !v)}
+                className="flex items-center justify-between w-full text-left"
+                aria-expanded={showSecrets}
+              >
+                <span className={labelClass + ' mb-0'}>Secrets</span>
+                <span className="text-[11px] text-zinc-500">{showSecrets ? 'Hide' : 'API keys for this bot\'s computer'}</span>
+              </button>
+              {showSecrets && (
+                <div className="mt-2">
+                  <SecretsSection
+                    scope="bot"
+                    load={loadBotSecrets}
+                    save={saveBotSecret}
+                    remove={removeBotSecret}
+                    hint="Set as environment variables in this bot's computer, on top of the app-wide secrets. Values are stored encrypted and never shown again; a running computer picks up changes at its next start."
+                  />
+                </div>
+              )}
+            </div>
+          )}
 
           {error && <p className="text-xs text-rose-400">{error}</p>}
         </div>

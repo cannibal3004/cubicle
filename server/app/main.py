@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.routers import auth, bots, models, chat, approvals, upload, settings as settings_router, connectors, audit, computers, tools, files, gate, commands
+from app.routers import auth, bots, models, chat, approvals, upload, settings as settings_router, connectors, audit, computers, tools, files, gate, commands, secrets
 from app.services.auth_service import auth_service
 from app.services.llm_service import current_llm_config
 
@@ -65,6 +65,7 @@ app.include_router(tools.router)
 app.include_router(files.router)
 app.include_router(gate.router)
 app.include_router(commands.router)
+app.include_router(secrets.router)
 
 
 @app.get("/api/v1/health")

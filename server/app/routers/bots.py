@@ -175,6 +175,7 @@ async def delete_bot(bot_id: str):
     except Exception as exc:  # The deletion must not fail because a container misbehaves.
         logger.warning("Could not stop the computer for %s during deletion: %s", bot_id, exc)
     deleted_messages = storage_service.delete_messages(bot_id)
+    storage_service.delete_bot_secrets(bot_id)
     bots.pop(index)
     storage_service.save_bots(bots)
     return {"status": "ok", "deleted_id": bot_id, "deleted_messages": deleted_messages}

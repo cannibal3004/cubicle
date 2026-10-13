@@ -446,6 +446,43 @@ class ChatStreamRouteTests(unittest.TestCase):
         self.assertIn("Repo: ~/proj", recorder["rounds"][1]["messages"][-1]["content"])
         self.assertIn("Your notes", recorder["rounds"][0]["system_prompt"])
 
+    def test_secret_values_are_redacted_from_tool_results(self):
+        from app.services.secrets_service import Redactor
+
+        bot = self.storage.get_bots()[0]
+        self.storage.add_message(
+            {"id": "m1", "thread_id": bot["id"], "bot_id": bot["id"], "sender": "user", "text": "read it"}
+        )
+        gateway, _ = self._gateway("allow")  # hello.txt contains "hello"
+        recorder = {}
+        stream = _scripted_stream(
+            recorder,
+            [
+                [{"type": "tool_calls", "calls": [{"id": "r1", "name": "workspace_read", "arguments": "{\"path\": \"hello.txt\"}"}]},
+                 {"type": "turn.completed", "ok": True}],
+                [{"type": "content.delta", "delta": "Read it."}, {"type": "turn.completed", "ok": True}],
+            ],
+        )
+        patches = self._patches(recorder, stream=stream, gateway=gateway)
+        patches.append(mock.patch.object(chat_router, "redactor_for", lambda thread_id: Redactor({"MY_KEY": "hello"})))
+        patches.append(mock.patch.object(chat_router, "names_for", lambda thread_id: ["MY_KEY"]))
+        for p in patches:
+            p.start()
+        try:
+            _, events = asyncio.run(_start_and_stream(bot["id"]))
+        finally:
+            for p in reversed(patches):
+                p.stop()
+        tool_reply = recorder["rounds"][1]["messages"][-1]["content"]
+        self.assertIn("[secret MY_KEY]", tool_reply)
+        self.assertNotIn("hello", tool_reply)
+        completed = next(e for e in events if e["type"] == "tool.completed")
+        self.assertNotIn("hello", json.dumps(completed))
+        saved = self.storage.get_messages(bot["id"])[-1]
+        self.assertNotIn("hello", saved["raw_payload"]["tool_calls"][0]["result"])
+        # The names are only announced when the bot has a computer (the fake provider has none here).
+        self.assertNotIn("MY_KEY", recorder["rounds"][0]["system_prompt"])
+
     def test_forced_final_round_answer_is_used_when_the_model_gives_one(self):
         bot = self.storage.get_bots()[0]
         self.storage.add_message(

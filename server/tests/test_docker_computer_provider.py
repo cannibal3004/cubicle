@@ -86,6 +86,29 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("COMPUTER_TOKEN", started.to_dict())
         self.assertNotIn("token", started.to_dict())
 
+    async def test_secrets_become_environment_variables_but_cannot_replace_the_runtimes_own(self):
+        provider = DockerComputerProvider(
+            image="cubicle-computer:test",
+            workspace_root=self.root / "computers",
+            seccomp_profile=self.root / "missing-seccomp.json",
+            start_timeout=0.5,
+            environment=lambda bot_id: {"GITHUB_TOKEN": f"tok-{bot_id}", "COMPUTER_TOKEN": "hijack", "PATH": "/evil"},
+            docker_command=self.docker,
+        )
+        status = provider.get_or_create("bot-env")
+
+        async def ready(_record):
+            return {"status": "healthy"}
+
+        provider._wait_until_ready = ready
+        await provider.start(status.computer_id)
+        run_args = self.docker.run_args()
+        env = [run_args[i + 1] for i, a in enumerate(run_args) if a == "--env"]
+        self.assertIn("GITHUB_TOKEN=tok-bot-env", env)
+        self.assertNotIn("COMPUTER_TOKEN=hijack", env)
+        self.assertNotIn("PATH=/evil", env)
+        self.assertEqual(sum(1 for e in env if e.startswith("COMPUTER_TOKEN=")), 1)
+
     async def test_tmp_size_is_configurable(self):
         provider = DockerComputerProvider(
             image="cubicle-computer:test",

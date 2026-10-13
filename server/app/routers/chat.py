@@ -24,6 +24,7 @@ from app.services.connector_tools import connector_tool_specs
 from app.services.context_builder import build_history_messages, cap_message_results, trim_result_text
 from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
 from app.services import bot_memory as _bot_memory  # noqa: F401 - registers memory.read/write
+from app.services.secrets_service import names_for, redactor_for
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
 from app.services.llm_tools import (
     ToolCallError,
@@ -239,18 +240,22 @@ async def _perform_action(
         return {"status": "expired", "error": f"The approval request expired before the user answered: {action_request.preview}", "request": action_request, "gate": verdict}
 
     turn.emit({"type": "tool.started", **base, "action": action_request.model_dump()})
+    # Whatever comes back is scrubbed of the user's secret values before the
+    # model, the transcript or the screen sees it: a shell can print them.
+    redact = redactor_for(thread_id)
     try:
         action_result = await action_gateway.execute(action_request)
     except ActionGatewayError as exc:
-        turn.emit({"type": "tool.failed", **base, "error": str(exc)})
-        return {"status": "failed", "error": f"Action could not execute ({action_name}): {exc}", "request": action_request}
+        error = redact(str(exc))
+        turn.emit({"type": "tool.failed", **base, "error": error})
+        return {"status": "failed", "error": f"Action could not execute ({action_name}): {error}", "request": action_request}
 
     if action_result.status == "completed":
-        result = action_result.result or {}
+        result = redact.apply(action_result.result or {})
         turn.emit({"type": "tool.completed", **base, "result": _compact_result(result)})
         return {"status": "completed", "result": result, "request": action_request, "gate": verdict}
 
-    error = action_result.error or "The action failed."
+    error = redact(action_result.error or "The action failed.")
     turn.emit({"type": "tool.failed", **base, "error": error})
     return {"status": "failed", "error": f"Action failed ({action_name}): {error}", "request": action_request, "gate": verdict}
 
@@ -318,7 +323,8 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
             storage_service.get_settings().get("disabled_toolkits") or [],
         )
     tool_definitions = openai_tool_definitions(tool_specs) if tool_specs else None
-    tools_prompt = describe_tools(tool_specs)
+    # The names of the user's secrets (set in the bot's computer), never the values.
+    tools_prompt = describe_tools(tool_specs, secret_names=names_for(thread_id))
     # The bot's auto-approval mode is fixed for the whole turn, like its tools.
     gate_mode = approval_gate.mode_for(current_bot)
     return {

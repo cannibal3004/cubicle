@@ -283,8 +283,12 @@ def openai_tool_definitions(specs: List[ToolSpec]) -> List[Dict[str, Any]]:
     ]
 
 
-def describe_tools(specs: List[ToolSpec]) -> str:
-    """System-prompt paragraph so the model knows what it has and the rules."""
+def describe_tools(specs: List[ToolSpec], secret_names: Optional[List[str]] = None) -> str:
+    """System-prompt paragraph so the model knows what it has and the rules.
+
+    `secret_names` are the user's secrets set as environment variables in
+    the bot's computer; the model learns the names, never the values.
+    """
     if not specs:
         return ""
     groups = {spec.group for spec in specs}
@@ -304,6 +308,13 @@ def describe_tools(specs: List[ToolSpec]) -> str:
             "/workspace and the home directory persist between starts, so installed tools and venvs stay; /tmp is wiped. "
             "The user can watch the same desktop live and take control of it; when a step needs a human, call computer_request_takeover."
         )
+        if secret_names:
+            listed = ", ".join(secret_names)
+            lines.append(
+                f"- Secrets: the environment variables {listed} are set inside your computer with credentials the user stored. "
+                "Use them by name ($NAME in the shell, os.environ in Python); never print, echo or write their values anywhere, "
+                "and do not ask the user for them. Their values are redacted from everything you see."
+            )
     if "share" in groups:
         lines.append(
             "- Sharing files: share_file puts a download card for a file in the chat. Do it for anything you produce that the user "
