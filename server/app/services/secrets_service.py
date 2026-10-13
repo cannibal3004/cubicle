@@ -10,9 +10,11 @@ shell can still print them, every tool result a bot sees is passed through
 
 from __future__ import annotations
 
+import base64
 import json
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from urllib.parse import quote
 
 from app.services.storage_service import StorageService, storage_service
 
@@ -97,21 +99,51 @@ def names_for(bot_id: str, storage: Optional[StorageService] = None) -> List[str
     return sorted(environment_for(bot_id, storage))
 
 
+def _forms(value: str) -> Iterator[Tuple[str, str]]:
+    """The ways a secret shows up in tool output by accident: (text, how).
+
+    Plain and JSON-escaped (inside an encoded result), base64 as `base64`
+    prints it (with and without the trailing newline `echo` adds), hex as
+    `xxd -p` or `od` print it, and percent-encoded as it appears in a URL
+    or a verbose HTTP trace. These catch what a shell or a library prints
+    on its own. They are not a defence against a model that transforms a
+    value on purpose; see the README.
+    """
+    yield value, ""
+    escaped = json.dumps(value)[1:-1]
+    if escaped != value:
+        yield escaped, ""
+    raw = value.encode("utf-8")
+    for data in (raw, raw + b"\n"):
+        yield base64.b64encode(data).decode("ascii"), "base64"
+        yield base64.urlsafe_b64encode(data).decode("ascii"), "base64"
+    yield raw.hex(), "hex"
+    yield raw.hex().upper(), "hex"
+    encoded = quote(value, safe="")
+    if encoded != value:
+        yield encoded, "url-encoded"
+
+
 class Redactor:
-    """Replace known secret values in text (and nested payloads) with `[secret NAME]`."""
+    """Replace known secret values in text (and nested payloads) with `[secret NAME]`.
+
+    A value found in one of its common encodings is replaced with
+    `[secret NAME as base64]` and the like, so the model can tell that what
+    it printed was transformed rather than missing.
+    """
 
     def __init__(self, values: Dict[str, str]):
-        pairs = []
+        pairs: Dict[str, str] = {}
         for name, value in values.items():
             if not isinstance(value, str) or len(value) < MIN_REDACT_CHARS:
                 continue
-            pairs.append((value, name))
-            escaped = json.dumps(value)[1:-1]
-            if escaped != value:
-                # The value as it appears inside a JSON-encoded tool result.
-                pairs.append((escaped, name))
+            for text, how in _forms(value):
+                # A form that coincides with another secret's plain value
+                # keeps the plain label: that is what the text literally is.
+                if text not in pairs or not how:
+                    pairs[text] = f"[secret {name} as {how}]" if how else f"[secret {name}]"
         # Longest first, so a value that contains another is replaced whole.
-        self._pairs = sorted(pairs, key=lambda pair: len(pair[0]), reverse=True)
+        self._pairs = sorted(pairs.items(), key=lambda pair: len(pair[0]), reverse=True)
 
     def __bool__(self) -> bool:
         return bool(self._pairs)
@@ -119,9 +151,9 @@ class Redactor:
     def __call__(self, text: Any) -> Any:
         if not isinstance(text, str) or not self._pairs:
             return text
-        for value, name in self._pairs:
+        for value, label in self._pairs:
             if value in text:
-                text = text.replace(value, f"[secret {name}]")
+                text = text.replace(value, label)
         return text
 
     def apply(self, payload: Any) -> Any:
