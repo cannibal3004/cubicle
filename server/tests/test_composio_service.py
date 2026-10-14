@@ -17,11 +17,25 @@ class EmptyStorage:
         return {}
 
 
+class SavingStorage:
+    """Keeps what the service saves, as the real settings store would."""
+
+    def __init__(self):
+        self.values = {"composio_api_key": "ak_test"}
+
+    def get_settings(self):
+        return dict(self.values)
+
+    def save_settings(self, data):
+        self.values.update(data)
+
+
 class FakeComposio:
     """Minimal stand-in for the Composio v3 REST API."""
 
-    def __init__(self, accounts=None, auth_configs=None, execute=None, fail_with=None, unmanaged=()):
+    def __init__(self, accounts=None, auth_configs=None, execute=None, fail_with=None, unmanaged=(), no_auth=()):
         self.unmanaged = set(unmanaged)
+        self.no_auth = set(no_auth)
         self.accounts = accounts or []
         self.auth_configs = auth_configs or []
         self.execute = execute or {"successful": True, "data": {}, "error": None}
@@ -39,6 +53,9 @@ class FakeComposio:
             return httpx.Response(200, json={"items": self.auth_configs})
         if request.method == "GET" and path.startswith("/api/v3/toolkits/"):
             slug = path.rsplit("/", 1)[-1]
+            if slug in self.no_auth:
+                # What Composio reports for hackernews, composio and the like.
+                return httpx.Response(200, json={"slug": slug, "composio_managed_auth_schemes": [], "auth_config_details": [{"mode": "NO_AUTH"}]})
             managed = [] if slug in self.unmanaged else ["OAUTH2"]
             return httpx.Response(
                 200,
@@ -109,8 +126,8 @@ class ComposioServiceTests(unittest.TestCase):
         self.assertEqual(
             methods,
             [
-                ("GET", "/api/v3/auth_configs"),
                 ("GET", "/api/v3/toolkits/github"),
+                ("GET", "/api/v3/auth_configs"),
                 ("POST", "/api/v3/auth_configs"),
                 ("POST", "/api/v3/connected_accounts/link"),
             ],
@@ -119,6 +136,25 @@ class ComposioServiceTests(unittest.TestCase):
         self.assertEqual(created, {"toolkit": {"slug": "github"}, "auth_config": {"type": "use_composio_managed_auth"}})
         linked = json.loads(fake.requests[3].content)
         self.assertEqual(linked, {"auth_config_id": "ac_new", "user_id": "test-user"})
+
+    def test_a_no_auth_toolkit_connects_locally_without_an_auth_config(self):
+        storage = SavingStorage()
+        fake = FakeComposio(auth_configs=[], no_auth={"hackernews"})
+        service = _service(fake, storage)
+        link = asyncio.run(service.create_auth_link("hackernews"))
+        self.assertEqual(link, {"url": None, "connected": True, "no_auth": True})
+        # One lookup of the toolkit, nothing created at Composio.
+        self.assertEqual([(r.method, r.url.path) for r in fake.requests], [("GET", "/api/v3/toolkits/hackernews")])
+        self.assertEqual(storage.values["no_auth_toolkits"], ["hackernews"])
+        # It counts as connected everywhere the catalog looks.
+        self.assertIn("hackernews", asyncio.run(service.list_connected_toolkits()))
+        status = asyncio.run(service.connection_status(["hackernews", "github"]))
+        self.assertEqual(status["hackernews"], {"connected": True, "no_auth": True})
+        self.assertFalse(status["github"]["connected"])
+        # Disconnecting forgets it, with no account to delete.
+        self.assertEqual(asyncio.run(service.disconnect("hackernews")), 1)
+        self.assertEqual(storage.values["no_auth_toolkits"], [])
+        self.assertNotIn("hackernews", asyncio.run(service.list_connected_toolkits()))
 
     def test_toolkit_without_managed_credentials_gets_setup_instructions(self):
         fake = FakeComposio(auth_configs=[], unmanaged={"klaviyo"})

@@ -30,6 +30,7 @@ SETTING_KEYS = {
     "default_model",
     "theme",
     "disabled_toolkits",
+    "no_auth_toolkits",
     "auto_approval",
     "decider_url",
     "decider_threshold",

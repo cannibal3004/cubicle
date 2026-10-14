@@ -167,7 +167,7 @@ class ComposioService:
         """Slugs of every toolkit with an ACTIVE connection for this user."""
         now = time.monotonic()
         if self._connected_cache and self._connected_cache[0] > now:
-            return list(self._connected_cache[1])
+            return self._with_no_auth(self._connected_cache[1])
         data = await self._request(
             "GET",
             "/connected_accounts",
@@ -185,7 +185,40 @@ class ComposioService:
             if slug and _SAFE_TOOLKIT_SLUG.fullmatch(slug) and slug not in slugs:
                 slugs.append(slug)
         self._connected_cache = (now + CONNECTED_CACHE_SECONDS, slugs)
-        return list(slugs)
+        return self._with_no_auth(slugs)
+
+    def _with_no_auth(self, slugs: List[str]) -> List[str]:
+        merged = list(slugs)
+        for slug in self.enabled_no_auth_toolkits():
+            if slug not in merged:
+                merged.append(slug)
+        return merged
+
+    # ---- toolkits that need no authentication ----------------------------------
+    #
+    # Composio refuses to create an auth config for a toolkit whose only scheme
+    # is NO_AUTH ("it does not require authentication"), and its tools run with
+    # just a user id. So connecting one is purely local bookkeeping: the slug
+    # is kept in app settings and counts as connected from then on.
+
+    def enabled_no_auth_toolkits(self) -> List[str]:
+        raw = self.storage.get_settings().get("no_auth_toolkits") or []
+        slugs = []
+        for slug in raw if isinstance(raw, list) else []:
+            text = str(slug).lower()
+            if _SAFE_TOOLKIT_SLUG.fullmatch(text) and text not in slugs:
+                slugs.append(text)
+        return slugs
+
+    def _set_no_auth_toolkits(self, slugs: List[str]) -> None:
+        save = getattr(self.storage, "save_settings", None)
+        if callable(save):
+            save({"no_auth_toolkits": sorted(set(slugs))})
+        self.forget_connections()
+
+    async def is_no_auth_toolkit(self, toolkit_slug: str, api_key: Optional[str] = None) -> bool:
+        info = await self.toolkit_auth_info(toolkit_slug, api_key=api_key)
+        return "NO_AUTH" in info["auth_schemes"] and not info["managed_schemes"]
 
     def forget_connections(self) -> None:
         """Drop the cached connection list after the user connects or disconnects."""
@@ -302,6 +335,9 @@ class ComposioService:
                 status[slug] = {"connected": True, "account_id": account.get("id")}
             elif not status[slug]["connected"]:
                 status[slug] = {"connected": False, "pending_status": account.get("status")}
+        for slug in self.enabled_no_auth_toolkits():
+            if slug in status:
+                status[slug] = {"connected": True, "no_auth": True}
         return status
 
     async def toolkit_auth_info(self, toolkit_slug: str, api_key: Optional[str] = None) -> Dict[str, Any]:
@@ -346,7 +382,7 @@ class ComposioService:
                 break
         return slugs
 
-    async def ensure_auth_config(self, toolkit_slug: str, api_key: Optional[str] = None) -> str:
+    async def ensure_auth_config(self, toolkit_slug: str, api_key: Optional[str] = None, info: Optional[Dict[str, Any]] = None) -> str:
         """Return an enabled auth config id for the toolkit, creating a
         Composio-managed one when the project has none yet."""
         slug = self._validate_toolkit_slug(toolkit_slug)
@@ -365,7 +401,8 @@ class ComposioService:
             managed = [item for item in items if item.get("is_composio_managed")]
             return str((managed or items)[0]["id"])
 
-        info = await self.toolkit_auth_info(slug, api_key=api_key)
+        if info is None:
+            info = await self.toolkit_auth_info(slug, api_key=api_key)
         if not info["managed_schemes"]:
             schemes = ", ".join(info["auth_schemes"]) or "its own credentials"
             raise ConnectorServiceError(
@@ -391,9 +428,17 @@ class ComposioService:
         callback_url: Optional[str] = None,
         api_key: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Start an OAuth connection and return the URL the user must open."""
+        """Start an OAuth connection and return the URL the user must open.
+
+        A toolkit that needs no authentication is connected on the spot: the
+        result has no url and `connected` is true.
+        """
         slug = self._validate_toolkit_slug(toolkit_slug)
-        auth_config_id = await self.ensure_auth_config(slug, api_key=api_key)
+        info = await self.toolkit_auth_info(slug, api_key=api_key)
+        if "NO_AUTH" in info["auth_schemes"] and not info["managed_schemes"]:
+            self._set_no_auth_toolkits(self.enabled_no_auth_toolkits() + [slug])
+            return {"url": None, "connected": True, "no_auth": True}
+        auth_config_id = await self.ensure_auth_config(slug, api_key=api_key, info=info)
         body: Dict[str, Any] = {"auth_config_id": auth_config_id, "user_id": self.user_id}
         if callback_url:
             body["callback_url"] = callback_url
@@ -411,6 +456,10 @@ class ComposioService:
         """Delete every connected account for the toolkit; returns how many."""
         slug = self._validate_toolkit_slug(toolkit_slug)
         removed = 0
+        enabled = self.enabled_no_auth_toolkits()
+        if slug in enabled:
+            self._set_no_auth_toolkits([s for s in enabled if s != slug])
+            removed += 1
         for account in await self.list_connected_accounts([slug], api_key=api_key):
             account_id = account.get("id")
             if not account_id:
