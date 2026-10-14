@@ -450,6 +450,57 @@ class ChatStreamRouteTests(unittest.TestCase):
         self.assertEqual(next(e for e in events if e["type"] == "turn.limit")["reason"], "context")
         self.assertIn("still has 2 unfinished item(s)", recorder["rounds"][1]["system_prompt"])
 
+    def test_a_tool_call_cut_at_the_output_limit_costs_one_round_not_the_turn(self):
+        bot = self.storage.get_bots()[0]
+        self.storage.add_message(
+            {"id": "m1", "thread_id": bot["id"], "bot_id": bot["id"], "sender": "user", "text": "probe"}
+        )
+        gateway, _ = self._gateway("allow")
+        recorder = {}
+        broken = '{"command": "cd /workspace && python3 - <<PY\\nhosts=[' + '\\"x\\",' * 50
+        stream = _scripted_stream(
+            recorder,
+            [
+                [{"type": "tool_calls", "calls": [{"id": "c1", "name": "computer_terminal_execute", "arguments": broken}]},
+                 {"type": "truncated", "reason": "length"},
+                 {"type": "turn.completed", "ok": True}],
+                [{"type": "content.delta", "delta": "That was too long; here is a shorter plan."}, {"type": "turn.completed", "ok": True}],
+            ],
+        )
+        _, events = self._run_turn(bot["id"], stream=stream, gateway=gateway)
+        kinds = [e["type"] for e in events]
+        self.assertIn("turn.truncated", kinds)
+        failed = next(e for e in events if e["type"] == "tool.failed")
+        self.assertIn("not valid JSON", failed["error"])
+        self.assertIn("cut off at the completion token limit", failed["error"])
+        # The second round happened, and what it was sent is valid for a strict server.
+        self.assertEqual(len(recorder["rounds"]), 2)
+        replayed = recorder["rounds"][1]["messages"]
+        assistant = next(m for m in replayed if m.get("role") == "assistant" and m.get("tool_calls"))
+        parsed = json.loads(assistant["tool_calls"][0]["arguments"])
+        self.assertIn("malformed_arguments", parsed)
+        self.assertIn("cut off", replayed[-1]["content"])
+        self.assertEqual("".join(e.get("delta", "") for e in events if e["type"] == "content.delta").strip(), "That was too long; here is a shorter plan.")
+        # The stored record keeps the quoted text, so it can be inspected later.
+        stored = self.storage.get_messages(bot["id"])[-1]["raw_payload"]["tool_calls"][0]
+        self.assertIn("malformed_arguments", stored["raw_arguments"])
+
+    def test_a_text_reply_cut_at_the_output_limit_says_so(self):
+        bot = self.storage.get_bots()[0]
+        self.storage.add_message(
+            {"id": "m1", "thread_id": bot["id"], "bot_id": bot["id"], "sender": "user", "text": "essay"}
+        )
+        recorder = {}
+        stream = _scripted_stream(
+            recorder,
+            [[{"type": "content.delta", "delta": "Once upon a"}, {"type": "truncated", "reason": "length"}, {"type": "turn.completed", "ok": True}]],
+        )
+        _, events = self._run_turn(bot["id"], stream=stream)
+        text = "".join(e.get("delta", "") for e in events if e["type"] == "content.delta")
+        self.assertTrue(text.startswith("Once upon a"))
+        self.assertIn("cut off at the model's output limit", text)
+        self.assertIn("cut off", self.storage.get_messages(bot["id"])[-1]["text"])
+
     def test_the_bot_can_write_its_notes_during_a_turn(self):
         from app.services.bot_memory import register_memory_actions
 

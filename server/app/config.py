@@ -45,6 +45,12 @@ class Settings:
     # Let the model call the governed tools (workspace, computer, connectors)
     # through OpenAI-style function calling. Approvals still apply.
     LLM_TOOLS_ENABLED: bool = os.getenv("LLM_TOOLS_ENABLED", "1").strip().lower() in {"1", "true", "yes"}
+    # Sent as max_tokens when set. 0 leaves the server's own default, which
+    # on some local servers is 8192 and cuts a long tool call in half.
+    LLM_MAX_COMPLETION_TOKENS: int = int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "0"))
+    # Sent as max_tokens when set. 0 leaves the server's own default, which
+    # on some local servers is 8192 and cuts a long tool call in half.
+    LLM_MAX_COMPLETION_TOKENS: int = int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "0"))
     # A safety net, not the working limit: a turn normally ends when the
     # model answers, when the context is full (CONTEXT_STOP_AT) or when it
     # stops making progress (LLM_STALLED_ROUNDS).
@@ -117,7 +123,7 @@ class Settings:
     AUTH_COOKIE_SECURE: bool = os.getenv("AUTH_COOKIE_SECURE", "0").lower() in {"1", "true", "yes"}
     COMPUTER_PROVIDER: str = os.getenv("COMPUTER_PROVIDER", "fake").strip().lower()
     COMPUTER_DOCKER_IMAGE: str = os.getenv(
-        "COMPUTER_DOCKER_IMAGE", "cubicle-computer:2.3.0"
+        "COMPUTER_DOCKER_IMAGE", "cubicle-computer:2.4.0"
     ).strip()
     COMPUTER_DOCKER_BINARY: str = os.getenv("COMPUTER_DOCKER_BINARY", "docker").strip()
     COMPUTER_DOCKER_WORKSPACE_ROOT: Path = Path(
@@ -129,6 +135,9 @@ class Settings:
     COMPUTER_DOCKER_START_TIMEOUT: float = float(
         os.getenv("COMPUTER_DOCKER_START_TIMEOUT", "20")
     )
+    # How long one terminal command or page navigation may run inside the
+    # runtime. The driver enforces it (a command that hits it returns exit
+    # code 124 with its output so far); the API waits that long plus a margin.
     COMPUTER_DOCKER_COMMAND_TIMEOUT: float = float(
         os.getenv("COMPUTER_DOCKER_COMMAND_TIMEOUT", "30")
     )

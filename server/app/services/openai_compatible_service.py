@@ -11,6 +11,8 @@ from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 import httpx
 
+from app.config import settings
+from app.config import settings
 from app.schemas.contracts import ModelInfo
 from app.services.llm_config import LLMConfig
 
@@ -124,6 +126,8 @@ def build_request_body(
     }
     if config.reasoning_effort:
         body["reasoning_effort"] = config.reasoning_effort
+    if settings.LLM_MAX_COMPLETION_TOKENS > 0:
+        body["max_tokens"] = settings.LLM_MAX_COMPLETION_TOKENS
     if tools:
         body["tools"] = tools
     return body
@@ -303,6 +307,7 @@ class OpenAICompatibleService:
                     produced_output = False
                     tool_accumulator: Dict[int, Dict[str, Any]] = {}
                     last_usage: Any = None
+                    finish_reason: Optional[str] = None
                     async for line in response.aiter_lines():
                         line = line.strip()
                         # OpenRouter emits ": OPENROUTER PROCESSING" keep-alive comments.
@@ -328,6 +333,8 @@ class OpenAICompatibleService:
                             return
 
                         for choice in chunk.get("choices") or []:
+                            if isinstance(choice.get("finish_reason"), str):
+                                finish_reason = choice["finish_reason"]
                             delta = choice.get("delta") or {}
                             reasoning = delta.get("reasoning_content") or delta.get("reasoning")
                             if isinstance(reasoning, str) and reasoning:
@@ -363,6 +370,10 @@ class OpenAICompatibleService:
                         }
                         yield {"type": "turn.completed", "ok": False}
                         return
+                    if finish_reason == "length":
+                        # The server stopped the model at its output limit: what
+                        # came through is incomplete, and a tool call is likely cut.
+                        yield {"type": "truncated", "reason": "length"}
                     usage_event = _usage_event(last_usage)
                     if usage_event:
                         yield usage_event
@@ -413,6 +424,8 @@ class OpenAICompatibleService:
             yield {"type": "content.delta", "delta": text}
         if calls:
             yield {"type": "tool_calls", "calls": calls}
+        if isinstance(choices, list) and choices and choices[0].get("finish_reason") == "length":
+            yield {"type": "truncated", "reason": "length"}
         usage_event = _usage_event(data.get("usage") if isinstance(data, dict) else None)
         if usage_event:
             yield usage_event

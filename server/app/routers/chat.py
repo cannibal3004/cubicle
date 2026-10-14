@@ -21,7 +21,7 @@ from app.services.approval_gate import approval_gate
 from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs
-from app.services.context_builder import build_history_messages, cap_message_results, trim_result_text
+from app.services.context_builder import build_history_messages, cap_message_results, safe_arguments, trim_result_text
 from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
 from app.services import bot_memory as _bot_memory  # noqa: F401 - registers memory.read/write
 from app.services.bot_todo import get_todo
@@ -53,6 +53,14 @@ _STOP_PROMPTS = {
     "context": "The context window is nearly full and the older history has already been compacted as far as it can be.",
     "stalled": "Your last tool calls repeated earlier calls of this turn and returned the same results, so they are not making progress.",
 }
+# Shown in the chat when the server stopped the model at its output limit.
+_CUT_NOTE = "[The reply was cut off at the model's output limit.]"
+# Told to the model with a tool call its cut output left unreadable.
+_CUT_HINT = (
+    " Your output was cut off at the completion token limit before this call was complete. Make the call much shorter: "
+    "write long scripts or data to a file with computer_write_file (in pieces if needed) and run the file, instead of "
+    "putting them in one command."
+)
 _STOP_NOTES = {
     "rounds": "[Stopped after {rounds} tool rounds without a final answer.]",
     "context": "[Stopped: the context window is full and could not be compacted further.]",
@@ -489,6 +497,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             round_text = ""
             pending_calls: List[Dict[str, Any]] = []
             round_ok = True
+            round_cut = False
 
             round_prompt = turn_system_prompt
             round_tools = tool_definitions
@@ -523,11 +532,19 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     usage_prompt = int(event.get("prompt_tokens") or 0)
                     usage_completion += int(event.get("completion_tokens") or 0)
                     turn.emit({"type": "turn.usage", "botMsgId": bot_msg_id, "usage": usage_payload()})
+                elif event["type"] == "truncated":
+                    round_cut = True
+                    turn.emit({"type": "turn.truncated", "botMsgId": bot_msg_id, "reason": event.get("reason") or "length"})
                 elif event["type"] == "turn.completed":
                     round_ok = bool(event.get("ok", True))
 
             if round_text.strip():
                 text_pieces.append(round_text)
+            if round_cut and not pending_calls:
+                # A text reply stopped at the output limit: say so rather
+                # than leave a sentence hanging as if it were the answer.
+                text_pieces.append(f"\n\n{_CUT_NOTE}")
+                turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": f"\n\n{_CUT_NOTE}"})
 
             if final_answer_only:
                 if not round_text.strip():
@@ -545,7 +562,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                 "role": "assistant",
                 "content": round_text,
                 "tool_calls": [
-                    {"id": call["id"], "name": call["name"], "arguments": call.get("arguments") or "{}"}
+                    {"id": call["id"], "name": call["name"], "arguments": safe_arguments(call.get("arguments"))}
                     for call in pending_calls
                 ],
             })
@@ -576,8 +593,9 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     "id": call_id,
                     "name": call_name,
                     "status": "running",
-                    # The model's own argument text, replayed verbatim in later turns.
-                    "raw_arguments": call.get("arguments") or "{}",
+                    # The model's own argument text, replayed verbatim in later turns
+                    # (a malformed one is quoted inside a JSON object instead).
+                    "raw_arguments": safe_arguments(call.get("arguments")),
                 }
                 tool_records.append(record)
 
@@ -585,9 +603,12 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     arguments = parse_arguments(call.get("arguments"))
                     invocation = build_invocation(call_name, arguments, thread_id, specs=tool_specs)
                 except ToolCallError as exc:
-                    record.update({"status": "failed", "error": str(exc)})
-                    turn.emit({"type": "tool.failed", "tool": call_name, "callName": call_name, "error": str(exc)})
-                    messages.append({"role": "tool", "tool_call_id": call_id, "content": _tool_result_text({"error": str(exc)})})
+                    error = str(exc)
+                    if round_cut:
+                        error += _CUT_HINT
+                    record.update({"status": "failed", "error": error})
+                    turn.emit({"type": "tool.failed", "tool": call_name, "callName": call_name, "error": error})
+                    messages.append({"role": "tool", "tool_call_id": call_id, "content": _tool_result_text({"error": error})})
                     continue
 
                 record["summary"] = getattr(invocation, "summary", None) or getattr(invocation, "preview", call_name)

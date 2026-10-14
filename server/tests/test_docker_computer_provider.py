@@ -463,6 +463,8 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         mounts = [run_args[i + 1] for i, a in enumerate(run_args) if a == "--mount"]
         self.assertIn("type=bind,src=/srv/cubicle/shared,dst=/shared", mounts)
         self.assertIn("SHARED=/shared", run_args)
+        # The driver gets the same command limit the API waits on (plus a margin).
+        self.assertIn(f"COMMAND_TIMEOUT_MS={int(provider.command_timeout * 1000)}", run_args)
         # Without a host path there is no mount and the runtime is not told of one.
         plain = self.docker.calls_of("run")
         self.assertEqual(len([m for m in mounts if m.endswith("dst=/shared")]), 1)

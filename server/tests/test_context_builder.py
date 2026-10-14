@@ -37,6 +37,27 @@ class ContextBuilderTests(unittest.TestCase):
         self.assertEqual(records[1]["result"], "2" * 30)
         self.assertEqual(records[2]["result"], "3" * 30)
 
+    def test_malformed_arguments_are_replayed_as_a_json_object(self):
+        from app.services.context_builder import safe_arguments
+
+        broken = '{"command": "cd /x && python3 - <<PY\\nhosts=[\\"a\\",' + '\\"a\\",' * 900
+        history = [
+            _user("go"),
+            _bot("Trying.", [{"id": "c1", "name": "computer_terminal_execute", "raw_arguments": broken, "status": "failed", "error": "Tool arguments were not valid JSON"}]),
+            _user("and?"),
+        ]
+        messages = build_history_messages(history, replay_tools=True)
+        replayed = messages[1]["tool_calls"][0]["arguments"]
+        parsed = json.loads(replayed)
+        self.assertTrue(parsed["malformed_arguments"].startswith('{"command": "cd /x'))
+        self.assertLessEqual(len(parsed["malformed_arguments"]), 1500)
+        self.assertIn("more characters omitted", parsed["note"])
+        # Good arguments pass through untouched, so the cache prefix holds.
+        self.assertEqual(safe_arguments('{"path": "."}'), '{"path": "."}')
+        self.assertEqual(safe_arguments({"path": "."}), '{"path": "."}')
+        self.assertEqual(safe_arguments(""), "{}")
+        self.assertEqual(json.loads(safe_arguments("[1, 2]"))["malformed_arguments"], "[1, 2]")
+
     def test_every_tool_turn_replays_its_full_results(self):
         history = [
             _user("find it"),

@@ -115,6 +115,9 @@ const fileRootsText = fileRoots.join(', ').replace(/, ([^,]*)$/, ' or $1');
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_WRITE_CHARS = 200000;
 const TERMINAL_COMMAND_MAX = 60000;
+// One limit for a terminal command and a page navigation, set by the API so
+// the two sides agree; the API waits this long plus a margin.
+const COMMAND_TIMEOUT_MS = Number(process.env.COMMAND_TIMEOUT_MS) > 0 ? Number(process.env.COMMAND_TIMEOUT_MS) : 30000;
 
 function workspacePath(value) {
   const requested = typeof value === 'string' && value.trim() ? value.trim() : '/workspace';
@@ -190,12 +193,22 @@ async function executeCommand(command) {
   try {
     const result = await execFileAsync('/bin/sh', ['-lc', command], {
       cwd: workspace,
-      timeout: 30000,
+      timeout: COMMAND_TIMEOUT_MS,
       maxBuffer: 1024 * 1024,
       env: terminalEnv,
     });
     return { exit_code: 0, stdout: result.stdout, stderr: result.stderr };
   } catch (error) {
+    if (error.killed || error.signal) {
+      // Hit the time limit: report it as `timeout` would, with the output so far.
+      const seconds = Math.round(COMMAND_TIMEOUT_MS / 1000);
+      return {
+        exit_code: 124,
+        stdout: error.stdout || '',
+        stderr: `${error.stderr || ''}\n[command timed out after ${seconds}s and was killed; the output above is what it had produced]`.trim(),
+        timed_out: true,
+      };
+    }
     return {
       exit_code: typeof error.code === 'number' ? error.code : 1,
       stdout: error.stdout || '',
@@ -422,7 +435,7 @@ async function handle(request, response) {
         const target = await ensurePage();
         await target.bringToFront();
         await raiseBrowser();
-        await target.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await target.goto(url, { waitUntil: 'domcontentloaded', timeout: COMMAND_TIMEOUT_MS });
         return { operation: 'browser.navigate', url: target.url(), title: await target.title() };
       }
 

@@ -116,9 +116,9 @@ The local server creates a mode-0600 session token in `DATA_DIR` and the browser
 The default provider is the deterministic local adapter. To enable the real sandbox desktop (browser, terminal, file manager, input, screenshots, and live VNC), build the pinned runtime image and opt in to the Docker provider:
 
 ```bash
-docker build -t cubicle-computer:2.3.0 ./runtime
+docker build -t cubicle-computer:2.4.0 ./runtime
 export COMPUTER_PROVIDER=docker
-export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.3.0
+export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.4.0
 ```
 
 The Docker daemon must be running before starting the API. Each bot gets a separate container, a separate workspace under `DATA_DIR/computers`, an ephemeral loopback-only port, and an internal runtime token. The sandbox user has no capabilities and cannot gain any; CPU, memory, process, and shared-memory limits are applied.
@@ -199,6 +199,7 @@ The server reads these variables from the environment:
 | `LLM_BASE_URL` | per provider | API base URL. Defaults to `https://openrouter.ai/api/v1` for `openai_compatible` and `https://api.muapi.ai/api/v1` for `muapi` |
 | `LLM_REASONING_EFFORT` | empty | When set it is sent verbatim as `reasoning_effort`. Common values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; which ones work depends on the server and model. Leave empty to let the server use its default |
 | `LLM_TOOLS_ENABLED` | `1` | Offer the governed tools to the model through function calling. Set `0` to keep only the explicit slash commands |
+| `LLM_MAX_COMPLETION_TOKENS` | `0` | Sent as `max_tokens` when set. `0` leaves the server's default; a local server that stops at 8192 cuts long tool calls, which the chat then reports as cut off |
 | `LLM_MAX_TOOL_ROUNDS` | `100` | Safety net on model round-trips in one turn. A turn normally ends when the model answers, when the context is full (`CONTEXT_STOP_AT`, default 0.9 of the window, after compaction could not make room) or when it stops making progress (`LLM_STALLED_ROUNDS`, default 3 consecutive rounds that only repeat earlier calls with the same results). In every case the model gets one final call without tools so it still answers |
 | `BOT_MEMORY_MAX_CHARS` | `16000` | Size of a bot's notes in characters. They are rendered in full after a compaction and after a full rewrite, so this bounds that one-time context cost |
 | `BOT_TODO_MAX_ITEMS` | `50` | Items a bot's to-do list may hold. The whole list comes with every todo tool result and every compaction |
@@ -224,13 +225,13 @@ The server reads these variables from the environment:
 | `AUTH_COOKIE_SECURE` | `0` | Set to `1` when serving over HTTPS |
 | `CORS_ORIGINS` | localhost and loopback client origins | Comma-separated browser origins allowed by the API |
 | `COMPUTER_PROVIDER` | `fake` | Computer adapter: `fake` or `docker` |
-| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.3.0` | Pinned local runtime image |
+| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.4.0` | Pinned local runtime image |
 | `COMPUTER_DOCKER_WORKSPACE_ROOT` | `DATA_DIR/computers` | Root for per-bot runtime workspaces |
 | `COMPUTER_DOCKER_CPU_LIMIT` | `2.0` | Docker CPU limit per computer |
 | `COMPUTER_DOCKER_MEMORY_LIMIT` | `2g` | Docker memory limit per computer |
 | `COMPUTER_DOCKER_PIDS_LIMIT` | `512` | Maximum processes per computer |
 | `COMPUTER_DOCKER_START_TIMEOUT` | `20` | Runtime readiness timeout in seconds |
-| `COMPUTER_DOCKER_COMMAND_TIMEOUT` | `30` | Docker/driver operation timeout in seconds |
+| `COMPUTER_DOCKER_COMMAND_TIMEOUT` | `30` | Seconds a terminal command or page navigation may run inside the computer; the driver kills a command at this limit and returns exit code 124 with its output so far, and the API waits this long plus a margin |
 | `COMPUTER_DOCKER_NETWORK` | empty | When set, runtime containers join this Docker network and are reached by name instead of a port published on loopback. Used by the compose stack |
 | `COMPUTER_DOCKER_WORKSPACE_MODE` | `bind` | `bind` mounts a host directory per computer; `volume` uses a named Docker volume per computer |
 | `COMPUTER_DOCKER_HOST_WORKSPACE_ROOT` | empty | In `bind` mode from inside a container: the host path equivalent of `COMPUTER_DOCKER_WORKSPACE_ROOT` |
@@ -506,7 +507,7 @@ Confirm that the daemon is running, the runtime image was built, and the API use
 
 ```bash
 docker info
-docker image inspect cubicle-computer:2.3.0
+docker image inspect cubicle-computer:2.4.0
 echo "$COMPUTER_PROVIDER"
 ```
 

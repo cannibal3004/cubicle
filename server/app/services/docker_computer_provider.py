@@ -71,6 +71,8 @@ INSTALL_SCRIPT = "/opt/cubicle-computer/install-packages.sh"
 
 # Where the shared folder appears inside a computer.
 SHARED_MOUNT = "/shared"
+# Seconds the API waits beyond the driver's own command timeout.
+RUNTIME_REPLY_MARGIN = 15.0
 
 
 @dataclass
@@ -334,7 +336,7 @@ class DockerComputerProvider:
         return ["--mount", f"type=bind,src={self.wallpaper},dst=/opt/cubicle-computer/wallpaper,readonly"]
 
     # Names the runtime sets itself; a secret may not replace them.
-    _OWN_ENV = frozenset({"COMPUTER_TOKEN", "COMPUTER_ID", "PORT", "WORKSPACE", "SHARED", "CUBICLE_PACKAGES", "HOME", "PATH", "DISPLAY"})
+    _OWN_ENV = frozenset({"COMPUTER_TOKEN", "COMMAND_TIMEOUT_MS", "COMPUTER_ID", "PORT", "WORKSPACE", "SHARED", "CUBICLE_PACKAGES", "HOME", "PATH", "DISPLAY"})
 
     def _secret_env_args(self, record: _RuntimeRecord) -> list:
         if self._environment is None:
@@ -419,6 +421,8 @@ class DockerComputerProvider:
             "--env",
             "WORKSPACE=/workspace",
             "--env",
+            f"COMMAND_TIMEOUT_MS={int(self.command_timeout * 1000)}",
+            "--env",
             f"CUBICLE_PACKAGES={' '.join(record.status.packages)}",
             *self._secret_env_args(record),
             self.image,
@@ -473,8 +477,11 @@ class DockerComputerProvider:
             raise ComputerProviderError("Computer runtime is not connected.")
         url = self._runtime_url(record, route)
         try:
+            # The driver enforces command_timeout itself and answers with what
+            # it has; the API must outwait that, or a command that runs to the
+            # limit is misreported as a dead runtime.
             async with httpx.AsyncClient(
-                timeout=max(2.0, min(self.command_timeout, 60.0)),
+                timeout=self.command_timeout + RUNTIME_REPLY_MARGIN,
                 headers={"x-computer-token": record.token},
             ) as client:
                 response = await client.request(method, url, json=payload)

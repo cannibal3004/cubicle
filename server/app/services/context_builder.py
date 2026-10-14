@@ -113,16 +113,42 @@ def _tool_message(record: Dict[str, Any]) -> Dict[str, Any]:
     return {"role": "tool", "tool_call_id": str(record["id"]), "content": content}
 
 
+# How much of a malformed argument string is kept for the record and the replay.
+MALFORMED_ARGUMENTS_KEEP = 1500
+
+
+def safe_arguments(raw: Any) -> str:
+    """Argument text that any OpenAI-compatible server accepts in a replayed tool call.
+
+    A model's own call is replayed verbatim so the cache prefix holds. When
+    the text is not a JSON object (an output cut mid-call, say), replaying
+    it makes strict servers reject the whole request, so the replay carries
+    a JSON object that quotes the broken text instead.
+    """
+    if raw is None or raw == "":
+        return "{}"
+    if not isinstance(raw, str):
+        try:
+            return json.dumps(raw, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return "{}"
+    try:
+        if isinstance(json.loads(raw), dict):
+            return raw
+    except json.JSONDecodeError:
+        pass
+    kept = raw[:MALFORMED_ARGUMENTS_KEEP]
+    note = "not valid JSON" + (f"; {len(raw) - len(kept)} more characters omitted" if len(raw) > len(kept) else "")
+    return json.dumps({"malformed_arguments": kept, "note": note}, ensure_ascii=False)
+
+
 def _call_entries(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     entries = []
     for record in records:
         arguments = record.get("raw_arguments")
         if not isinstance(arguments, str):
-            try:
-                arguments = json.dumps(record.get("arguments") or {}, ensure_ascii=False)
-            except (TypeError, ValueError):
-                arguments = "{}"
-        entries.append({"id": str(record["id"]), "name": str(record.get("name") or "tool"), "arguments": arguments or "{}"})
+            arguments = record.get("arguments") or {}
+        entries.append({"id": str(record["id"]), "name": str(record.get("name") or "tool"), "arguments": safe_arguments(arguments)})
     return entries
 
 

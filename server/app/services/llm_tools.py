@@ -124,14 +124,14 @@ COMPUTER_TOOLS: List[ToolSpec] = [
     ),
     ToolSpec(
         name="computer_browser_navigate",
-        description="Open an http(s) URL in the sandbox browser.",
+        description=f"Open an http(s) URL in the sandbox browser (gives up after {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT)} seconds if the page does not load).",
         parameters=_obj({"url": {"type": "string", "description": "Absolute http or https URL"}}, ["url"]),
         group="computer",
         needs_approval=True,
     ),
     ToolSpec(
         name="computer_terminal_execute",
-        description="Run a shell command inside the sandbox as its unprivileged user (30 second timeout, 1 MB of output). /workspace and the home directory persist between starts; /tmp does not. There is no sudo: for apt packages use computer_install_packages; pip (in a venv), npm, cargo and similar work normally in the home directory. To create or change files use computer_write_file and computer_edit_file rather than heredocs.",
+        description=f"Run a shell command inside the sandbox as its unprivileged user ({int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT)} second limit, after which it is killed and returns exit code 124 with its output so far; 1 MB of output). /workspace and the home directory persist between starts; /tmp does not. There is no sudo: for apt packages use computer_install_packages; pip (in a venv), npm, cargo and similar work normally in the home directory. To create or change files use computer_write_file and computer_edit_file rather than heredocs.",
         parameters=_obj({"command": {"type": "string", "description": "Shell command to run"}}, ["command"]),
         group="computer",
         needs_approval=True,
