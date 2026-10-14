@@ -25,6 +25,7 @@ without publishing any port.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import re
@@ -42,6 +43,7 @@ from app.services.computer_provider import (
     check_file_content,
     check_file_path,
     check_package_names,
+    check_timeout,
     PACKAGE_NAME,
     COMPUTER_CAPABILITIES,
     ComputerProviderError,
@@ -69,10 +71,21 @@ SETUP_CAPABILITIES = ("CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SETGID", "SE
 INSTALL_SCRIPT = "/opt/cubicle-computer/install-packages.sh"
 
 
+logger = logging.getLogger(__name__)
+
 # Where the shared folder appears inside a computer.
 SHARED_MOUNT = "/shared"
+# Seconds the API waits beyond the driver's own command timeout.
+RUNTIME_REPLY_MARGIN = 15.0
+# What `docker ps` prints per computer container, for adoption after a restart.
+_PS_FORMAT = '{{.ID}}\t{{.Names}}\t{{.State}}\t{{.Label "cubicle.computer-id"}}\t{{.Label "cubicle.bot-id"}}'
 
 
+def _parse_ps(listing: str):
+    for line in (listing or "").splitlines():
+        parts = line.rstrip("\n").split("\t")
+        if len(parts) >= 5 and parts[0]:
+            yield tuple(part.strip() for part in parts[:5])
 @dataclass
 class _RuntimeRecord:
     status: ComputerStatus
@@ -120,6 +133,8 @@ class DockerComputerProvider:
         self.pids_limit = pids_limit or settings.COMPUTER_DOCKER_PIDS_LIMIT
         self.start_timeout = start_timeout or settings.COMPUTER_DOCKER_START_TIMEOUT
         self.command_timeout = command_timeout or settings.COMPUTER_DOCKER_COMMAND_TIMEOUT
+        self.command_timeout_max = max(self.command_timeout, settings.COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX)
+        self.navigate_timeout = settings.COMPUTER_DOCKER_NAVIGATE_TIMEOUT
         self.tmp_size = (tmp_size or settings.COMPUTER_DOCKER_TMP_SIZE).strip()
         self.install_timeout = install_timeout or settings.COMPUTER_DOCKER_INSTALL_TIMEOUT
         # Extra environment for a bot's container (the user's secrets), looked
@@ -334,7 +349,7 @@ class DockerComputerProvider:
         return ["--mount", f"type=bind,src={self.wallpaper},dst=/opt/cubicle-computer/wallpaper,readonly"]
 
     # Names the runtime sets itself; a secret may not replace them.
-    _OWN_ENV = frozenset({"COMPUTER_TOKEN", "COMPUTER_ID", "PORT", "WORKSPACE", "SHARED", "CUBICLE_PACKAGES", "HOME", "PATH", "DISPLAY"})
+    _OWN_ENV = frozenset({"COMPUTER_TOKEN", "COMMAND_TIMEOUT_MS", "COMMAND_TIMEOUT_MAX_MS", "NAVIGATE_TIMEOUT_MS", "COMPUTER_ID", "PORT", "WORKSPACE", "SHARED", "CUBICLE_PACKAGES", "HOME", "PATH", "DISPLAY"})
 
     def _secret_env_args(self, record: _RuntimeRecord) -> list:
         if self._environment is None:
@@ -419,6 +434,12 @@ class DockerComputerProvider:
             "--env",
             "WORKSPACE=/workspace",
             "--env",
+            f"COMMAND_TIMEOUT_MS={int(self.command_timeout * 1000)}",
+            "--env",
+            f"COMMAND_TIMEOUT_MAX_MS={int(self.command_timeout_max * 1000)}",
+            "--env",
+            f"NAVIGATE_TIMEOUT_MS={int(self.navigate_timeout * 1000)}",
+            "--env",
             f"CUBICLE_PACKAGES={' '.join(record.status.packages)}",
             *self._secret_env_args(record),
             self.image,
@@ -468,13 +489,17 @@ class DockerComputerProvider:
         method: str,
         route: str,
         payload: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         if not record.port or not record.host:
             raise ComputerProviderError("Computer runtime is not connected.")
         url = self._runtime_url(record, route)
         try:
+            # The driver enforces command_timeout itself and answers with what
+            # it has; the API must outwait that, or a command that runs to the
+            # limit is misreported as a dead runtime.
             async with httpx.AsyncClient(
-                timeout=max(2.0, min(self.command_timeout, 60.0)),
+                timeout=(timeout if timeout is not None else self.command_timeout) + RUNTIME_REPLY_MARGIN,
                 headers={"x-computer-token": record.token},
             ) as client:
                 response = await client.request(method, url, json=payload)
@@ -507,6 +532,108 @@ class DockerComputerProvider:
             await asyncio.sleep(0.2)
         raise ComputerProviderError(last_error)
 
+
+    # ---- adopting sandboxes from a previous API process ----------------------
+
+    async def adopt_running(self) -> List[str]:
+        """Take over every computer container a previous API process left running.
+
+        Runtime records live in memory, so after a restart the API would
+        otherwise report every computer as stopped and the bot's next action
+        would replace a perfectly good sandbox (losing /tmp, the browser and
+        anything running). The token the driver expects is in the container's
+        environment, so the record can be rebuilt. Returns the computer ids.
+        """
+        try:
+            listing = await self._docker(["ps", "--filter", "label=cubicle.runtime=computer", "--format", _PS_FORMAT])
+        except ComputerProviderError as exc:
+            logger.warning("Could not list computer containers to adopt: %s", exc)
+            return []
+        adopted: List[str] = []
+        for container_id, name, state, computer_id, bot_id in _parse_ps(listing):
+            existing = self._runtimes.get(computer_id)
+            if existing is not None and existing.container_id:
+                continue
+            if await self._adopt(container_id, name, state, computer_id, bot_id):
+                adopted.append(computer_id)
+        return adopted
+
+    async def _adopt_for(self, record: _RuntimeRecord) -> bool:
+        """Adopt this computer's container if one is running (a start after a restart)."""
+        try:
+            listing = await self._docker(
+                ["ps", "--filter", f"label=cubicle.computer-id={record.status.computer_id}", "--format", _PS_FORMAT]
+            )
+        except ComputerProviderError:
+            return False
+        for container_id, name, state, computer_id, bot_id in _parse_ps(listing):
+            if computer_id == record.status.computer_id:
+                return await self._adopt(container_id, name, state, computer_id, bot_id)
+        return False
+
+    async def _adopt(self, container_id: str, name: str, state: str, computer_id: str, bot_id: str) -> bool:
+        if state not in {"running", "paused"} or not bot_id:
+            return False
+        try:
+            env_text = await self._docker(["inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", container_id])
+        except ComputerProviderError:
+            return False
+        env = dict(line.split("=", 1) for line in env_text.splitlines() if "=" in line)
+        token = env.get("COMPUTER_TOKEN", "")
+        if not token:
+            return False
+        status = self.get_or_create(bot_id)
+        record = self._runtimes[computer_id]
+        record.token = token
+        record.container_id = container_id
+        try:
+            port = int(env.get("PORT") or self.runtime_port)
+        except ValueError:
+            port = self.runtime_port
+        if self.network:
+            record.host = name.lstrip("/")
+            record.port = port
+        else:
+            try:
+                ports = await self._docker(["port", container_id, f"{port}/tcp"])
+            except ComputerProviderError:
+                ports = ""
+            matches = re.findall(r":(\d+)", ports)
+            if not matches:
+                self._forget(record)
+                return False
+            record.host = "127.0.0.1"
+            record.port = int(matches[-1])
+        if state == "paused":
+            status.state = "paused"
+            status.health = "unknown"
+            self._touch(status, "adopt")
+            return True
+        try:
+            health = await self._request(record, "GET", "/health")
+        except ComputerProviderError:
+            health = {}
+        if health.get("status") != "healthy":
+            # Not answering with its own token: leave it for start() to replace.
+            self._forget(record)
+            return False
+        status.state = "running"
+        status.health = "healthy"
+        status.width = int(health.get("width") or status.width)
+        status.height = int(health.get("height") or status.height)
+        self._touch(status, "adopt")
+        logger.info("Adopted running computer %s for bot %s (container %s)", computer_id, bot_id, container_id[:12])
+        return True
+
+    @staticmethod
+    def _forget(record: _RuntimeRecord) -> None:
+        record.container_id = None
+        record.host = None
+        record.port = None
+        record.status.state = "stopped"
+        record.status.health = "unknown"
+
+
     async def create(self, bot_id: str) -> ComputerStatus:
         return self.get_or_create(bot_id)
 
@@ -520,6 +647,10 @@ class DockerComputerProvider:
                 await self._docker(["unpause", record.container_id])
                 status.state = "running"
                 status.health = "healthy"
+                return self._touch(status, "start")
+
+            # A sandbox from before an API restart is still there: use it.
+            if not record.container_id and await self._adopt_for(record):
                 return self._touch(status, "start")
 
             status.state = "starting"
@@ -647,15 +778,18 @@ class DockerComputerProvider:
         parsed = urlparse(url.strip())
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ComputerProviderError("Browser navigation only accepts absolute HTTP(S) URLs.")
-        result = await self._request(record, "POST", "/navigate", {"url": url.strip()})
+        result = await self._request(record, "POST", "/navigate", {"url": url.strip()}, timeout=self.navigate_timeout)
         record.status.url = result.get("url") or url.strip()
         self._touch(record.status, "browser.navigate")
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
 
-    async def terminal_execute(self, computer_id: str, command: str) -> Dict[str, Any]:
+    async def terminal_execute(self, computer_id: str, command: str, timeout_seconds: Any = None) -> Dict[str, Any]:
         record = self._active_record(computer_id)
         command = check_command(command)
-        result = await self._request(record, "POST", "/terminal", {"command": command})
+        limit = min(check_timeout(timeout_seconds), self.command_timeout_max)
+        result = await self._request(
+            record, "POST", "/terminal", {"command": command, "timeout_ms": int(limit * 1000)}, timeout=limit
+        )
         self._touch(record.status, "terminal.exec")
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
 

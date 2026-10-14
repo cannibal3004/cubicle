@@ -22,11 +22,17 @@ class Bot(BaseModel):
     # Auto-approval for this bot: "inherit" follows App Settings; "off",
     # "shadow", or "on" override it for this bot only.
     auto_approval: Literal["inherit", "off", "shadow", "on"] = "inherit"
+    # The decider's risk threshold for this bot alone; None follows App Settings.
+    gate_threshold: Optional[float] = None
     # The bot's own notes, kept across conversations and compactions. The
     # bot writes them with memory_write; the user can edit them too.
     memory: str = ""
     memory_updated_at: Optional[str] = None
     memory_limit: int = Field(default_factory=lambda: settings.BOT_MEMORY_MAX_CHARS)
+    # The bot's working list for the job at hand: [{id, text, state}].
+    todo: List[Dict[str, Any]] = Field(default_factory=list)
+    todo_updated_at: Optional[str] = None
+    todo_limit: int = Field(default_factory=lambda: settings.BOT_TODO_MAX_ITEMS)
     unread_count: int = 0
     created_at: str
 

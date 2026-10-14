@@ -57,7 +57,8 @@ def _preview(action: str, bot_id: str, arguments: Dict[str, Any]) -> str:
     if action == "browser_navigate":
         return f"Navigate the computer for {bot_id} to {arguments.get('url') or '[missing URL]'}"
     if action == "terminal_execute":
-        return f"Run a terminal command on the computer for {bot_id}"
+        limit = arguments.get("timeout_seconds")
+        return f"Run a terminal command on the computer for {bot_id}" + (f" (up to {limit} s)" if limit else "")
     if action == "files_list":
         return f"List computer files for {bot_id} at {arguments.get('path') or '/workspace'}"
     if action == "files_read":

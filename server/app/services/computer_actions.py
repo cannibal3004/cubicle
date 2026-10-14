@@ -88,7 +88,10 @@ def register_computer_actions(
 
     async def terminal_execute(call: ActionInvocation) -> Dict[str, Any]:
         status, started = await _ready(call, target_provider)
-        return _mark_started(await target_provider.terminal_execute(status.computer_id, str(call.arguments.get("command") or "")), started)
+        return _mark_started(
+            await target_provider.terminal_execute(status.computer_id, str(call.arguments.get("command") or ""), call.arguments.get("timeout_seconds")),
+            started,
+        )
 
     async def files_list(call: ActionInvocation) -> Dict[str, Any]:
         status, started = await _ready(call, target_provider)

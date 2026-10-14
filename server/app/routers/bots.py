@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.schemas.contracts import Bot
 from app.services import llm_service
 from app.services.bot_memory import MEMORY_MAX_CHARS, MemoryError, clean_memory, memory_note_message
+from app.services.bot_todo import TODO_MAX_ITEMS, TodoError, clean_todo, todo_note_message
 from app.services.computer_provider import ComputerProviderError, computer_id_for_bot, computer_provider
 from app.services.storage_service import storage_service
 from app.services.turn_manager import turn_manager
@@ -24,7 +25,7 @@ MAX_SHORT = 200
 MAX_PROMPT = 20_000
 # Only these fields can be changed from the client; ids, counters, and
 # timestamps are the server's.
-EDITABLE_FIELDS = {"name", "role", "description", "avatar", "model", "accent_color", "system_prompt", "tools", "pinned", "tool_settings", "auto_approval"}  # memory is handled separately
+EDITABLE_FIELDS = {"name", "role", "description", "avatar", "model", "accent_color", "system_prompt", "tools", "pinned", "tool_settings", "auto_approval", "gate_threshold"}  # memory is handled separately
 MAX_TOOL_SETTINGS_ENTRIES = 2000
 
 
@@ -79,7 +80,10 @@ class BotUpdate(BaseModel):
     archived: Optional[bool] = None
     tool_settings: Optional[Dict[str, Any]] = None
     auto_approval: Optional[Literal["inherit", "off", "shadow", "on"]] = None
+    # A number from 0.01 to 0.99, or "inherit" to follow App Settings again.
+    gate_threshold: Optional[Any] = None
     memory: Optional[str] = Field(default=None, max_length=MEMORY_MAX_CHARS)
+    todo: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=TODO_MAX_ITEMS)
 
 
 def _find(bots: List[Dict[str, Any]], bot_id: str) -> int:
@@ -112,6 +116,7 @@ async def create_bot(bot_data: BotInput):
         "tools": bot_data.tools,
         "tool_settings": {},
         "auto_approval": "inherit",
+        "gate_threshold": None,
         "pinned": False,
         "archived": False,
         "unread_count": 0,
@@ -136,6 +141,18 @@ async def update_bot(bot_id: str, updates: BotUpdate):
         changes.pop("model")
     if "tool_settings" in changes:
         changes["tool_settings"] = clean_tool_settings(changes["tool_settings"])
+    if "gate_threshold" in changes:
+        raw = changes["gate_threshold"]
+        if raw in ("inherit", "", None):
+            changes["gate_threshold"] = None
+        else:
+            try:
+                value = float(raw)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail="gate_threshold must be a number from 0.01 to 0.99, or \"inherit\".") from exc
+            if not 0.01 <= value <= 0.99:
+                raise HTTPException(status_code=422, detail="gate_threshold must be between 0.01 and 0.99.")
+            changes["gate_threshold"] = round(value, 2)
     memory_note = None
     if "memory" in changes:
         try:
@@ -148,6 +165,16 @@ async def update_bot(bot_id: str, updates: BotUpdate):
             # Recorded in the thread so the model sees the edit where it
             # happened, without the system prompt (and the cache) changing.
             memory_note = memory_note_message(bot_id, memory, message_id=f"msg-{uuid.uuid4().hex[:6]}")
+    todo_note = None
+    if "todo" in changes:
+        try:
+            todo = clean_todo(changes.pop("todo"))
+        except TodoError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if todo != list(bots[index].get("todo") or []):
+            bots[index]["todo"] = todo
+            bots[index]["todo_updated_at"] = datetime.now().isoformat()
+            todo_note = todo_note_message(bot_id, todo, message_id=f"msg-{uuid.uuid4().hex[:6]}")
     archived = changes.pop("archived", None)
     bots[index].update({key: value for key, value in changes.items() if key in EDITABLE_FIELDS})
     if archived is not None:
@@ -159,6 +186,8 @@ async def update_bot(bot_id: str, updates: BotUpdate):
     storage_service.save_bots(bots)
     if memory_note is not None:
         storage_service.add_message(memory_note)
+    if todo_note is not None:
+        storage_service.add_message(todo_note)
     return bots[index]
 
 
@@ -176,6 +205,7 @@ async def delete_bot(bot_id: str):
         logger.warning("Could not stop the computer for %s during deletion: %s", bot_id, exc)
     deleted_messages = storage_service.delete_messages(bot_id)
     storage_service.delete_bot_secrets(bot_id)
+    storage_service.delete_bot_schedules(bot_id)
     bots.pop(index)
     storage_service.save_bots(bots)
     return {"status": "ok", "deleted_id": bot_id, "deleted_messages": deleted_messages}

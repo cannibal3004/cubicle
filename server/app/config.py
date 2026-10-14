@@ -45,6 +45,12 @@ class Settings:
     # Let the model call the governed tools (workspace, computer, connectors)
     # through OpenAI-style function calling. Approvals still apply.
     LLM_TOOLS_ENABLED: bool = os.getenv("LLM_TOOLS_ENABLED", "1").strip().lower() in {"1", "true", "yes"}
+    # Sent as max_tokens when set. 0 leaves the server's own default, which
+    # on some local servers is 8192 and cuts a long tool call in half.
+    LLM_MAX_COMPLETION_TOKENS: int = int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "0"))
+    # Sent as max_tokens when set. 0 leaves the server's own default, which
+    # on some local servers is 8192 and cuts a long tool call in half.
+    LLM_MAX_COMPLETION_TOKENS: int = int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "0"))
     # A safety net, not the working limit: a turn normally ends when the
     # model answers, when the context is full (CONTEXT_STOP_AT) or when it
     # stops making progress (LLM_STALLED_ROUNDS).
@@ -56,6 +62,17 @@ class Settings:
     # The notes are rendered in full after every compaction and after every
     # full rewrite, so this bounds a one-time context cost, not a per-turn one.
     BOT_MEMORY_MAX_CHARS: int = int(os.getenv("BOT_MEMORY_MAX_CHARS", "16000"))
+    # How many items a bot's to-do list may hold. The list travels with every
+    # todo tool result and every compaction, so this bounds that cost.
+    BOT_TODO_MAX_ITEMS: int = int(os.getenv("BOT_TODO_MAX_ITEMS", "50"))
+    # Scheduled tasks: the zone their times are written in (TZ is the usual
+    # name; SCHEDULE_TIMEZONE overrides it for schedules only), how often due
+    # schedules are checked, and bounds. SCHEDULER_ENABLED=0 turns the loop off.
+    SCHEDULE_TIMEZONE: str = (os.getenv("SCHEDULE_TIMEZONE") or os.getenv("TZ") or "UTC").strip()
+    SCHEDULE_TICK_SECONDS: float = float(os.getenv("SCHEDULE_TICK_SECONDS", "30"))
+    SCHEDULER_ENABLED: bool = os.getenv("SCHEDULER_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off")
+    SCHEDULES_MAX_PER_BOT: int = int(os.getenv("SCHEDULES_MAX_PER_BOT", "20"))
+    SCHEDULE_MIN_MINUTES: int = int(os.getenv("SCHEDULE_MIN_MINUTES", "5"))
     # Screenshots as images for the model: auto (unless the catalog says the
     # model has no vision), always, or never.
     LLM_SCREENSHOTS_TO_MODEL: str = os.getenv("LLM_SCREENSHOTS_TO_MODEL", "auto").strip().lower()
@@ -106,7 +123,7 @@ class Settings:
     AUTH_COOKIE_SECURE: bool = os.getenv("AUTH_COOKIE_SECURE", "0").lower() in {"1", "true", "yes"}
     COMPUTER_PROVIDER: str = os.getenv("COMPUTER_PROVIDER", "fake").strip().lower()
     COMPUTER_DOCKER_IMAGE: str = os.getenv(
-        "COMPUTER_DOCKER_IMAGE", "cubicle-computer:2.3.0"
+        "COMPUTER_DOCKER_IMAGE", "cubicle-computer:2.5.0"
     ).strip()
     COMPUTER_DOCKER_BINARY: str = os.getenv("COMPUTER_DOCKER_BINARY", "docker").strip()
     COMPUTER_DOCKER_WORKSPACE_ROOT: Path = Path(
@@ -118,8 +135,19 @@ class Settings:
     COMPUTER_DOCKER_START_TIMEOUT: float = float(
         os.getenv("COMPUTER_DOCKER_START_TIMEOUT", "20")
     )
+    # How long a terminal command may run inside the runtime when the model
+    # sets no limit of its own, and the most it may ask for. The driver
+    # enforces the limit (a command that hits it returns exit code 124 with
+    # its output so far); the API waits that long plus a margin. A page
+    # navigation has its own fixed limit.
     COMPUTER_DOCKER_COMMAND_TIMEOUT: float = float(
-        os.getenv("COMPUTER_DOCKER_COMMAND_TIMEOUT", "30")
+        os.getenv("COMPUTER_DOCKER_COMMAND_TIMEOUT", "60")
+    )
+    COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX: float = float(
+        os.getenv("COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX", "600")
+    )
+    COMPUTER_DOCKER_NAVIGATE_TIMEOUT: float = float(
+        os.getenv("COMPUTER_DOCKER_NAVIGATE_TIMEOUT", "30")
     )
     COMPUTER_DOCKER_RUNTIME_PORT: int = int(os.getenv("COMPUTER_DOCKER_RUNTIME_PORT", "3000"))
     # When the API itself runs in a container (docker compose), runtime

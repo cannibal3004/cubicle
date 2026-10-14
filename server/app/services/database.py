@@ -100,6 +100,18 @@ SCHEMA_MIGRATIONS = {
             PRIMARY KEY (owner_id, scope, bot_id, name)
         );
     """,
+    # Scheduled tasks: a prompt that runs in a bot's chat on a cadence. The
+    # record is a JSON payload like a bot's; bot_id is a column for lookups.
+    5: """
+        CREATE TABLE IF NOT EXISTS schedules (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL DEFAULT 'local-user',
+            bot_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_schedules_bot ON schedules(owner_id, bot_id);
+    """,
 }
 
 OWNER_TABLES = (

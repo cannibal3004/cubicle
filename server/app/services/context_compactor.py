@@ -188,7 +188,9 @@ async def compact_thread(
     # The bot's notes as they stand now travel with the summary, so after the
     # cut the model still sees them (their earlier edits are gone with the
     # older turns), and sees the same text every turn until the next cut.
-    memory = next((str(b.get("memory") or "") for b in storage.get_bots() if b.get("id") == thread_id), "")
+    bot = next((b for b in storage.get_bots() if b.get("id") == thread_id), {})
+    memory = str(bot.get("memory") or "")
+    todo = list(bot.get("todo") or [])
 
     message = {
         "id": f"msg-{uuid.uuid4().hex[:6]}",
@@ -206,6 +208,7 @@ async def compact_thread(
             "prompt_tokens_before": last_prompt_tokens(history),
             "summary_usage": usage or None,
             "memory": memory,
+            "todo": todo,
         },
     }
     storage.add_message(message)

@@ -19,8 +19,11 @@ from app.services.computer_provider import (
     ComputerProviderError,
     check_package_names,
     computer_id_for_bot,
+    check_timeout,
 )
 from app.services.workspace_service import WorkspaceToolCall
+from app.services.bot_todo import STATES as TODO_STATES
+from app.services.schedule_service import ScheduleError, clean_cadence, describe_cadence
 
 
 class ToolCallError(ValueError):
@@ -122,15 +125,21 @@ COMPUTER_TOOLS: List[ToolSpec] = [
     ),
     ToolSpec(
         name="computer_browser_navigate",
-        description="Open an http(s) URL in the sandbox browser.",
+        description=f"Open an http(s) URL in the sandbox browser (gives up after {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT)} seconds if the page does not load).",
         parameters=_obj({"url": {"type": "string", "description": "Absolute http or https URL"}}, ["url"]),
         group="computer",
         needs_approval=True,
     ),
     ToolSpec(
         name="computer_terminal_execute",
-        description="Run a shell command inside the sandbox as its unprivileged user (30 second timeout, 1 MB of output). /workspace and the home directory persist between starts; /tmp does not. There is no sudo: for apt packages use computer_install_packages; pip (in a venv), npm, cargo and similar work normally in the home directory. To create or change files use computer_write_file and computer_edit_file rather than heredocs.",
-        parameters=_obj({"command": {"type": "string", "description": "Shell command to run"}}, ["command"]),
+        description=f"Run a shell command inside the sandbox as its unprivileged user (1 MB of output). It may run for {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT)} seconds unless you set timeout_seconds: longer (up to {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX)}) for builds, installs and test runs, shorter for probes of hosts that may hang. A command that hits its limit is killed and returns exit code 124 with its output so far. /workspace and the home directory persist between starts; /tmp does not. There is no sudo: for apt packages use computer_install_packages; pip (in a venv), npm, cargo and similar work normally in the home directory. To create or change files use computer_write_file and computer_edit_file rather than heredocs.",
+        parameters=_obj(
+            {
+                "command": {"type": "string", "description": "Shell command to run"},
+                "timeout_seconds": {"type": "integer", "description": f"How long it may run, in seconds (default {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT)}, at most {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX)})"},
+            },
+            ["command"],
+        ),
         group="computer",
         needs_approval=True,
     ),
@@ -307,6 +316,91 @@ MEMORY_TOOLS: List[ToolSpec] = [
 ]
 
 
+TODO_TOOLS: List[ToolSpec] = [
+    ToolSpec(
+        name="todo_list",
+        description="Show your to-do list: the items you are working through, each with its id and state (open, doing, done).",
+        parameters=_obj({}),
+        group="todo",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="todo_add",
+        description=(
+            f"Add one or more items to your to-do list (at most {settings.BOT_TODO_MAX_ITEMS} items in all; the result shows the whole list "
+            "with the new ids). Write the list before starting a job with several steps, one short item per step, and add steps as "
+            "you discover them."
+        ),
+        parameters=_obj(
+            {"items": {"type": "array", "items": {"type": "string"}, "description": "The new items, one short line each"}},
+            ["items"],
+        ),
+        group="todo",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="todo_update",
+        description=(
+            "Change one item of your to-do list by id: set its state (open, doing, done), reword it, or remove it. Mark an item doing "
+            "when you start it and done as soon as it is finished, so the list always says where you are. The result shows the whole list."
+        ),
+        parameters=_obj(
+            {
+                "id": {"type": "string", "description": "The item's id, e.g. t3"},
+                "state": {"type": "string", "enum": ["open", "doing", "done"], "description": "The new state"},
+                "text": {"type": "string", "description": "New wording for the item"},
+                "remove": {"type": "boolean", "description": "true to remove the item instead"},
+            },
+            ["id"],
+        ),
+        group="todo",
+        needs_approval=False,
+    ),
+]
+
+
+SCHEDULE_TOOLS: List[ToolSpec] = [
+    ToolSpec(
+        name="schedule_list",
+        description="Show your schedules: prompts set to run in this chat later, with the current time and timezone.",
+        parameters=_obj({}),
+        group="schedule",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="schedule_create",
+        description=(
+            "Schedule a prompt to run in this chat later: once at a time (or in a number of minutes), every N minutes, daily at a time, "
+            "or weekly on chosen days at a time. The run starts a fresh turn with the prompt as the user's message, so the prompt must "
+            "say everything needed to do the job from scratch: what to do, where things are, what to report. Call schedule_list first "
+            "when the time matters; it gives the current time and timezone. The user approves each new schedule."
+        ),
+        parameters=_obj(
+            {
+                "name": {"type": "string", "description": "A short name, e.g. Morning digest"},
+                "prompt": {"type": "string", "description": "The message to run, complete in itself"},
+                "kind": {"type": "string", "enum": ["once", "every", "daily", "weekly"]},
+                "at": {"type": "string", "description": "once: the date and time, YYYY-MM-DD HH:MM in the app's timezone"},
+                "in_minutes": {"type": "integer", "description": "once: alternatively, how many minutes from now"},
+                "minutes": {"type": "integer", "description": "every: the interval in minutes (at least 5)"},
+                "time": {"type": "string", "description": "daily and weekly: the time of day, HH:MM"},
+                "days": {"type": "array", "items": {"type": "integer"}, "description": "weekly: the weekdays, 0 = Monday to 6 = Sunday"},
+            },
+            ["name", "prompt", "kind"],
+        ),
+        group="schedule",
+        needs_approval=True,
+    ),
+    ToolSpec(
+        name="schedule_delete",
+        description="Delete one of your schedules by id (schedule_list shows them). The user approves.",
+        parameters=_obj({"id": {"type": "string", "description": "The schedule id, e.g. sch-1a2b3c4d"}}, ["id"]),
+        group="schedule",
+        needs_approval=True,
+    ),
+]
+
+
 def available_tools(
     *, computer: bool, github: bool = False, connectors: Optional[List[ToolSpec]] = None
 ) -> List[ToolSpec]:
@@ -320,6 +414,8 @@ def available_tools(
         specs.extend(COMPUTER_TOOLS)
     specs.extend(SHARE_TOOLS)
     specs.extend(MEMORY_TOOLS)
+    specs.extend(TODO_TOOLS)
+    specs.extend(SCHEDULE_TOOLS)
     if connectors:
         taken = {spec.name for spec in specs}
         specs.extend(spec for spec in connectors if spec.name not in taken)
@@ -442,6 +538,20 @@ def describe_tools(
             "of every turn. Update them when something durable changes (the goal, a decision, where things are, how to run things), not for "
             "transient state, and change the passage concerned with memory_edit rather than rewriting everything."
         )
+    if "todo" in groups:
+        lines.append(
+            "- Your to-do list: the steps of the job you are on, kept across tool rounds and compactions. For any job with several "
+            "steps, todo_add the steps first, mark each doing when you start it and done when it is finished (todo_update), and add "
+            "steps you discover. Every todo result shows the whole list, the user sees and can edit it, and after a compaction the "
+            "current list comes with the summary. Keep items short; it is a checklist, not notes."
+        )
+    if "schedule" in groups:
+        lines.append(
+            "- Schedules: schedule_create runs a prompt for you later in this chat, once or on a cadence, after the user approves it; "
+            "schedule_list shows them with the current time and timezone; schedule_delete removes one. Use them when the user asks to be "
+            "reminded, to check something later or to repeat a job. Write the prompt as a complete message to your future self: the run "
+            "starts a fresh turn in which only your notes and to-do list carry over."
+        )
     if "github" in groups:
         lines.append("- GitHub: github_list_issues and github_create_issue act through the user's connected GitHub account.")
     if "connector" in groups:
@@ -462,6 +572,11 @@ def describe_tools(
 
 
 # ---- turning a model call into a gateway invocation ---------------------------
+
+
+def _duration(seconds: float) -> str:
+    seconds = int(seconds)
+    return f"{seconds // 60} min" if seconds >= 60 and seconds % 60 == 0 else f"{seconds} s"
 
 
 def parse_arguments(raw: Any) -> Dict[str, Any]:
@@ -559,7 +674,17 @@ def build_invocation(
         return _computer_invocation("browser_navigate", bot_id, {"url": url}, f"Navigate the computer for {bot_id} to {url}")
     if name == "computer_terminal_execute":
         command = _string(arguments, "command", required=True, max_len=TERMINAL_COMMAND_MAX_CHARS)
-        return _computer_invocation("terminal_execute", bot_id, {"command": command}, f"Run in the computer for {bot_id}: {command[:120]}")
+        args: Dict[str, Any] = {"command": command}
+        preview = f"Run in the computer for {bot_id}"
+        if arguments.get("timeout_seconds") not in (None, ""):
+            try:
+                limit = check_timeout(arguments.get("timeout_seconds"))
+            except ComputerProviderError as exc:
+                raise ToolCallError(str(exc)) from exc
+            args["timeout_seconds"] = int(limit)
+            if limit != float(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT):
+                preview += f" (up to {_duration(limit)})"
+        return _computer_invocation("terminal_execute", bot_id, args, f"{preview}: {command[:120]}")
     if name == "computer_read_file":
         path = _computer_file_path(arguments)
         return _computer_invocation("files_read", bot_id, {"path": path}, f"Read {path} from the computer for {bot_id}")
@@ -629,6 +754,60 @@ def build_invocation(
             preview=f"Share {path} from {where} with the user",
         )
 
+    if name == "todo_list":
+        return ActionInvocation(name="todo.list", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the to-do list of {bot_id}")
+    if name == "todo_add":
+        items = arguments.get("items")
+        if isinstance(items, str):
+            items = [items]
+        if not isinstance(items, list) or not items or not all(isinstance(i, str) and i.strip() for i in items):
+            raise ToolCallError("'items' must be a list of one or more item texts.")
+        if len(items) > settings.BOT_TODO_MAX_ITEMS:
+            raise ToolCallError(f"At most {settings.BOT_TODO_MAX_ITEMS} items can be added.")
+        return ActionInvocation(
+            name="todo.add",
+            arguments={"bot_id": bot_id, "items": [i.strip() for i in items]},
+            target={"bot_id": bot_id},
+            preview=f"Add {len(items)} item(s) to the to-do list of {bot_id}",
+        )
+    if name == "todo_update":
+        item_id = _string(arguments, "id", required=True, max_len=20)
+        state = _string(arguments, "state", default="", max_len=20).lower()
+        if state and state not in TODO_STATES:
+            raise ToolCallError("'state' must be open, doing or done.")
+        text = _string(arguments, "text", default="", max_len=1000)
+        remove = bool(arguments.get("remove"))
+        if not remove and not state and not text:
+            raise ToolCallError("Give a new state, a new text, or remove=true.")
+        changes: Dict[str, Any] = {"bot_id": bot_id, "id": item_id, "remove": remove}
+        if state:
+            changes["state"] = state
+        if text:
+            changes["text"] = text
+        what = "Remove" if remove else "Update"
+        return ActionInvocation(name="todo.update", arguments=changes, target={"bot_id": bot_id}, preview=f"{what} to-do item {item_id} of {bot_id}")
+    if name == "schedule_list":
+        return ActionInvocation(name="schedule.list", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the schedules of {bot_id}")
+    if name == "schedule_create":
+        title = _string(arguments, "name", required=True, max_len=80)
+        prompt = _string(arguments, "prompt", required=True, max_len=4000)
+        cadence: Dict[str, Any] = {"kind": _string(arguments, "kind", required=True, max_len=10).lower()}
+        for key in ("at", "in_minutes", "minutes", "time", "days"):
+            if arguments.get(key) not in (None, "", []):
+                cadence[key] = arguments.get(key)
+        try:
+            cleaned = clean_cadence(cadence)
+        except ScheduleError as exc:
+            raise ToolCallError(str(exc)) from exc
+        return ActionInvocation(
+            name="schedule.create",
+            arguments={"bot_id": bot_id, "name": title, "prompt": prompt, "cadence": cleaned},
+            target={"bot_id": bot_id},
+            preview=f"Schedule '{title}' {describe_cadence(cleaned)} for {bot_id}: {prompt[:120]}",
+        )
+    if name == "schedule_delete":
+        schedule_id = _string(arguments, "id", required=True, max_len=40)
+        return ActionInvocation(name="schedule.delete", arguments={"bot_id": bot_id, "id": schedule_id}, target={"bot_id": bot_id}, preview=f"Delete schedule {schedule_id} of {bot_id}")
     if name == "memory_read":
         return ActionInvocation(
             name="memory.read", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the notes of {bot_id}"

@@ -7,6 +7,7 @@ import CommandPicker from './CommandPicker';
 import ModelPicker from './ModelPicker';
 import ToolsPopover from './ToolsPopover';
 import ContextMeter from './ContextMeter';
+import TodoCard from './TodoCard';
 import MascotAvatar from './MascotAvatar';
 import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiEdit2, FiArrowDown } from 'react-icons/fi';
 import {
@@ -55,7 +56,7 @@ function formatHeaderDate(msgs) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-export default function ChatWindow({ bot, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onToggleComputer, onOpenAudit, onOpenSettings, defaultModel, prefill }) {
+export default function ChatWindow({ bot, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onBotPatched, onToggleComputer, onOpenAudit, onOpenSettings, defaultModel, prefill }) {
   const [inputPrompt, setInputPrompt] = useState('');
   // Streaming is tracked per bot by the Dashboard so a reply keeps going
   // while another bot or tab is shown.
@@ -347,6 +348,10 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             })
           );
         } else if (['tool.started', 'tool.completed', 'tool.failed', 'tool.denied', 'tool.expired'].includes(event.type)) {
+          if (event.type === 'tool.completed' && String(event.callName || '').startsWith('todo_') && Array.isArray(event.result?.items) && onBotPatched) {
+            // A todo result carries the whole list: show it without a refetch.
+            onBotPatched(botId, { todo: event.result.items });
+          }
           if (event.requestId) {
             setPendingApprovals((prev) => prev.filter((approval) => approval.requestId !== event.requestId));
           }
@@ -410,7 +415,25 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
       .then((status) => {
         if (cancelled) return;
         const turn = status?.turn;
-        if (turn && turn.status === 'running') attachToTurn(botId, turn.turn_id, 0);
+        if (turn && turn.status === 'running') {
+          // A turn started elsewhere (another machine, a schedule) may have
+          // posted messages this tab has not seen: pull them in, ahead of
+          // the reply the replayed events are about to build.
+          fetchChatHistory(botId)
+            .then((history) => {
+              if (cancelled) return;
+              setMessagesFor(botId, (prev) => {
+                const current = prev || [];
+                const seen = new Set(current.map((m) => m.id));
+                const missing = (history || []).filter((m) => !seen.has(m.id));
+                if (!missing.length) return current;
+                const at = current.findIndex((m) => m.isStreaming);
+                return at === -1 ? [...current, ...missing] : [...current.slice(0, at), ...missing, ...current.slice(at)];
+              });
+            })
+            .catch(() => {});
+          attachToTurn(botId, turn.turn_id, 0);
+        }
       })
       .catch(() => {});
     return () => {
@@ -717,6 +740,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
               bot={bot}
               onSave={(toolSettings) => onUpdateBot(bot.id, { tool_settings: toolSettings })}
               onSaveAutoApproval={(mode) => onUpdateBot(bot.id, { auto_approval: mode })}
+              onSaveGateThreshold={(value) => onUpdateBot(bot.id, { gate_threshold: value === null ? 'inherit' : value })}
               onOpenEditor={onEditBot}
             />
           )}
@@ -731,6 +755,8 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
           </button>
         </div>
       </header>
+
+      {bot && <TodoCard bot={bot} onSave={onUpdateBot ? (items) => onUpdateBot(bot.id, { todo: items }) : null} />}
 
       {/* Main Canvas Scrollable Chat Thread */}
       <div ref={scrollContainerRef} onScroll={handleThreadScroll} className="flex-1 overflow-y-auto px-6 py-4 relative">

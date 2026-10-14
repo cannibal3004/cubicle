@@ -122,7 +122,14 @@ function MessageItem({ message, botId }) {
             />
           )}
           <div className="flex justify-end gap-3">
-            <span className="break-words">{message.text}</span>
+            <span className="break-words">
+              {message.raw_payload?.scheduled && (
+                <span className="block text-[10px] font-mono text-zinc-300/70 mb-0.5" title={message.raw_payload.scheduled.cadence || ''}>
+                  scheduled · {message.raw_payload.scheduled.name}
+                </span>
+              )}
+              {message.text}
+            </span>
             {formattedTime && (
               <span className="text-[10px] text-zinc-300/70 font-mono tracking-tight select-none flex-shrink-0 self-end ml-auto">
                 {formattedTime}
@@ -176,6 +183,20 @@ function MessageItem({ message, botId }) {
           Notes edited{message.text ? ` · ${message.text.length} characters` : ' · cleared'}{formattedTime ? ` · ${formattedTime}` : ''}
         </summary>
         <div className="px-3 pb-3 leading-relaxed whitespace-pre-wrap break-words">{message.text || 'The notes are empty.'}</div>
+      </details>
+    );
+  }
+
+  // The user edited the bot's to-do list from the card above the chat.
+  if (message.sender === 'system' && message.item_type === 'todo') {
+    const items = message.raw_payload?.items || [];
+    const done = items.filter((i) => i.state === 'done').length;
+    return (
+      <details className="my-3 mx-auto max-w-xl rounded-xl border border-cyan-500/20 bg-cyan-500/5 text-[11px] text-zinc-300 shadow-sm">
+        <summary className="cursor-pointer select-none px-3 py-1.5 font-mono text-cyan-300/90">
+          To-do list edited{items.length ? ` · ${done} of ${items.length} done` : ' · cleared'}{formattedTime ? ` · ${formattedTime}` : ''}
+        </summary>
+        <div className="px-3 pb-3 leading-relaxed whitespace-pre-wrap break-words font-mono">{message.text || '(empty)'}</div>
       </details>
     );
   }

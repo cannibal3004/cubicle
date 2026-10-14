@@ -394,6 +394,43 @@ class StorageService:
             )
         return cursor.rowcount
 
+    # ---- schedules ---------------------------------------------------------
+
+    def list_schedules(self, bot_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        query = "SELECT payload FROM schedules WHERE owner_id = ?"
+        params: List[Any] = [self.owner_id]
+        if bot_id is not None:
+            query += " AND bot_id = ?"
+            params.append(bot_id)
+        query += " ORDER BY created_at, rowid"
+        with self.database.connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        return [payload for row in rows if isinstance((payload := self._decode_payload(row[0])), dict)]
+
+    def get_schedule(self, schedule_id: str) -> Optional[Dict[str, Any]]:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT payload FROM schedules WHERE owner_id = ? AND id = ?", (self.owner_id, schedule_id)).fetchone()
+        payload = self._decode_payload(row[0]) if row else None
+        return payload if isinstance(payload, dict) else None
+
+    def save_schedule(self, record: Dict[str, Any]) -> None:
+        with self.database.connect() as connection:
+            connection.execute(
+                "INSERT INTO schedules(id, owner_id, bot_id, created_at, payload) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET bot_id = excluded.bot_id, payload = excluded.payload",
+                (str(record["id"]), self.owner_id, str(record["bot_id"]), str(record.get("created_at") or _now()), json.dumps(record)),
+            )
+
+    def delete_schedule(self, schedule_id: str) -> bool:
+        with self.database.connect() as connection:
+            cursor = connection.execute("DELETE FROM schedules WHERE owner_id = ? AND id = ?", (self.owner_id, schedule_id))
+        return cursor.rowcount > 0
+
+    def delete_bot_schedules(self, bot_id: str) -> int:
+        with self.database.connect() as connection:
+            cursor = connection.execute("DELETE FROM schedules WHERE owner_id = ? AND bot_id = ?", (self.owner_id, bot_id))
+        return cursor.rowcount
+
     def secret_values(self, bot_id: str = "") -> Dict[str, str]:
         """Decrypted app secrets with the bot's own on top (same name: the bot's wins)."""
         with self.database.connect() as connection:

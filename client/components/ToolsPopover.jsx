@@ -35,7 +35,12 @@ const AUTO_APPROVAL_CHOICES = [
 
 // Quick per-conversation switches for tool groups and connected apps.
 // Changes are saved to the bot straight away and apply from the next turn.
-export default function ToolsPopover({ bot, onSave, onSaveAutoApproval, onOpenEditor }) {
+export default function ToolsPopover({ bot, onSave, onSaveAutoApproval, onSaveGateThreshold, onOpenEditor }) {
+  // The bot's own risk threshold, or null to follow App Settings. Saved on release.
+  const [threshold, setThreshold] = useState(typeof bot?.gate_threshold === 'number' ? bot.gate_threshold : null);
+  useEffect(() => {
+    setThreshold(typeof bot?.gate_threshold === 'number' ? bot.gate_threshold : null);
+  }, [bot?.id, bot?.gate_threshold]);
   const [open, setOpen] = useState(false);
   const [catalog, setCatalog] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -171,6 +176,68 @@ export default function ToolsPopover({ bot, onSave, onSaveAutoApproval, onOpenEd
                   </p>
                 </div>
               </>
+            )}
+
+            {onSaveGateThreshold && (
+              <div className="px-4 pb-3">
+                <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-zinc-500">
+                  <span>Risk threshold</span>
+                  <span className="font-mono normal-case">{threshold === null ? 'app setting' : threshold.toFixed(2)}</span>
+                </div>
+                <div className="mt-1.5 flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="0.05"
+                    max="0.9"
+                    step="0.05"
+                    value={threshold === null ? 0.2 : threshold}
+                    disabled={saving}
+                    onChange={(e) => setThreshold(Number(e.target.value))}
+                    onMouseUp={async (e) => {
+                      const value = Number(e.target.value);
+                      setSaving(true);
+                      try {
+                        await onSaveGateThreshold(value);
+                      } finally {
+                        setSaving(false);
+                      }
+                    }}
+                    onKeyUp={async (e) => {
+                      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) return;
+                      const value = Number(e.target.value);
+                      setSaving(true);
+                      try {
+                        await onSaveGateThreshold(value);
+                      } finally {
+                        setSaving(false);
+                      }
+                    }}
+                    className={`flex-1 accent-emerald-500 ${threshold === null ? 'opacity-50' : ''}`}
+                    aria-label="Risk threshold for this bot"
+                  />
+                  {threshold !== null && (
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={async () => {
+                        setSaving(true);
+                        try {
+                          await onSaveGateThreshold(null);
+                        } finally {
+                          setSaving(false);
+                        }
+                      }}
+                      className="text-[10px] text-zinc-400 hover:text-white"
+                    >
+                      app
+                    </button>
+                  )}
+                </div>
+                <p className="mt-1.5 text-[10px] text-zinc-500">
+                  Risk scores below this are approved for this bot. Higher lets more through: reads of the web score around 0.3 to 0.6 as
+                  &quot;downloads code&quot;, so a research bot may need 0.5 or more; 0.2 is the strict default.
+                </p>
+              </div>
             )}
           </div>
 

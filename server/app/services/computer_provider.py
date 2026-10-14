@@ -114,6 +114,23 @@ def check_command(command: Any) -> str:
     return command
 
 
+def check_timeout(value: Any) -> float:
+    """Seconds a terminal command may run: the model's request, clamped; the default when absent."""
+    from app.config import settings  # imported here, as the provider factory does, to keep config import-free
+
+    default = float(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT)
+    maximum = max(default, float(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX))
+    if value is None or value == "":
+        return default
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ComputerProviderError("'timeout_seconds' must be a number of seconds.") from exc
+    if seconds != seconds or seconds < 1:
+        raise ComputerProviderError("'timeout_seconds' must be at least 1.")
+    return min(seconds, maximum)
+
+
 def check_file_content(content: Any) -> str:
     if not isinstance(content, str):
         raise ComputerProviderError("File content must be text.")
@@ -179,7 +196,7 @@ class ComputerProvider(Protocol):
     async def browser_navigate(self, computer_id: str, url: str) -> Dict[str, Any]:
         ...
 
-    async def terminal_execute(self, computer_id: str, command: str) -> Dict[str, Any]:
+    async def terminal_execute(self, computer_id: str, command: str, timeout_seconds: Any = None) -> Dict[str, Any]:
         ...
 
     async def files_list(self, computer_id: str, path: str = "/workspace") -> Dict[str, Any]:
@@ -396,15 +413,17 @@ class FakeComputerProvider:
             "state": status.state,
         }
 
-    async def terminal_execute(self, computer_id: str, command: str) -> Dict[str, Any]:
+    async def terminal_execute(self, computer_id: str, command: str, timeout_seconds: Any = None) -> Dict[str, Any]:
         status = self._require_active(computer_id)
         command = check_command(command)
+        limit = check_timeout(timeout_seconds)
         self._touch(status, "terminal.exec")
         return {
             "computer_id": status.computer_id,
             "provider": self.provider_name,
             "operation": "terminal.exec",
             "command": command,
+            "timeout_seconds": limit,
             "exit_code": 0,
             "stdout": "[fake computer] command accepted; no process was started.",
             "stderr": "",

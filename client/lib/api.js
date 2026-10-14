@@ -564,6 +564,34 @@ export async function deleteSecret(name) {
   return secretsCall(`/secrets/${encodeURIComponent(name)}`, { method: 'DELETE' });
 }
 
+export async function fetchBotSchedules(botId) {
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/schedules`);
+}
+
+export async function createBotSchedule(botId, schedule) {
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/schedules`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(schedule),
+  });
+}
+
+export async function updateBotSchedule(botId, scheduleId, changes) {
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/schedules/${encodeURIComponent(scheduleId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(changes),
+  });
+}
+
+export async function deleteBotSchedule(botId, scheduleId) {
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/schedules/${encodeURIComponent(scheduleId)}`, { method: 'DELETE' });
+}
+
+export async function runBotSchedule(botId, scheduleId) {
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/schedules/${encodeURIComponent(scheduleId)}/run`, { method: 'POST' });
+}
+
 export async function fetchBotSecrets(botId) {
   return secretsCall(`/bots/${encodeURIComponent(botId)}/secrets`);
 }

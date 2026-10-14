@@ -116,9 +116,9 @@ The local server creates a mode-0600 session token in `DATA_DIR` and the browser
 The default provider is the deterministic local adapter. To enable the real sandbox desktop (browser, terminal, file manager, input, screenshots, and live VNC), build the pinned runtime image and opt in to the Docker provider:
 
 ```bash
-docker build -t cubicle-computer:2.3.0 ./runtime
+docker build -t cubicle-computer:2.5.0 ./runtime
 export COMPUTER_PROVIDER=docker
-export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.3.0
+export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.5.0
 ```
 
 The Docker daemon must be running before starting the API. Each bot gets a separate container, a separate workspace under `DATA_DIR/computers`, an ephemeral loopback-only port, and an internal runtime token. The sandbox user has no capabilities and cannot gain any; CPU, memory, process, and shared-memory limits are applied.
@@ -199,8 +199,15 @@ The server reads these variables from the environment:
 | `LLM_BASE_URL` | per provider | API base URL. Defaults to `https://openrouter.ai/api/v1` for `openai_compatible` and `https://api.muapi.ai/api/v1` for `muapi` |
 | `LLM_REASONING_EFFORT` | empty | When set it is sent verbatim as `reasoning_effort`. Common values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; which ones work depends on the server and model. Leave empty to let the server use its default |
 | `LLM_TOOLS_ENABLED` | `1` | Offer the governed tools to the model through function calling. Set `0` to keep only the explicit slash commands |
+| `LLM_MAX_COMPLETION_TOKENS` | `0` | Sent as `max_tokens` when set. `0` leaves the server's default; a local server that stops at 8192 cuts long tool calls, which the chat then reports as cut off |
 | `LLM_MAX_TOOL_ROUNDS` | `100` | Safety net on model round-trips in one turn. A turn normally ends when the model answers, when the context is full (`CONTEXT_STOP_AT`, default 0.9 of the window, after compaction could not make room) or when it stops making progress (`LLM_STALLED_ROUNDS`, default 3 consecutive rounds that only repeat earlier calls with the same results). In every case the model gets one final call without tools so it still answers |
 | `BOT_MEMORY_MAX_CHARS` | `16000` | Size of a bot's notes in characters. They are rendered in full after a compaction and after a full rewrite, so this bounds that one-time context cost |
+| `BOT_TODO_MAX_ITEMS` | `50` | Items a bot's to-do list may hold. The whole list comes with every todo tool result and every compaction |
+| `TZ` / `SCHEDULE_TIMEZONE` | `UTC` | The timezone scheduled tasks are written in (an IANA name such as `America/Chicago`); `SCHEDULE_TIMEZONE` overrides `TZ` for schedules only |
+| `SCHEDULE_TICK_SECONDS` | `30` | How often due schedules are checked |
+| `SCHEDULES_MAX_PER_BOT` | `20` | Schedules a bot may have |
+| `SCHEDULE_MIN_MINUTES` | `5` | Shortest interval for an every-N-minutes schedule |
+| `SCHEDULER_ENABLED` | `1` | `0` turns the scheduler loop off |
 | `LLM_SCREENSHOTS_TO_MODEL` | `auto` | Send sandbox screenshots to the model as images: `auto` (unless the model catalog says it has no vision), `always`, or `never` |
 | `CONTEXT_COMPACT_AT` | `0.7` | Share of the model's context window at which the thread is compacted: everything but the most recent turns is summarized into one stored message and the context starts there. Checked before a turn and between its tool rounds. `0` turns the automatic trigger off; `/compact` always works |
 | `CONTEXT_KEEP_RECENT_TOKENS` | `30000` | How much recent conversation, in tokens, is kept verbatim when compacting. Whole turns are kept, newest first, until the budget is spent; the newest turn is always kept |
@@ -218,13 +225,15 @@ The server reads these variables from the environment:
 | `AUTH_COOKIE_SECURE` | `0` | Set to `1` when serving over HTTPS |
 | `CORS_ORIGINS` | localhost and loopback client origins | Comma-separated browser origins allowed by the API |
 | `COMPUTER_PROVIDER` | `fake` | Computer adapter: `fake` or `docker` |
-| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.3.0` | Pinned local runtime image |
+| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.5.0` | Pinned local runtime image |
 | `COMPUTER_DOCKER_WORKSPACE_ROOT` | `DATA_DIR/computers` | Root for per-bot runtime workspaces |
 | `COMPUTER_DOCKER_CPU_LIMIT` | `2.0` | Docker CPU limit per computer |
 | `COMPUTER_DOCKER_MEMORY_LIMIT` | `2g` | Docker memory limit per computer |
 | `COMPUTER_DOCKER_PIDS_LIMIT` | `512` | Maximum processes per computer |
 | `COMPUTER_DOCKER_START_TIMEOUT` | `20` | Runtime readiness timeout in seconds |
-| `COMPUTER_DOCKER_COMMAND_TIMEOUT` | `30` | Docker/driver operation timeout in seconds |
+| `COMPUTER_DOCKER_COMMAND_TIMEOUT` | `60` | Seconds a terminal command may run when the model sets no `timeout_seconds`; the driver kills it at the limit and returns exit code 124 with its output so far |
+| `COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX` | `600` | The most the model may ask for with `timeout_seconds` |
+| `COMPUTER_DOCKER_NAVIGATE_TIMEOUT` | `30` | Seconds a page navigation may take before it fails |
 | `COMPUTER_DOCKER_NETWORK` | empty | When set, runtime containers join this Docker network and are reached by name instead of a port published on loopback. Used by the compose stack |
 | `COMPUTER_DOCKER_WORKSPACE_MODE` | `bind` | `bind` mounts a host directory per computer; `volume` uses a named Docker volume per computer |
 | `COMPUTER_DOCKER_HOST_WORKSPACE_ROOT` | empty | In `bind` mode from inside a container: the host path equivalent of `COMPUTER_DOCKER_WORKSPACE_ROOT` |
@@ -326,6 +335,8 @@ With an OpenAI-compatible provider the model is offered these functions. The gat
 | `shared_folder_list`, `shared_folder_read`, `shared_folder_write`, `shared_folder_delete` | `workspace.*` | yes (not offered to a bot whose computer has the folder at `/shared`) |
 | `share_file` | `files.share` | no (puts a download card for a shared folder or computer file in the chat) |
 | `memory_read`, `memory_write`, `memory_edit` | `memory.*` | no (the bot's own notes, see below) |
+| `todo_list`, `todo_add`, `todo_update` | `todo.*` | no (the bot's working list, see below) |
+| `schedule_list`, `schedule_create`, `schedule_delete` | `schedule.*` | create and delete yes; list no (see below) |
 | `computer_start`, `computer_screenshot`, `computer_files_list`, `computer_read_file`, `computer_request_takeover` | `computer.*` | no |
 | `computer_browser_navigate`, `computer_terminal_execute`, `computer_write_file`, `computer_edit_file`, `computer_send_input`, `computer_install_packages` | `computer.*` | yes |
 | `<app>_<action>` for every app connected through Composio, e.g. `gmail_fetch_emails`, `github_create_a_pull_request` | `connector.composio_read` or `connector.composio_action` | no for tools Composio marks read-only, yes for everything else |
@@ -335,13 +346,21 @@ With an OpenAI-compatible provider the model is offered these functions. The gat
 
 Each bot keeps one small document across conversations and compactions: the goal, decisions, where things are, how to run things. The bot reads it with `memory_read`, starts or reorganises it with `memory_write`, and changes one passage with `memory_edit` (an exact, unique find-and-replace; the result shows only the changed passage, so a one-line change does not cost a full rewrite). The notes are shown in the bot editor, where the user can edit them too; such edits appear in the chat so the model sees them. They are never put in the system prompt, which keeps the provider's prompt cache intact: the bot's own writes stay in the transcript and each compaction summary carries the current notes. `BOT_MEMORY_MAX_CHARS` (default 16000) bounds the size.
 
+### Bot to-do list
+
+Notes are for what stays true; the to-do list is for what is left to do on the job at hand. The bot adds the steps with `todo_add` and moves each through open, doing and done with `todo_update` (by a short id such as `t3`, so a change is one small call), and every result carries the whole list. The list is shown above the chat, where you can tick, reword, add and remove items; your edits appear in the thread so the model sees them. Like the notes it never enters the system prompt: the bot's own changes stay in the transcript and each compaction summary carries the current list, so work survives a compaction or a turn that was cut off. When a turn's tools are withdrawn (context full, no progress, round cap) and items remain unfinished, the bot is asked to name them in its reply so the next turn picks them up. `BOT_TODO_MAX_ITEMS` (default 50) bounds the size.
+
+### Scheduled tasks
+
+A schedule is a prompt that runs in a bot's chat on its own: once at a time, every N minutes, daily at a time, or weekly on chosen days at a time, in the app's timezone (`TZ`). When it is due, the prompt is posted into the chat as a user message marked as scheduled and an ordinary turn starts: the bot has its tools, notes and to-do list, approvals work as they do for any turn (a run that needs one waits for you, and is recorded as such if nobody answers), and the reply lands in the chat. A bot whose reply is still in progress skips that run. Nothing is caught up after a restart; the next run is computed from the cadence. You manage schedules in the bot editor (add, pause, run now, remove), and the bot can create and delete them itself with `schedule_create` and `schedule_delete`, which pause for approval, so "remind me tomorrow at nine" and "check this every morning" are things a bot can set up. `schedule_list` tells it the current time and timezone. The scheduler is one background task inside the API process; it checks every `SCHEDULE_TICK_SECONDS`.
+
 ### Auto-approval
 
 Every tool that needs approval still opens an approval card. With auto-approval on, a small decision model scores the proposed action while the card is up and, when every risk score is low, answers the card on your behalf; the chat shows which calls it approved (a lightning mark on the tool chip) and the card says why. Anything it is unsure about, and anything it cannot score, waits for you exactly as before.
 
 The model is asked five plain yes/no questions about the action and the message that led to it: does it permanently delete or discard data, upload local data somewhere, read secrets or change system settings, download and run code, or do something irreversible such as sending a message or publishing. Two things are decided by rule instead: a write that shrinks an existing file to a quarter of its size or less is always held, since the model cannot tell a rewrite from a wipe, and pointer or keyboard input to a bot computer is not scored (it auto-approves in **On**). It sees the tool name, its display arguments (a path and byte count, never file contents), and the user's latest message; it never sees tool output, so text the bot read cannot talk the gate into anything. It runs as `decider-4b` (or `decider-0.8b`) on a halogen-flash-server NPU, scoring an action in about a second.
 
-Set it up in **App Settings → Auto-approval**: the server URL (with a Test button), the mode, and the risk threshold. **Shadow** is the mode to start with: approvals behave exactly as before, and **Audit → Auto-approval** shows what the model would have approved next to what you actually decided, including the actions you denied that it would have let through. Switch to **On** once that list looks right. A bot's Tools menu can override the mode for that bot alone. Every scored action is kept in the local database (`gate_decisions`) with its scores, the exact state the model saw, and the final decision, so the log doubles as labelled data for tuning the questions or the threshold later.
+Set it up in **App Settings → Auto-approval**: the server URL (with a Test button), the mode, and the risk threshold. **Shadow** is the mode to start with: approvals behave exactly as before, and **Audit → Auto-approval** shows what the model would have approved next to what you actually decided, including the actions you denied that it would have let through. Switch to **On** once that list looks right. A bot's Tools menu can override the mode and the risk threshold for that bot alone: fetching pages and running curl score around 0.3 to 0.6 as "downloads code", so a research bot that should read the web unattended wants a threshold of 0.5 or more while the rest keep the strict default. Every scored action is kept in the local database (`gate_decisions`) with its scores, the exact state the model saw, and the final decision, so the log doubles as labelled data for tuning the questions or the threshold later.
 
 Computer tools appear only when `COMPUTER_PROVIDER=docker`. Connector tools appear for each toolkit with an active Composio connection. If the toolkit's auth config in the Composio dashboard restricts the tools available for execution, exactly those tools are offered; otherwise only the tools Composio flags as important are, at most `COMPOSIO_TOOLS_PER_TOOLKIT` per app (see `COMPOSIO_IMPORTANT_TOOLS_ONLY`). Results are trimmed to 20 KB before they are returned to the model, and a screenshot is attached as an image message when the model accepts images.
 
@@ -396,6 +415,9 @@ All routes are prefixed with `/api/v1`.
 | GET | `/audit?limit=100` | Read recent approval, tool, and connector events |
 | GET | `/tools/catalog` | Built-in tool groups and every connected app's tools, with the globally withheld apps |
 | GET | `/files/download?source=&path=&bot_id=` | Download (or `inline=1` preview) a file a bot shared; confined to the shared folder or the bot's computer workspace |
+| GET/POST | `/bots/{id}/schedules` | List a bot's scheduled tasks (with the current time and timezone) / add one `{name, prompt, cadence}` |
+| PUT/DELETE | `/bots/{id}/schedules/{sid}` | Change (`name`, `prompt`, `cadence`, `enabled`) / remove a schedule |
+| POST | `/bots/{id}/schedules/{sid}/run` | Run a schedule's prompt now |
 | GET | `/connectors/catalog` | Return curated or Composio-backed connector cards |
 | GET | `/connectors?services=...` | Check connector connection status |
 | POST | `/connectors/{slug}/authorize` | Request an OAuth URL |
@@ -439,7 +461,7 @@ The following surfaces are present but should not be mistaken for completed infr
 - **Single local owner:** Authentication, bearer validation, and owner-scoped rows are present, but user provisioning, roles beyond the local owner, and multi-user grants are still pending.
 - **Single-user local storage:** SQLite improves restart durability, but multi-user provisioning, backups, and multi-instance coordination are still pending.
 - **Docker runtime is opt-in:** The Docker/Playwright provider and image are included, but live container startup depends on a running Docker daemon and a locally built image. The current runtime has browser screenshots and controlled operations, not a full desktop or VNC session.
-- **No routines:** Bots keep notes across conversations, but there is no scheduled routine engine or background worker yet.
+- **Scheduled tasks run inside the API process:** There is one scheduler loop, started with the server. A run that falls while the server is down is not caught up, and a schedule's turn needs the same approvals as any other, so an unattended bot should have auto-approval on and read-only tools.
 - **No voice or multi-client apps:** Voice, desktop, and mobile clients are not included in this repository.
 - **Shared folder and computer tools are intentionally narrow:** Shared folder commands support confined file listing, reads, writes and deletes. Docker computer operations run in a bot-scoped container and require approval for browser navigation, terminal commands, and input; human takeover and unrestricted desktop control are not implemented.
 - **Secret redaction is best-effort:** Tool results are scrubbed of each secret's plain, JSON-escaped, base64, hex and URL-encoded forms. Screenshots, truncated values and any other transformation pass through. Treat the computer's secrets as available to the bot, because they are.
@@ -487,7 +509,7 @@ Confirm that the daemon is running, the runtime image was built, and the API use
 
 ```bash
 docker info
-docker image inspect cubicle-computer:2.3.0
+docker image inspect cubicle-computer:2.5.0
 echo "$COMPUTER_PROVIDER"
 ```
 

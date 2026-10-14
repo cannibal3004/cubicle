@@ -170,6 +170,13 @@ class ApprovalGate:
         app = self.storage.get_settings().get("auto_approval")
         return app if app in MODES else "off"
 
+    def threshold_for(self, bot: Optional[Dict[str, Any]]) -> float:
+        """The effective risk threshold for a bot: its own override, else the app setting."""
+        override = (bot or {}).get("gate_threshold")
+        if isinstance(override, (int, float)) and not isinstance(override, bool) and 0.01 <= float(override) <= 0.99:
+            return float(override)
+        return self._config()["threshold"]
+
     def _config(self) -> Dict[str, Any]:
         current = self.storage.get_settings()
         try:
@@ -220,6 +227,7 @@ class ApprovalGate:
         *,
         mode: str,
         user_request: str,
+        threshold: Optional[float] = None,
     ) -> GateVerdict:
         """Score one open action. Never raises; failures become an `error` verdict."""
         if mode not in ("shadow", "on"):
@@ -227,6 +235,8 @@ class ApprovalGate:
         if not request.requires_approval:
             return GateVerdict(mode=mode, outcome="skipped", reason="action does not need approval")
         config = self._config()
+        if threshold is not None:
+            config["threshold"] = min(0.99, max(0.01, float(threshold)))
         state = self.build_state(request, call, user_request)
         ruled = self._apply_rules(request, state, mode=mode, threshold=config["threshold"])
         if ruled is not None:

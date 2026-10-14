@@ -231,6 +231,42 @@ class StreamingTests(unittest.TestCase):
             ],
         )
 
+    def test_a_length_cut_is_reported_and_a_completion_cap_is_sent_when_set(self):
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=_sse(
+                    {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "computer_terminal_execute", "arguments": "{\"command\": \"echo a"}}]}}]},
+                    {"choices": [{"delta": {}, "finish_reason": "length"}]},
+                    {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 8192, "total_tokens": 8202}},
+                ),
+            )
+
+        from unittest import mock
+
+        from app.services import openai_compatible_service as service_module
+
+        with mock.patch.object(service_module.settings, "LLM_MAX_COMPLETION_TOKENS", 16384):
+            events = _collect(_service_with_handler(handler).stream_chat_completion("m", [{"role": "user", "content": "hi"}], "", _config()))
+        self.assertEqual(captured["body"]["max_tokens"], 16384)
+        self.assertEqual(
+            events,
+            [
+                {"type": "tool_calls", "calls": [{"id": "c1", "name": "computer_terminal_execute", "arguments": "{\"command\": \"echo a"}]},
+                {"type": "truncated", "reason": "length"},
+                {"type": "usage", "prompt_tokens": 10, "completion_tokens": 8192, "total_tokens": 8202},
+                {"type": "turn.completed", "ok": True},
+            ],
+        )
+        # Unset, no cap is sent.
+        with mock.patch.object(service_module.settings, "LLM_MAX_COMPLETION_TOKENS", 0):
+            _collect(_service_with_handler(handler).stream_chat_completion("m", [{"role": "user", "content": "hi"}], "", _config()))
+        self.assertNotIn("max_tokens", captured["body"])
+
     def test_streamed_tool_call_fragments_are_assembled(self):
         captured = {}
 

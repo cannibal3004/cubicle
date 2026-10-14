@@ -21,9 +21,10 @@ from app.services.approval_gate import approval_gate
 from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs
-from app.services.context_builder import build_history_messages, cap_message_results, trim_result_text
+from app.services.context_builder import build_history_messages, cap_message_results, safe_arguments, trim_result_text
 from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
 from app.services import bot_memory as _bot_memory  # noqa: F401 - registers memory.read/write
+from app.services.bot_todo import get_todo
 from app.services.secrets_service import names_for, redactor_for
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
 from app.services.llm_tools import (
@@ -52,6 +53,14 @@ _STOP_PROMPTS = {
     "context": "The context window is nearly full and the older history has already been compacted as far as it can be.",
     "stalled": "Your last tool calls repeated earlier calls of this turn and returned the same results, so they are not making progress.",
 }
+# Shown in the chat when the server stopped the model at its output limit.
+_CUT_NOTE = "[The reply was cut off at the model's output limit.]"
+# Told to the model with a tool call its cut output left unreadable.
+_CUT_HINT = (
+    " Your output was cut off at the completion token limit before this call was complete. Make the call much shorter: "
+    "write long scripts or data to a file with computer_write_file (in pieces if needed) and run the file, instead of "
+    "putting them in one command."
+)
 _STOP_NOTES = {
     "rounds": "[Stopped after {rounds} tool rounds without a final answer.]",
     "context": "[Stopped: the context window is full and could not be compacted further.]",
@@ -170,6 +179,7 @@ async def _perform_action(
     call_name: Optional[str] = None,
     gate_mode: str = "off",
     user_request: str = "",
+    gate_threshold: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Run one governed action through the gateway, emitting events on the turn.
 
@@ -217,7 +227,9 @@ async def _perform_action(
     # (shadow, a risky score, or any error) the card stays and the user decides.
     verdict = None
     if approval and gate_mode in ("shadow", "on"):
-        verdict = await approval_gate.evaluate(action_request, action_call, mode=gate_mode, user_request=user_request)
+        verdict = await approval_gate.evaluate(
+            action_request, action_call, mode=gate_mode, user_request=user_request, threshold=gate_threshold
+        )
         approval_gate.record(action_request, verdict)
         turn.emit({"type": "gate.scored", **base, "verdict": verdict.to_event()})
         if verdict.auto_approved:
@@ -330,6 +342,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
     tools_prompt = describe_tools(tool_specs, secret_names=names_for(thread_id))
     # The bot's auto-approval mode is fixed for the whole turn, like its tools.
     gate_mode = approval_gate.mode_for(current_bot)
+    gate_threshold = approval_gate.threshold_for(current_bot)
     return {
         "history": history,
         "current_bot": current_bot,
@@ -346,6 +359,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         "tool_definitions": tool_definitions,
         "tools_prompt": tools_prompt,
         "gate_mode": gate_mode,
+        "gate_threshold": gate_threshold,
     }
 
 
@@ -367,6 +381,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
     tool_definitions = setup["tool_definitions"]
     tools_prompt = setup["tools_prompt"]
     gate_mode = setup["gate_mode"]
+    gate_threshold = setup["gate_threshold"]
     replay_tools = llm_config.provider != "muapi"
 
     async def run(turn: Turn) -> None:
@@ -433,7 +448,9 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             turn.emit({"type": "tool.failed", "tool": exc.tool, "error": str(exc)})
 
         if action_call:
-            outcome = await _perform_action(turn, thread_id, action_call, gate_mode=gate_mode, user_request=last_user_text)
+            outcome = await _perform_action(
+                turn, thread_id, action_call, gate_mode=gate_mode, user_request=last_user_text, gate_threshold=gate_threshold
+            )
             if outcome.get("status") == "completed":
                 tool_context = f"Action result ({action_call.name}): {_tool_result_text(_compact_result(outcome['result']))}"
             else:
@@ -488,6 +505,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             round_text = ""
             pending_calls: List[Dict[str, Any]] = []
             round_ok = True
+            round_cut = False
 
             round_prompt = turn_system_prompt
             round_tools = tool_definitions
@@ -497,6 +515,10 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     f"{turn_system_prompt}\n\n{_STOP_PROMPTS[stop_reason]} "
                     "Do not call tools. Reply to the user now with what you found, and say what is still unverified."
                 )
+                # The list is the handoff to the next turn: name what is left.
+                left = [item for item in get_todo(thread_id) if item["state"] != "done"]
+                if left:
+                    round_prompt += f" Your to-do list still has {len(left)} unfinished item(s); say which they are so the next turn can pick them up."
 
             async for event in llm_service.stream_chat_completion(
                 model=selected_model,
@@ -518,11 +540,19 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     usage_prompt = int(event.get("prompt_tokens") or 0)
                     usage_completion += int(event.get("completion_tokens") or 0)
                     turn.emit({"type": "turn.usage", "botMsgId": bot_msg_id, "usage": usage_payload()})
+                elif event["type"] == "truncated":
+                    round_cut = True
+                    turn.emit({"type": "turn.truncated", "botMsgId": bot_msg_id, "reason": event.get("reason") or "length"})
                 elif event["type"] == "turn.completed":
                     round_ok = bool(event.get("ok", True))
 
             if round_text.strip():
                 text_pieces.append(round_text)
+            if round_cut and not pending_calls:
+                # A text reply stopped at the output limit: say so rather
+                # than leave a sentence hanging as if it were the answer.
+                text_pieces.append(f"\n\n{_CUT_NOTE}")
+                turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": f"\n\n{_CUT_NOTE}"})
 
             if final_answer_only:
                 if not round_text.strip():
@@ -540,7 +570,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                 "role": "assistant",
                 "content": round_text,
                 "tool_calls": [
-                    {"id": call["id"], "name": call["name"], "arguments": call.get("arguments") or "{}"}
+                    {"id": call["id"], "name": call["name"], "arguments": safe_arguments(call.get("arguments"))}
                     for call in pending_calls
                 ],
             })
@@ -571,8 +601,9 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     "id": call_id,
                     "name": call_name,
                     "status": "running",
-                    # The model's own argument text, replayed verbatim in later turns.
-                    "raw_arguments": call.get("arguments") or "{}",
+                    # The model's own argument text, replayed verbatim in later turns
+                    # (a malformed one is quoted inside a JSON object instead).
+                    "raw_arguments": safe_arguments(call.get("arguments")),
                 }
                 tool_records.append(record)
 
@@ -580,14 +611,18 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     arguments = parse_arguments(call.get("arguments"))
                     invocation = build_invocation(call_name, arguments, thread_id, specs=tool_specs)
                 except ToolCallError as exc:
-                    record.update({"status": "failed", "error": str(exc)})
-                    turn.emit({"type": "tool.failed", "tool": call_name, "callName": call_name, "error": str(exc)})
-                    messages.append({"role": "tool", "tool_call_id": call_id, "content": _tool_result_text({"error": str(exc)})})
+                    error = str(exc)
+                    if round_cut:
+                        error += _CUT_HINT
+                    record.update({"status": "failed", "error": error})
+                    turn.emit({"type": "tool.failed", "tool": call_name, "callName": call_name, "error": error})
+                    messages.append({"role": "tool", "tool_call_id": call_id, "content": _tool_result_text({"error": error})})
                     continue
 
                 record["summary"] = getattr(invocation, "summary", None) or getattr(invocation, "preview", call_name)
                 outcome = await _perform_action(
-                    turn, thread_id, invocation, call_name=call_name, gate_mode=gate_mode, user_request=last_user_text
+                    turn, thread_id, invocation, call_name=call_name, gate_mode=gate_mode, user_request=last_user_text,
+                    gate_threshold=gate_threshold,
                 )
 
                 status = outcome.get("status", "failed")
@@ -689,6 +724,20 @@ async def list_turns():
 async def turn_status(thread_id: str):
     turn = turn_manager.current(thread_id)
     return {"turn": turn.to_dict() if turn else None}
+
+
+async def start_scheduled_turn(bot_id: str, message: Dict[str, Any]) -> Turn:
+    """A schedule's run: store its prompt as the user's message and start the turn.
+
+    Raises TurnBusyError while a reply is in progress, so the scheduler
+    records a skip instead of posting a message nobody answers.
+    """
+    current = turn_manager.current(bot_id)
+    if current is not None and not current.finished:
+        raise TurnBusyError(current)
+    storage_service.add_message(message)
+    runner, selected_model = await _build_turn_runner(bot_id, None)
+    return turn_manager.start(bot_id, _bot_id_for(bot_id), selected_model, runner)
 
 
 @router.post("/turns/{thread_id}")
