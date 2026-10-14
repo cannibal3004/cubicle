@@ -146,8 +146,8 @@ class ComposioServiceTests(unittest.TestCase):
         # One lookup of the toolkit, nothing created at Composio.
         self.assertEqual([(r.method, r.url.path) for r in fake.requests], [("GET", "/api/v3/toolkits/hackernews")])
         self.assertEqual(storage.values["no_auth_toolkits"], ["hackernews"])
-        # It counts as connected everywhere the catalog looks.
-        self.assertIn("hackernews", asyncio.run(service.list_connected_toolkits()))
+        # It counts as connected everywhere the catalog looks, next to Composio's own toolkit.
+        self.assertEqual(sorted(asyncio.run(service.list_connected_toolkits())), ["composio", "hackernews"])
         status = asyncio.run(service.connection_status(["hackernews", "github"]))
         self.assertEqual(status["hackernews"], {"connected": True, "no_auth": True})
         self.assertFalse(status["github"]["connected"])
@@ -155,6 +155,22 @@ class ComposioServiceTests(unittest.TestCase):
         self.assertEqual(asyncio.run(service.disconnect("hackernews")), 1)
         self.assertEqual(storage.values["no_auth_toolkits"], [])
         self.assertNotIn("hackernews", asyncio.run(service.list_connected_toolkits()))
+
+    def test_composios_own_toolkit_is_on_with_a_key_until_switched_off(self):
+        storage = SavingStorage()
+        fake = FakeComposio(auth_configs=[], no_auth={"composio"})
+        service = _service(fake, storage)
+        self.assertEqual(asyncio.run(service.list_connected_toolkits()), ["composio"])
+        self.assertEqual(asyncio.run(service.connection_status(["composio"]))["composio"], {"connected": True, "no_auth": True})
+        # Without a key there is nothing to search with.
+        self.assertEqual(_service(fake, EmptyStorage()).enabled_no_auth_toolkits(), [])
+        # Disconnecting switches it off and remembers that; connecting again switches it back on.
+        self.assertEqual(asyncio.run(service.disconnect("composio")), 1)
+        self.assertEqual(storage.values["no_auth_toolkits_off"], ["composio"])
+        self.assertEqual(asyncio.run(service.list_connected_toolkits()), [])
+        asyncio.run(service.create_auth_link("composio"))
+        self.assertEqual(storage.values["no_auth_toolkits_off"], [])
+        self.assertEqual(asyncio.run(service.list_connected_toolkits()), ["composio"])
 
     def test_toolkit_without_managed_credentials_gets_setup_instructions(self):
         fake = FakeComposio(auth_configs=[], unmanaged={"klaviyo"})

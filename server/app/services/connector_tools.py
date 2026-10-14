@@ -105,6 +105,22 @@ def spec_from_composio_tool(tool: Dict[str, Any]) -> Optional[ToolSpec]:
     )
 
 
+# Toolkits whose catalog needs curating when the dashboard sets no allow list.
+# Composio's own toolkit also carries remote sandboxes, agent runners and
+# trigger management, none of which belong in a local-first bot.
+BUILTIN_ALLOW_LISTS: Dict[str, List[str]] = {
+    "composio": [
+        "COMPOSIO_SEARCH_TOOLS",
+        "COMPOSIO_RETRIEVE_TOOLKITS",
+        "COMPOSIO_GET_TOOL_SCHEMAS",
+        "COMPOSIO_GET_REQUIRED_PARAMETERS",
+        "COMPOSIO_CHECK_ACTIVE_CONNECTIONS",
+        "COMPOSIO_MANAGE_CONNECTIONS",
+        "COMPOSIO_EXECUTE_TOOL",
+    ],
+}
+
+
 async def connector_tool_specs(service: Any = None) -> List[ToolSpec]:
     """Specs for every tool in every connected toolkit, or [] when unavailable.
 
@@ -134,6 +150,8 @@ async def connector_tool_specs(service: Any = None) -> List[ToolSpec]:
             allowed = None
             if hasattr(service, "allowed_tools"):
                 allowed = await service.allowed_tools(toolkit)
+            if allowed is None and toolkit in BUILTIN_ALLOW_LISTS:
+                allowed = list(BUILTIN_ALLOW_LISTS[toolkit])
             if allowed is not None:
                 tools = await service.list_tools(toolkit, important_only=False, limit=200, tool_slugs=list(allowed))
                 wanted = set(allowed)
@@ -174,7 +192,12 @@ async def execute_composio_tool(call: ActionInvocation) -> Dict[str, Any]:
     version = arguments.get("version")
     if not isinstance(slug, str) or not isinstance(payload, dict):
         raise ConnectorServiceError("The connector tool call is malformed.")
-    return await composio_service.execute_tool(slug, payload, version=version if isinstance(version, str) else None)
+    result = await composio_service.execute_tool(slug, payload, version=version if isinstance(version, str) else None)
+    if slug.upper().startswith("COMPOSIO_"):
+        # Connections may have changed (the bot connected an app for the
+        # user): the next turn lists toolkits afresh.
+        composio_service.forget_connections()
+    return result
 
 
 action_gateway.register_action(

@@ -79,6 +79,15 @@ class FakeComposio:
         if toolkit == "context7_mcp":
             # MCP-backed toolkits flag nothing as important.
             return [] if important_only else [{"slug": "CONTEXT7_MCP_QUERY_DOCS", "toolkit": {"slug": "context7_mcp", "name": "Context7 MCP"}, "tags": ["readOnlyHint"]}]
+        if toolkit == "composio":
+            kit = {"slug": "composio", "name": "Composio"}
+            return [
+                {"slug": "COMPOSIO_SEARCH_TOOLS", "toolkit": kit, "tags": ["important", "readOnlyHint"]},
+                {"slug": "COMPOSIO_MANAGE_CONNECTIONS", "toolkit": kit, "tags": ["destructiveHint"]},
+                {"slug": "COMPOSIO_EXECUTE_TOOL", "toolkit": kit, "tags": ["important", "destructiveHint"]},
+                {"slug": "COMPOSIO_REMOTE_BASH_TOOL", "toolkit": kit, "tags": ["important"]},
+                {"slug": "COMPOSIO_WAIT_FOR_CONNECTIONS", "toolkit": kit, "tags": ["readOnlyHint"]},
+            ]
         if toolkit == "gmail":
             tools = [GMAIL_SEND, GMAIL_FETCH, {"slug": "GMAIL_OLD", "is_deprecated": True, "toolkit": {"slug": "gmail"}}]
             if not important_only:
@@ -131,6 +140,21 @@ class SpecTests(unittest.TestCase):
         self.assertEqual([s.name for s in specs], ["gmail_send_email", "gmail_list_filters"])
         # Exactly the allowed slugs were requested, not a page of the catalog.
         self.assertEqual(service.listed, [("gmail", ["GMAIL_LIST_FILTERS", "GMAIL_SEND_EMAIL"])])
+
+    def test_composios_own_toolkit_is_curated_to_search_and_connections(self):
+        from app.services.connector_tools import BUILTIN_ALLOW_LISTS
+
+        service = FakeComposio(toolkits=("composio",))
+        specs = asyncio.run(connector_tool_specs(service))
+        # The remote sandbox and the blocking wait are not offered; the rest keep Composio's own hints.
+        self.assertEqual([s.name for s in specs], ["composio_search_tools", "composio_manage_connections", "composio_execute_tool"])
+        self.assertEqual([s.needs_approval for s in specs], [False, True, True])
+        self.assertEqual(service.listed, [("composio", sorted(BUILTIN_ALLOW_LISTS["composio"]))])
+        # A dashboard allow list still wins over the built-in one.
+        service = FakeComposio(toolkits=("composio",), allowed={"composio": ["COMPOSIO_SEARCH_TOOLS"]})
+        self.assertEqual([s.name for s in asyncio.run(connector_tool_specs(service))], ["composio_search_tools"])
+        prompt = describe_tools(asyncio.run(connector_tool_specs(FakeComposio(toolkits=("composio",)))))
+        self.assertIn("composio_manage_connections with its toolkit slug", prompt)
 
     def test_toolkits_without_important_tools_offer_everything_they_have(self):
         service = FakeComposio(toolkits=("context7_mcp",))

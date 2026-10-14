@@ -31,6 +31,7 @@ SETTING_KEYS = {
     "theme",
     "disabled_toolkits",
     "no_auth_toolkits",
+    "no_auth_toolkits_off",
     "auto_approval",
     "decider_url",
     "decider_threshold",

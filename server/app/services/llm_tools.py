@@ -569,6 +569,14 @@ def describe_tools(
             "act through the user's own accounts. Read tools run directly; anything that sends, changes, or deletes asks the user first. "
             "Results are the app's raw API response."
         )
+        if "composio" in toolkits:
+            lines.append(
+                "- Composio itself: composio_search_tools finds apps and their tools for a task (read-only; results include Composio's own "
+                "skills for the task). To connect an app the user asks for, call composio_manage_connections with its toolkit slug; it "
+                "returns a sign-in link: give the user that link as a Markdown link and stop there. Once they say they have signed in, "
+                "composio_check_active_connections confirms it, and the app's own tools are offered from your next turn. "
+                "composio_execute_tool runs any tool of a connected app by slug, after approval; prefer the app's own tools when they are offered."
+            )
     approval = sorted(spec.name for spec in specs if spec.needs_approval)
     if approval:
         lines.append("Tools that need approval: " + ", ".join(approval) + ".")
