@@ -140,10 +140,10 @@ export default function Sidebar({
           <BotAvatar bot={bot} />
         </div>
 
-        <div className={`flex-1 min-w-0 pt-0.5 ${bot.archived ? 'opacity-70' : ''}`}>
+        <div className="flex-1 min-w-0 pt-0.5">
           <div className="flex items-center justify-between gap-1">
             <h3 className={`text-xs font-semibold truncate flex items-center gap-1.5 min-w-0 ${isActive ? 'text-white' : 'text-zinc-200'}`}>
-              <span className="truncate">{bot.name}</span>
+              <span className={`truncate ${bot.archived ? 'opacity-70' : ''}`}>{bot.name}</span>
               {needsApproval && (
                 <span
                   className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0 animate-pulse"
@@ -166,7 +166,7 @@ export default function Sidebar({
             </div>
           </div>
 
-          <p className="text-[11px] truncate mt-0.5 text-zinc-400 group-hover:text-zinc-300">
+          <p className={`text-[11px] truncate mt-0.5 text-zinc-400 group-hover:text-zinc-300 ${bot.archived ? 'opacity-70' : ''}`}>
             {bot.role || bot.description || 'General Intelligence'}
           </p>
         </div>
