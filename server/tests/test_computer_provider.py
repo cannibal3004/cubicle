@@ -7,7 +7,7 @@ import httpx
 
 from app.services.action_gateway import ActionGateway, ActionInvocation, action_gateway
 from app.services.computer_actions import register_computer_actions
-from app.services.computer_provider import ComputerProviderError, FakeComputerProvider
+from app.services.computer_provider import ComputerProviderError, FakeComputerProvider, check_file_path
 from app.services.workspace_service import WorkspaceService
 
 try:
@@ -102,8 +102,12 @@ class FakeComputerProviderTests(unittest.IsolatedAsyncioTestCase):
             await provider.files_edit(created.computer_id, "/workspace/src/b.py", "a\n", "b\n")
         with self.assertRaisesRegex(ComputerProviderError, "No file at"):
             await provider.files_read(created.computer_id, "/workspace/missing.py")
-        with self.assertRaisesRegex(ComputerProviderError, "must be absolute"):
-            await provider.files_read(created.computer_id, "src/a.py")
+        # A relative path is taken from /workspace, ~ from the home directory.
+        self.assertEqual((await provider.files_read(created.computer_id, "src/a.py"))["path"], "/workspace/src/a.py")
+        self.assertEqual(check_file_path("~/notes.md"), "/home/pwuser/notes.md")
+        self.assertEqual(check_file_path("./reports/../q3.md"), "/workspace/q3.md")
+        self.assertEqual(check_file_path("~"), "/home/pwuser")
+        self.assertEqual((await provider.files_list(created.computer_id, ""))["path"], "/workspace")
         with self.assertRaisesRegex(ComputerProviderError, "at most 200000"):
             await provider.files_write(created.computer_id, "/workspace/big.txt", "x" * 200_001)
         with self.assertRaisesRegex(ComputerProviderError, "at most 60000"):

@@ -125,8 +125,13 @@ class BuildInvocationTests(unittest.TestCase):
         edit = build_invocation("computer_edit_file", {"path": "/workspace/a.txt", "old_text": "hello", "new_text": ""}, "bot-1")
         self.assertEqual(edit.arguments["new_text"], "")
         self.assertIn("5 characters become 0", edit.preview)
-        with self.assertRaisesRegex(ToolCallError, "absolute path"):
-            build_invocation("computer_read_file", {"path": "app/main.py"}, "bot-1")
+        # Relative paths resolve under /workspace before the call is made.
+        relative = build_invocation("computer_read_file", {"path": "app/main.py"}, "bot-1")
+        self.assertEqual(relative.arguments["path"], "/workspace/app/main.py")
+        self.assertEqual(build_invocation("computer_write_file", {"path": "~/report.md", "content": "x"}, "bot-1").arguments["path"], "/home/pwuser/report.md")
+        self.assertEqual(build_invocation("computer_files_list", {"path": "src"}, "bot-1").arguments["path"], "/workspace/src")
+        with self.assertRaises(ToolCallError):
+            build_invocation("computer_read_file", {"path": "  "}, "bot-1")
         with self.assertRaisesRegex(ToolCallError, "'old_text' is required"):
             build_invocation("computer_edit_file", {"path": "/workspace/a.txt", "new_text": "x"}, "bot-1")
         # A long heredoc-style command is accepted now; files should not need it anyway.

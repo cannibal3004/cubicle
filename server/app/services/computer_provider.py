@@ -97,13 +97,20 @@ PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9+.:~-]{0,99}$")
 MAX_PACKAGES_PER_CALL = 50
 
 
+COMPUTER_WORKSPACE = "/workspace"
+COMPUTER_HOME = "/home/pwuser"
+
+
 def check_file_path(path: Any) -> str:
+    """An absolute sandbox path: a relative one is taken from /workspace, ~ is the home directory."""
     if not isinstance(path, str) or not path.strip() or len(path) > FILE_PATH_MAX_CHARS:
         raise ComputerProviderError(f"A file path is required and must be at most {FILE_PATH_MAX_CHARS} characters.")
-    normalized = posixpath.normpath(path.strip())
-    if not normalized.startswith("/"):
-        raise ComputerProviderError("Computer file paths must be absolute.")
-    return normalized
+    text = path.strip()
+    if text == "~" or text.startswith("~/"):
+        text = COMPUTER_HOME + text[1:]
+    elif not text.startswith("/"):
+        text = posixpath.join(COMPUTER_WORKSPACE, text)
+    return posixpath.normpath(text)
 
 
 def check_command(command: Any) -> str:
@@ -431,11 +438,7 @@ class FakeComputerProvider:
 
     async def files_list(self, computer_id: str, path: str = "/workspace") -> Dict[str, Any]:
         status = self._require_active(computer_id)
-        if not isinstance(path, str) or len(path) > 512:
-            raise ComputerProviderError("A file path is required and must be at most 512 characters.")
-        normalized = posixpath.normpath(path.strip() or "/workspace")
-        if not normalized.startswith("/"):
-            raise ComputerProviderError("Computer file paths must be absolute.")
+        normalized = check_file_path(path if isinstance(path, str) and path.strip() else COMPUTER_WORKSPACE)
         self._touch(status, "files.list")
         return {
             "computer_id": status.computer_id,
