@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { FiDownload, FiEye, FiFile, FiFileText, FiImage, FiArchive, FiAlertCircle, FiX } from 'react-icons/fi';
 import { fetchSharedFile } from '../lib/api';
+import Markdown from './Markdown';
 
 function formatSize(bytes) {
   if (!Number.isFinite(bytes)) return '';
@@ -28,6 +29,8 @@ export default function FileCard({ attachment, botId }) {
   const [busy, setBusy] = useState(null); // 'download' | 'preview'
   const [error, setError] = useState('');
   const [preview, setPreview] = useState(null); // { url, kind, text }
+  const [showSource, setShowSource] = useState(false);
+  const isMarkdown = /\.(md|markdown)$/i.test(attachment.name || '');
 
   const kind = kindOf(attachment.mime, attachment.name);
   const Icon = ICONS[kind] || FiFile;
@@ -63,6 +66,7 @@ export default function FileCard({ attachment, botId }) {
     try {
       const blob = await fetchSharedFile(attachment, botId, { inline: true });
       if (kind === 'text') {
+        setShowSource(false);
         setPreview({ kind, text: await blob.text() });
       } else {
         const typed = blob.type ? blob : blob.slice(0, blob.size, attachment.mime);
@@ -144,9 +148,35 @@ export default function FileCard({ attachment, botId }) {
             <iframe src={preview.url} title={attachment.name} className="w-full h-full max-w-5xl rounded-lg bg-white" />
           )}
           {preview.kind === 'text' && (
-            <pre className="w-full max-w-4xl max-h-full overflow-auto rounded-lg bg-[#111114] border border-[#26262b] p-4 text-[11px] font-mono text-zinc-200 whitespace-pre-wrap">
-              {preview.text}
-            </pre>
+            <div className="w-full max-w-4xl max-h-full flex flex-col rounded-lg bg-[#111114] border border-[#26262b] overflow-hidden">
+              <div className="flex items-center justify-between gap-3 px-4 py-2 border-b border-[#26262b] text-[11px] text-zinc-400">
+                <span className="truncate font-mono">{attachment.name}</span>
+                {isMarkdown && (
+                  <div className="flex rounded-md border border-[#2c2c31] overflow-hidden flex-shrink-0">
+                    {[['rendered', 'Rendered'], ['source', 'Source']].map(([value, label]) => {
+                      const active = showSource ? value === 'source' : value === 'rendered';
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setShowSource(value === 'source')}
+                          className={`px-2.5 py-1 transition ${active ? 'bg-[#26262b] text-white' : 'text-zinc-400 hover:text-white'}`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              {isMarkdown && !showSource ? (
+                <div className="overflow-auto p-5 select-text">
+                  <Markdown text={preview.text} />
+                </div>
+              ) : (
+                <pre className="overflow-auto p-4 text-[11px] font-mono text-zinc-200 whitespace-pre-wrap select-text">{preview.text}</pre>
+              )}
+            </div>
           )}
         </div>
       )}
