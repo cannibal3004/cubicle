@@ -706,9 +706,9 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
   };
 
   return (
-    <div className="flex-1 flex flex-col h-screen overflow-hidden bg-[#09090b] relative select-none font-sans text-zinc-100">
+    <div className="flex-1 flex flex-col h-screen overflow-hidden bg-[#09090b] relative font-sans text-zinc-100">
       {/* Top Header Bar */}
-      <header className="px-6 py-3.5 flex items-center justify-between z-20 bg-[#09090b]/80 backdrop-blur-md border-b border-[#18181c]">
+      <header className="px-6 py-3.5 flex items-center justify-between z-20 bg-[#09090b]/80 backdrop-blur-md border-b border-[#18181c] select-none">
         {/* Left Side: Bot Indicator */}
         <div className="flex items-center gap-2.5 min-w-0">
           <div
