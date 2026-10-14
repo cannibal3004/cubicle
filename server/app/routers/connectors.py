@@ -175,6 +175,14 @@ async def authorize(slug: str):
         link = await composio_service.create_auth_link(slug, api_key=composio_key)
         # The new connection shows up as tools once the OAuth dance finishes.
         composio_service.forget_connections()
+        if link.get("connected"):
+            storage_service.add_audit_event({
+                "event": "connector.connected",
+                "connector": slug,
+                "no_auth": True,
+                "created_at": _now(),
+            })
+            return {"url": None, "connected": True, "no_auth": True}
         storage_service.add_audit_event({
             "event": "connector.authorization_requested",
             "connector": slug,

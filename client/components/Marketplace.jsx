@@ -232,6 +232,13 @@ export default function Marketplace({ onOpenSettings }) {
         setNotice(`${app.label} disconnected.`);
       } else {
         const result = await authorizeConnector(app.slug);
+        if (result.connected && !result.url) {
+          // Needs no sign-in: it is connected already.
+          if (authWindow && !authWindow.closed) authWindow.close();
+          setConnected((current) => (current.includes(app.slug) ? current : [...current, app.slug]));
+          setNotice(`${app.label} connected. It needs no sign-in; its tools are available now.`);
+          return;
+        }
         if (!result.url) throw new Error('The connector did not return an authorization link');
         if (authWindow) {
           authWindow.location.href = result.url;
