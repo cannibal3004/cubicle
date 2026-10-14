@@ -9,6 +9,9 @@ from app.services.docker_computer_provider import DockerComputerProvider
 class FakeDockerCommand:
     def __init__(self):
         self.calls = []
+        # Containers `docker ps` reports: (id, name, state, computer-id, bot-id); env text by id.
+        self.containers = []
+        self.inspect = {}
 
     def __call__(self, args, timeout):
         self.calls.append((tuple(args), timeout))
@@ -19,6 +22,12 @@ class FakeDockerCommand:
         if args[0] == "rm":
             # No stale container exists in these tests, like a real daemon says.
             raise ComputerProviderError("Error response from daemon: No such container")
+        if args[0] == "ps":
+            wanted = next((a for a in args if a.startswith("label=cubicle.computer-id=")), None)
+            rows = [c for c in self.containers if not wanted or c[3] == wanted.split("=", 2)[2]]
+            return "\n".join("\t".join(c) for c in rows)
+        if args[0] == "inspect":
+            return self.inspect.get(args[-1], "")
         if args[0] == "exec":
             return "Reading package lists...\nSetting up " + " ".join(args[5:]) + "\n"
         return ""
@@ -335,10 +344,13 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         self.provider._wait_until_ready = ready
         await self.provider.start(status.computer_id)
 
-        first = self.docker.calls[0][0]
-        self.assertEqual(first[:2], ("rm", "-f"))
-        self.assertEqual(first[2], f"cubicle-computer-{status.computer_id[-70:]}")
-        self.assertEqual(self.docker.calls[1][0][0], "run")
+        # First a look for a container to adopt (none here), then the stale
+        # name is cleared, then the run.
+        verbs = [call[0][0] for call in self.docker.calls]
+        self.assertEqual(verbs[:3], ["ps", "rm", "run"])
+        stale = self.docker.calls_of("rm")[0]
+        self.assertEqual(stale[:2], ("rm", "-f"))
+        self.assertEqual(stale[2], f"cubicle-computer-{status.computer_id[-70:]}")
 
     async def test_network_mode_joins_a_docker_network_instead_of_publishing(self):
         provider = DockerComputerProvider(
@@ -488,6 +500,63 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         plain = self.docker.calls_of("run")
         self.assertEqual(len([m for m in mounts if m.endswith("dst=/shared")]), 1)
         self.assertTrue(all("SHARED=/shared" not in c for c in plain[:-1]))
+
+    async def test_a_sandbox_from_before_a_restart_is_adopted_not_replaced(self):
+        provider = DockerComputerProvider(
+            image="cubicle-computer:test",
+            workspace_root=self.root / "computers",
+            seccomp_profile=self.root / "missing-seccomp.json",
+            start_timeout=0.5,
+            network="cubicle-computers",
+            docker_command=self.docker,
+            shared_dir="",
+        )
+        self.docker.containers = [("abc123def456", "/cubicle-computer-computer-bot-old", "running", "computer-bot-old", "bot-old")]
+        self.docker.inspect["abc123def456"] = "PATH=/usr/bin\nCOMPUTER_TOKEN=tok-from-env\nCOMPUTER_ID=computer-bot-old\nPORT=3000\n"
+        seen = []
+
+        async def request(record, method, route, payload=None, timeout=None):
+            seen.append((record.token, record.host, record.port, route))
+            return {"status": "healthy", "width": 1024, "height": 768}
+
+        provider._request = request
+        self.assertEqual(await provider.adopt_running(), ["computer-bot-old"])
+        status = provider.describe("bot-old")
+        self.assertEqual((status.state, status.health, status.width, status.generation), ("running", "healthy", 1024, 1))
+        self.assertEqual(seen, [("tok-from-env", "cubicle-computer-computer-bot-old", 3000, "/health")])
+        # Starting it again changes nothing and runs no container.
+        await provider.start(status.computer_id)
+        self.assertEqual(self.docker.calls_of("run"), [])
+        self.assertEqual(provider.vnc_target(status.computer_id)["token"], "tok-from-env")
+        # A second adoption pass leaves an adopted computer alone.
+        self.assertEqual(await provider.adopt_running(), [])
+
+        # A container that will not answer with its token is left for start() to replace.
+        self.docker.containers.append(("fed987", "/cubicle-computer-computer-bot-dead", "running", "computer-bot-dead", "bot-dead"))
+        self.docker.inspect["fed987"] = "COMPUTER_TOKEN=stale\n"
+
+        async def unhealthy(record, method, route, payload=None, timeout=None):
+            raise ComputerProviderError("Computer runtime did not respond.")
+
+        provider._request = unhealthy
+        self.assertEqual(await provider.adopt_running(), [])
+        self.assertEqual(provider.describe("bot-dead").state, "stopped")
+
+    async def test_start_adopts_a_running_container_before_launching_one(self):
+        status = self.provider.get_or_create("bot-test")
+        self.docker.containers = [("c0ffee", "/cubicle-computer-computer-bot-test", "running", status.computer_id, "bot-test")]
+        self.docker.inspect["c0ffee"] = "COMPUTER_TOKEN=kept\nPORT=3000\n"
+
+        async def request(record, method, route, payload=None, timeout=None):
+            return {"status": "healthy"}
+
+        self.provider._request = request
+        started = await self.provider.start(status.computer_id)
+        self.assertEqual(started.state, "running")
+        self.assertEqual(self.docker.calls_of("run"), [])
+        self.assertEqual(self.provider._runtimes[status.computer_id].token, "kept")
+        # Published-port mode: the host port comes from `docker port`.
+        self.assertEqual((self.provider._runtimes[status.computer_id].host, self.provider._runtimes[status.computer_id].port), ("127.0.0.1", 45678))
 
     async def test_user_control_blocks_bot_input_and_navigation_until_handed_back(self):
         status = self.provider.get_or_create("bot-test")

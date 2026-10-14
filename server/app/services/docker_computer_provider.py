@@ -25,6 +25,7 @@ without publishing any port.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import re
@@ -70,12 +71,21 @@ SETUP_CAPABILITIES = ("CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SETGID", "SE
 INSTALL_SCRIPT = "/opt/cubicle-computer/install-packages.sh"
 
 
+logger = logging.getLogger(__name__)
+
 # Where the shared folder appears inside a computer.
 SHARED_MOUNT = "/shared"
 # Seconds the API waits beyond the driver's own command timeout.
 RUNTIME_REPLY_MARGIN = 15.0
+# What `docker ps` prints per computer container, for adoption after a restart.
+_PS_FORMAT = '{{.ID}}\t{{.Names}}\t{{.State}}\t{{.Label "cubicle.computer-id"}}\t{{.Label "cubicle.bot-id"}}'
 
 
+def _parse_ps(listing: str):
+    for line in (listing or "").splitlines():
+        parts = line.rstrip("\n").split("\t")
+        if len(parts) >= 5 and parts[0]:
+            yield tuple(part.strip() for part in parts[:5])
 @dataclass
 class _RuntimeRecord:
     status: ComputerStatus
@@ -522,6 +532,108 @@ class DockerComputerProvider:
             await asyncio.sleep(0.2)
         raise ComputerProviderError(last_error)
 
+
+    # ---- adopting sandboxes from a previous API process ----------------------
+
+    async def adopt_running(self) -> List[str]:
+        """Take over every computer container a previous API process left running.
+
+        Runtime records live in memory, so after a restart the API would
+        otherwise report every computer as stopped and the bot's next action
+        would replace a perfectly good sandbox (losing /tmp, the browser and
+        anything running). The token the driver expects is in the container's
+        environment, so the record can be rebuilt. Returns the computer ids.
+        """
+        try:
+            listing = await self._docker(["ps", "--filter", "label=cubicle.runtime=computer", "--format", _PS_FORMAT])
+        except ComputerProviderError as exc:
+            logger.warning("Could not list computer containers to adopt: %s", exc)
+            return []
+        adopted: List[str] = []
+        for container_id, name, state, computer_id, bot_id in _parse_ps(listing):
+            existing = self._runtimes.get(computer_id)
+            if existing is not None and existing.container_id:
+                continue
+            if await self._adopt(container_id, name, state, computer_id, bot_id):
+                adopted.append(computer_id)
+        return adopted
+
+    async def _adopt_for(self, record: _RuntimeRecord) -> bool:
+        """Adopt this computer's container if one is running (a start after a restart)."""
+        try:
+            listing = await self._docker(
+                ["ps", "--filter", f"label=cubicle.computer-id={record.status.computer_id}", "--format", _PS_FORMAT]
+            )
+        except ComputerProviderError:
+            return False
+        for container_id, name, state, computer_id, bot_id in _parse_ps(listing):
+            if computer_id == record.status.computer_id:
+                return await self._adopt(container_id, name, state, computer_id, bot_id)
+        return False
+
+    async def _adopt(self, container_id: str, name: str, state: str, computer_id: str, bot_id: str) -> bool:
+        if state not in {"running", "paused"} or not bot_id:
+            return False
+        try:
+            env_text = await self._docker(["inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", container_id])
+        except ComputerProviderError:
+            return False
+        env = dict(line.split("=", 1) for line in env_text.splitlines() if "=" in line)
+        token = env.get("COMPUTER_TOKEN", "")
+        if not token:
+            return False
+        status = self.get_or_create(bot_id)
+        record = self._runtimes[computer_id]
+        record.token = token
+        record.container_id = container_id
+        try:
+            port = int(env.get("PORT") or self.runtime_port)
+        except ValueError:
+            port = self.runtime_port
+        if self.network:
+            record.host = name.lstrip("/")
+            record.port = port
+        else:
+            try:
+                ports = await self._docker(["port", container_id, f"{port}/tcp"])
+            except ComputerProviderError:
+                ports = ""
+            matches = re.findall(r":(\d+)", ports)
+            if not matches:
+                self._forget(record)
+                return False
+            record.host = "127.0.0.1"
+            record.port = int(matches[-1])
+        if state == "paused":
+            status.state = "paused"
+            status.health = "unknown"
+            self._touch(status, "adopt")
+            return True
+        try:
+            health = await self._request(record, "GET", "/health")
+        except ComputerProviderError:
+            health = {}
+        if health.get("status") != "healthy":
+            # Not answering with its own token: leave it for start() to replace.
+            self._forget(record)
+            return False
+        status.state = "running"
+        status.health = "healthy"
+        status.width = int(health.get("width") or status.width)
+        status.height = int(health.get("height") or status.height)
+        self._touch(status, "adopt")
+        logger.info("Adopted running computer %s for bot %s (container %s)", computer_id, bot_id, container_id[:12])
+        return True
+
+    @staticmethod
+    def _forget(record: _RuntimeRecord) -> None:
+        record.container_id = None
+        record.host = None
+        record.port = None
+        record.status.state = "stopped"
+        record.status.health = "unknown"
+
+
     async def create(self, bot_id: str) -> ComputerStatus:
         return self.get_or_create(bot_id)
 
@@ -535,6 +647,10 @@ class DockerComputerProvider:
                 await self._docker(["unpause", record.container_id])
                 status.state = "running"
                 status.health = "healthy"
+                return self._touch(status, "start")
+
+            # A sandbox from before an API restart is still there: use it.
+            if not record.container_id and await self._adopt_for(record):
                 return self._touch(status, "start")
 
             status.state = "starting"

@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -7,12 +8,21 @@ from fastapi.responses import JSONResponse
 from app.config import settings
 from app.routers import auth, bots, models, chat, approvals, upload, settings as settings_router, connectors, audit, computers, tools, files, gate, commands, secrets, schedules
 from app.services.scheduler import scheduler
+from app.services.computer_provider import computer_provider
 from app.services.auth_service import auth_service
 from app.services.llm_service import current_llm_config
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # Computers a previous API process started are still running; take
+    # them over rather than report them stopped and replace them later.
+    adopt = getattr(computer_provider, "adopt_running", None)
+    if adopt is not None:
+        try:
+            await adopt()
+        except Exception as exc:  # Startup must not fail over Docker.
+            logging.getLogger(__name__).warning("Could not adopt running computers: %s", exc)
     # Due schedules post their prompt into the bot's chat and start a turn
     # through the chat router, exactly as a user message would.
     if settings.SCHEDULER_ENABLED:
