@@ -20,6 +20,7 @@ GROUP_LABELS = {
     "todo": "To-do list",
     "schedule": "Schedules",
     "github": "GitHub (built-in)",
+    "connectors": "App connections",
 }
 
 
@@ -44,6 +45,7 @@ async def tool_catalog():
     builtin = available_tools(
         computer=settings.COMPUTER_PROVIDER == "docker",
         github=bool(composio_service.get_api_key()) and not connector_specs,
+        connector_management=bool(composio_service.get_api_key()),
     )
 
     groups: List[Dict[str, Any]] = []

@@ -115,7 +115,6 @@ BUILTIN_ALLOW_LISTS: Dict[str, List[str]] = {
         "COMPOSIO_GET_TOOL_SCHEMAS",
         "COMPOSIO_GET_REQUIRED_PARAMETERS",
         "COMPOSIO_CHECK_ACTIVE_CONNECTIONS",
-        "COMPOSIO_MANAGE_CONNECTIONS",
         "COMPOSIO_EXECUTE_TOOL",
     ],
 }
@@ -199,6 +198,56 @@ async def execute_composio_tool(call: ActionInvocation) -> Dict[str, Any]:
         composio_service.forget_connections()
     return result
 
+
+async def connect_app(call: ActionInvocation) -> Dict[str, Any]:
+    """Start a connection the way the marketplace does; the model relays the link."""
+    arguments = call.arguments if isinstance(call.arguments, dict) else {}
+    slug = str(arguments.get("toolkit") or "").strip().lower()
+    if not slug:
+        raise ConnectorServiceError("A toolkit slug is required.")
+    link = await composio_service.create_auth_link(slug)
+    composio_service.forget_connections()
+    if link.get("connected"):
+        return {"toolkit": slug, "connected": True, "url": None, "note": "This app needs no sign-in; its tools are offered from your next turn."}
+    return {
+        "toolkit": slug,
+        "connected": False,
+        "url": link.get("url"),
+        "expires_at": link.get("expires_at"),
+        "note": "Give the user this link to sign in. Call connector_status once they say they have finished.",
+    }
+
+
+async def connection_status(call: ActionInvocation) -> Dict[str, Any]:
+    arguments = call.arguments if isinstance(call.arguments, dict) else {}
+    slugs = [str(s).lower() for s in (arguments.get("toolkits") or []) if isinstance(s, str)]
+    composio_service.forget_connections()
+    return {"services": await composio_service.connection_status(slugs)}
+
+
+action_gateway.register_action(
+    ActionDefinition(
+        name="connector.connect",
+        tool="connector",
+        action="connect",
+        intent="Start connecting an app through Composio for the user.",
+        risk="external",
+        requires_approval=True,
+    ),
+    connect_app,
+)
+
+action_gateway.register_action(
+    ActionDefinition(
+        name="connector.status",
+        tool="connector",
+        action="status",
+        intent="Check which apps the user has connected.",
+        risk="read",
+        requires_approval=False,
+    ),
+    connection_status,
+)
 
 action_gateway.register_action(
     ActionDefinition(
