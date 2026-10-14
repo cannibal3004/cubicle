@@ -116,9 +116,9 @@ The local server creates a mode-0600 session token in `DATA_DIR` and the browser
 The default provider is the deterministic local adapter. To enable the real sandbox desktop (browser, terminal, file manager, input, screenshots, and live VNC), build the pinned runtime image and opt in to the Docker provider:
 
 ```bash
-docker build -t cubicle-computer:2.4.0 ./runtime
+docker build -t cubicle-computer:2.5.0 ./runtime
 export COMPUTER_PROVIDER=docker
-export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.4.0
+export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.5.0
 ```
 
 The Docker daemon must be running before starting the API. Each bot gets a separate container, a separate workspace under `DATA_DIR/computers`, an ephemeral loopback-only port, and an internal runtime token. The sandbox user has no capabilities and cannot gain any; CPU, memory, process, and shared-memory limits are applied.
@@ -225,13 +225,15 @@ The server reads these variables from the environment:
 | `AUTH_COOKIE_SECURE` | `0` | Set to `1` when serving over HTTPS |
 | `CORS_ORIGINS` | localhost and loopback client origins | Comma-separated browser origins allowed by the API |
 | `COMPUTER_PROVIDER` | `fake` | Computer adapter: `fake` or `docker` |
-| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.4.0` | Pinned local runtime image |
+| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.5.0` | Pinned local runtime image |
 | `COMPUTER_DOCKER_WORKSPACE_ROOT` | `DATA_DIR/computers` | Root for per-bot runtime workspaces |
 | `COMPUTER_DOCKER_CPU_LIMIT` | `2.0` | Docker CPU limit per computer |
 | `COMPUTER_DOCKER_MEMORY_LIMIT` | `2g` | Docker memory limit per computer |
 | `COMPUTER_DOCKER_PIDS_LIMIT` | `512` | Maximum processes per computer |
 | `COMPUTER_DOCKER_START_TIMEOUT` | `20` | Runtime readiness timeout in seconds |
-| `COMPUTER_DOCKER_COMMAND_TIMEOUT` | `30` | Seconds a terminal command or page navigation may run inside the computer; the driver kills a command at this limit and returns exit code 124 with its output so far, and the API waits this long plus a margin |
+| `COMPUTER_DOCKER_COMMAND_TIMEOUT` | `60` | Seconds a terminal command may run when the model sets no `timeout_seconds`; the driver kills it at the limit and returns exit code 124 with its output so far |
+| `COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX` | `600` | The most the model may ask for with `timeout_seconds` |
+| `COMPUTER_DOCKER_NAVIGATE_TIMEOUT` | `30` | Seconds a page navigation may take before it fails |
 | `COMPUTER_DOCKER_NETWORK` | empty | When set, runtime containers join this Docker network and are reached by name instead of a port published on loopback. Used by the compose stack |
 | `COMPUTER_DOCKER_WORKSPACE_MODE` | `bind` | `bind` mounts a host directory per computer; `volume` uses a named Docker volume per computer |
 | `COMPUTER_DOCKER_HOST_WORKSPACE_ROOT` | empty | In `bind` mode from inside a container: the host path equivalent of `COMPUTER_DOCKER_WORKSPACE_ROOT` |
@@ -358,7 +360,7 @@ Every tool that needs approval still opens an approval card. With auto-approval 
 
 The model is asked five plain yes/no questions about the action and the message that led to it: does it permanently delete or discard data, upload local data somewhere, read secrets or change system settings, download and run code, or do something irreversible such as sending a message or publishing. Two things are decided by rule instead: a write that shrinks an existing file to a quarter of its size or less is always held, since the model cannot tell a rewrite from a wipe, and pointer or keyboard input to a bot computer is not scored (it auto-approves in **On**). It sees the tool name, its display arguments (a path and byte count, never file contents), and the user's latest message; it never sees tool output, so text the bot read cannot talk the gate into anything. It runs as `decider-4b` (or `decider-0.8b`) on a halogen-flash-server NPU, scoring an action in about a second.
 
-Set it up in **App Settings → Auto-approval**: the server URL (with a Test button), the mode, and the risk threshold. **Shadow** is the mode to start with: approvals behave exactly as before, and **Audit → Auto-approval** shows what the model would have approved next to what you actually decided, including the actions you denied that it would have let through. Switch to **On** once that list looks right. A bot's Tools menu can override the mode for that bot alone. Every scored action is kept in the local database (`gate_decisions`) with its scores, the exact state the model saw, and the final decision, so the log doubles as labelled data for tuning the questions or the threshold later.
+Set it up in **App Settings → Auto-approval**: the server URL (with a Test button), the mode, and the risk threshold. **Shadow** is the mode to start with: approvals behave exactly as before, and **Audit → Auto-approval** shows what the model would have approved next to what you actually decided, including the actions you denied that it would have let through. Switch to **On** once that list looks right. A bot's Tools menu can override the mode and the risk threshold for that bot alone: fetching pages and running curl score around 0.3 to 0.6 as "downloads code", so a research bot that should read the web unattended wants a threshold of 0.5 or more while the rest keep the strict default. Every scored action is kept in the local database (`gate_decisions`) with its scores, the exact state the model saw, and the final decision, so the log doubles as labelled data for tuning the questions or the threshold later.
 
 Computer tools appear only when `COMPUTER_PROVIDER=docker`. Connector tools appear for each toolkit with an active Composio connection. If the toolkit's auth config in the Composio dashboard restricts the tools available for execution, exactly those tools are offered; otherwise only the tools Composio flags as important are, at most `COMPOSIO_TOOLS_PER_TOOLKIT` per app (see `COMPOSIO_IMPORTANT_TOOLS_ONLY`). Results are trimmed to 20 KB before they are returned to the model, and a screenshot is attached as an image message when the model accepts images.
 
@@ -507,7 +509,7 @@ Confirm that the daemon is running, the runtime image was built, and the API use
 
 ```bash
 docker info
-docker image inspect cubicle-computer:2.4.0
+docker image inspect cubicle-computer:2.5.0
 echo "$COMPUTER_PROVIDER"
 ```
 

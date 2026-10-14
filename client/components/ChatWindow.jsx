@@ -740,6 +740,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
               bot={bot}
               onSave={(toolSettings) => onUpdateBot(bot.id, { tool_settings: toolSettings })}
               onSaveAutoApproval={(mode) => onUpdateBot(bot.id, { auto_approval: mode })}
+              onSaveGateThreshold={(value) => onUpdateBot(bot.id, { gate_threshold: value === null ? 'inherit' : value })}
               onOpenEditor={onEditBot}
             />
           )}

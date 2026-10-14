@@ -179,6 +179,7 @@ async def _perform_action(
     call_name: Optional[str] = None,
     gate_mode: str = "off",
     user_request: str = "",
+    gate_threshold: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Run one governed action through the gateway, emitting events on the turn.
 
@@ -226,7 +227,9 @@ async def _perform_action(
     # (shadow, a risky score, or any error) the card stays and the user decides.
     verdict = None
     if approval and gate_mode in ("shadow", "on"):
-        verdict = await approval_gate.evaluate(action_request, action_call, mode=gate_mode, user_request=user_request)
+        verdict = await approval_gate.evaluate(
+            action_request, action_call, mode=gate_mode, user_request=user_request, threshold=gate_threshold
+        )
         approval_gate.record(action_request, verdict)
         turn.emit({"type": "gate.scored", **base, "verdict": verdict.to_event()})
         if verdict.auto_approved:
@@ -339,6 +342,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
     tools_prompt = describe_tools(tool_specs, secret_names=names_for(thread_id))
     # The bot's auto-approval mode is fixed for the whole turn, like its tools.
     gate_mode = approval_gate.mode_for(current_bot)
+    gate_threshold = approval_gate.threshold_for(current_bot)
     return {
         "history": history,
         "current_bot": current_bot,
@@ -355,6 +359,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         "tool_definitions": tool_definitions,
         "tools_prompt": tools_prompt,
         "gate_mode": gate_mode,
+        "gate_threshold": gate_threshold,
     }
 
 
@@ -376,6 +381,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
     tool_definitions = setup["tool_definitions"]
     tools_prompt = setup["tools_prompt"]
     gate_mode = setup["gate_mode"]
+    gate_threshold = setup["gate_threshold"]
     replay_tools = llm_config.provider != "muapi"
 
     async def run(turn: Turn) -> None:
@@ -442,7 +448,9 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             turn.emit({"type": "tool.failed", "tool": exc.tool, "error": str(exc)})
 
         if action_call:
-            outcome = await _perform_action(turn, thread_id, action_call, gate_mode=gate_mode, user_request=last_user_text)
+            outcome = await _perform_action(
+                turn, thread_id, action_call, gate_mode=gate_mode, user_request=last_user_text, gate_threshold=gate_threshold
+            )
             if outcome.get("status") == "completed":
                 tool_context = f"Action result ({action_call.name}): {_tool_result_text(_compact_result(outcome['result']))}"
             else:
@@ -613,7 +621,8 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
 
                 record["summary"] = getattr(invocation, "summary", None) or getattr(invocation, "preview", call_name)
                 outcome = await _perform_action(
-                    turn, thread_id, invocation, call_name=call_name, gate_mode=gate_mode, user_request=last_user_text
+                    turn, thread_id, invocation, call_name=call_name, gate_mode=gate_mode, user_request=last_user_text,
+                    gate_threshold=gate_threshold,
                 )
 
                 status = outcome.get("status", "failed")

@@ -42,6 +42,7 @@ from app.services.computer_provider import (
     check_file_content,
     check_file_path,
     check_package_names,
+    check_timeout,
     PACKAGE_NAME,
     COMPUTER_CAPABILITIES,
     ComputerProviderError,
@@ -122,6 +123,8 @@ class DockerComputerProvider:
         self.pids_limit = pids_limit or settings.COMPUTER_DOCKER_PIDS_LIMIT
         self.start_timeout = start_timeout or settings.COMPUTER_DOCKER_START_TIMEOUT
         self.command_timeout = command_timeout or settings.COMPUTER_DOCKER_COMMAND_TIMEOUT
+        self.command_timeout_max = max(self.command_timeout, settings.COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX)
+        self.navigate_timeout = settings.COMPUTER_DOCKER_NAVIGATE_TIMEOUT
         self.tmp_size = (tmp_size or settings.COMPUTER_DOCKER_TMP_SIZE).strip()
         self.install_timeout = install_timeout or settings.COMPUTER_DOCKER_INSTALL_TIMEOUT
         # Extra environment for a bot's container (the user's secrets), looked
@@ -336,7 +339,7 @@ class DockerComputerProvider:
         return ["--mount", f"type=bind,src={self.wallpaper},dst=/opt/cubicle-computer/wallpaper,readonly"]
 
     # Names the runtime sets itself; a secret may not replace them.
-    _OWN_ENV = frozenset({"COMPUTER_TOKEN", "COMMAND_TIMEOUT_MS", "COMPUTER_ID", "PORT", "WORKSPACE", "SHARED", "CUBICLE_PACKAGES", "HOME", "PATH", "DISPLAY"})
+    _OWN_ENV = frozenset({"COMPUTER_TOKEN", "COMMAND_TIMEOUT_MS", "COMMAND_TIMEOUT_MAX_MS", "NAVIGATE_TIMEOUT_MS", "COMPUTER_ID", "PORT", "WORKSPACE", "SHARED", "CUBICLE_PACKAGES", "HOME", "PATH", "DISPLAY"})
 
     def _secret_env_args(self, record: _RuntimeRecord) -> list:
         if self._environment is None:
@@ -423,6 +426,10 @@ class DockerComputerProvider:
             "--env",
             f"COMMAND_TIMEOUT_MS={int(self.command_timeout * 1000)}",
             "--env",
+            f"COMMAND_TIMEOUT_MAX_MS={int(self.command_timeout_max * 1000)}",
+            "--env",
+            f"NAVIGATE_TIMEOUT_MS={int(self.navigate_timeout * 1000)}",
+            "--env",
             f"CUBICLE_PACKAGES={' '.join(record.status.packages)}",
             *self._secret_env_args(record),
             self.image,
@@ -472,6 +479,7 @@ class DockerComputerProvider:
         method: str,
         route: str,
         payload: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         if not record.port or not record.host:
             raise ComputerProviderError("Computer runtime is not connected.")
@@ -481,7 +489,7 @@ class DockerComputerProvider:
             # it has; the API must outwait that, or a command that runs to the
             # limit is misreported as a dead runtime.
             async with httpx.AsyncClient(
-                timeout=self.command_timeout + RUNTIME_REPLY_MARGIN,
+                timeout=(timeout if timeout is not None else self.command_timeout) + RUNTIME_REPLY_MARGIN,
                 headers={"x-computer-token": record.token},
             ) as client:
                 response = await client.request(method, url, json=payload)
@@ -654,15 +662,18 @@ class DockerComputerProvider:
         parsed = urlparse(url.strip())
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ComputerProviderError("Browser navigation only accepts absolute HTTP(S) URLs.")
-        result = await self._request(record, "POST", "/navigate", {"url": url.strip()})
+        result = await self._request(record, "POST", "/navigate", {"url": url.strip()}, timeout=self.navigate_timeout)
         record.status.url = result.get("url") or url.strip()
         self._touch(record.status, "browser.navigate")
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
 
-    async def terminal_execute(self, computer_id: str, command: str) -> Dict[str, Any]:
+    async def terminal_execute(self, computer_id: str, command: str, timeout_seconds: Any = None) -> Dict[str, Any]:
         record = self._active_record(computer_id)
         command = check_command(command)
-        result = await self._request(record, "POST", "/terminal", {"command": command})
+        limit = min(check_timeout(timeout_seconds), self.command_timeout_max)
+        result = await self._request(
+            record, "POST", "/terminal", {"command": command, "timeout_ms": int(limit * 1000)}, timeout=limit
+        )
         self._touch(record.status, "terminal.exec")
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
 

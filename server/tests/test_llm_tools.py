@@ -135,6 +135,18 @@ class BuildInvocationTests(unittest.TestCase):
         with self.assertRaisesRegex(ToolCallError, "longer than 60000"):
             build_invocation("computer_terminal_execute", {"command": "x" * 60001}, "bot-1")
 
+        timed = build_invocation("computer_terminal_execute", {"command": "pytest -q", "timeout_seconds": 300}, "bot-1")
+        self.assertEqual(timed.arguments["timeout_seconds"], 300)
+        self.assertIn("(up to 5 min)", timed.preview)
+        plain = build_invocation("computer_terminal_execute", {"command": "ls"}, "bot-1")
+        self.assertNotIn("timeout_seconds", plain.arguments)
+        self.assertNotIn("up to", plain.preview)
+        from app.config import settings
+
+        capped = build_invocation("computer_terminal_execute", {"command": "x", "timeout_seconds": 99999}, "bot-1")
+        self.assertEqual(capped.arguments["timeout_seconds"], int(max(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT, settings.COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX)))
+        with self.assertRaisesRegex(ToolCallError, "number of seconds"):
+            build_invocation("computer_terminal_execute", {"command": "x", "timeout_seconds": "soon"}, "bot-1")
         install = build_invocation("computer_install_packages", {"packages": ["ffmpeg", "Libpq-dev", "ffmpeg"]}, "bot-1")
         self.assertEqual(install.name, "computer.install_packages")
         self.assertEqual(install.arguments["packages"], ["ffmpeg", "libpq-dev"])

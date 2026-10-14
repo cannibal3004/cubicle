@@ -256,7 +256,7 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         async def ready(_record):
             return {"status": "healthy"}
 
-        async def request(_record, method, route, payload=None):
+        async def request(_record, method, route, payload=None, timeout=None):
             if route == "/health":
                 return {"status": "healthy"}
             if route == "/navigate":
@@ -289,6 +289,23 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(navigated["title"], "Example")
         terminal = await self.provider.terminal_execute(status.computer_id, "printf safe")
         self.assertEqual(terminal["stdout"], "ok")
+        # The model's limit travels to the driver in milliseconds, clamped to the ceiling.
+        seen = {}
+
+        async def capture(_record, method, route, payload=None, timeout=None):
+            seen.update({"route": route, "payload": payload, "timeout": timeout})
+            return {"operation": "terminal.exec", "exit_code": 0, "stdout": "", "stderr": ""}
+
+        self.provider._request = capture
+        await self.provider.terminal_execute(status.computer_id, "make test", 300)
+        self.assertEqual((seen["payload"]["timeout_ms"], seen["timeout"]), (300000, 300.0))
+        await self.provider.terminal_execute(status.computer_id, "sleep", 99999)
+        self.assertEqual(seen["payload"]["timeout_ms"], int(self.provider.command_timeout_max * 1000))
+        await self.provider.terminal_execute(status.computer_id, "ls")
+        self.assertEqual(seen["payload"]["timeout_ms"], int(self.provider.command_timeout * 1000))
+        with self.assertRaisesRegex(ComputerProviderError, "at least 1"):
+            await self.provider.terminal_execute(status.computer_id, "ls", 0)
+        self.provider._request = request
         files = await self.provider.files_list(status.computer_id, "/workspace")
         self.assertEqual(files["entries"], [])
         read = await self.provider.files_read(status.computer_id, "/workspace/a.txt")
@@ -465,6 +482,8 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("SHARED=/shared", run_args)
         # The driver gets the same command limit the API waits on (plus a margin).
         self.assertIn(f"COMMAND_TIMEOUT_MS={int(provider.command_timeout * 1000)}", run_args)
+        self.assertIn(f"COMMAND_TIMEOUT_MAX_MS={int(provider.command_timeout_max * 1000)}", run_args)
+        self.assertIn(f"NAVIGATE_TIMEOUT_MS={int(provider.navigate_timeout * 1000)}", run_args)
         # Without a host path there is no mount and the runtime is not told of one.
         plain = self.docker.calls_of("run")
         self.assertEqual(len([m for m in mounts if m.endswith("dst=/shared")]), 1)
@@ -476,7 +495,7 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         async def ready(_record):
             return {"status": "healthy"}
 
-        async def request(_record, method, route, payload=None):
+        async def request(_record, method, route, payload=None, timeout=None):
             return {"status": "healthy", "accepted": True, "url": "https://example.test", "title": "x"}
 
         self.provider._wait_until_ready = ready

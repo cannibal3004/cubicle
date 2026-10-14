@@ -117,7 +117,9 @@ const MAX_WRITE_CHARS = 200000;
 const TERMINAL_COMMAND_MAX = 60000;
 // One limit for a terminal command and a page navigation, set by the API so
 // the two sides agree; the API waits this long plus a margin.
-const COMMAND_TIMEOUT_MS = Number(process.env.COMMAND_TIMEOUT_MS) > 0 ? Number(process.env.COMMAND_TIMEOUT_MS) : 30000;
+const COMMAND_TIMEOUT_MS = Number(process.env.COMMAND_TIMEOUT_MS) > 0 ? Number(process.env.COMMAND_TIMEOUT_MS) : 60000;
+const COMMAND_TIMEOUT_MAX_MS = Math.max(COMMAND_TIMEOUT_MS, Number(process.env.COMMAND_TIMEOUT_MAX_MS) > 0 ? Number(process.env.COMMAND_TIMEOUT_MAX_MS) : 600000);
+const NAVIGATE_TIMEOUT_MS = Number(process.env.NAVIGATE_TIMEOUT_MS) > 0 ? Number(process.env.NAVIGATE_TIMEOUT_MS) : 30000;
 
 function workspacePath(value) {
   const requested = typeof value === 'string' && value.trim() ? value.trim() : '/workspace';
@@ -187,13 +189,16 @@ async function listFiles(requestedPath) {
   }));
 }
 
-async function executeCommand(command) {
+async function executeCommand(command, timeoutMs) {
+  // The caller's limit (the model's timeout_seconds), clamped to the ceiling.
+  const requested = Number(timeoutMs);
+  const limit = requested > 0 ? Math.min(Math.max(requested, 1000), COMMAND_TIMEOUT_MAX_MS) : COMMAND_TIMEOUT_MS;
   if (typeof command !== 'string' || !command.trim()) throw new Error('A terminal command is required.');
   if (command.length > TERMINAL_COMMAND_MAX) throw new Error(`Terminal commands must be at most ${TERMINAL_COMMAND_MAX} characters.`);
   try {
     const result = await execFileAsync('/bin/sh', ['-lc', command], {
       cwd: workspace,
-      timeout: COMMAND_TIMEOUT_MS,
+      timeout: limit,
       maxBuffer: 1024 * 1024,
       env: terminalEnv,
     });
@@ -201,7 +206,7 @@ async function executeCommand(command) {
   } catch (error) {
     if (error.killed || error.signal) {
       // Hit the time limit: report it as `timeout` would, with the output so far.
-      const seconds = Math.round(COMMAND_TIMEOUT_MS / 1000);
+      const seconds = Math.round(limit / 1000);
       return {
         exit_code: 124,
         stdout: error.stdout || '',
@@ -406,6 +411,29 @@ async function raiseBrowser() {
 
 // ---- HTTP API ------------------------------------------------------------------
 
+// Routes that do not touch the browser run outside its queue, so a page that
+// hangs never holds up a shell command and a long build never holds up a
+// screenshot. Returns null for any other route.
+async function unqueued(request, body) {
+  if (request.method !== 'POST') return null;
+  if (request.url === '/terminal') {
+    return { operation: 'terminal.exec', ...(await executeCommand(body.command, body.timeout_ms)) };
+  }
+  if (request.url === '/files') {
+    return { operation: 'files.list', path: workspacePath(body.path), entries: await listFiles(body.path) };
+  }
+  if (request.url === '/files/read') {
+    return { operation: 'files.read', ...(await readTextFile(body.path)) };
+  }
+  if (request.url === '/files/write') {
+    return { operation: 'files.write', ...(await writeTextFile(body.path, body.content)) };
+  }
+  if (request.url === '/files/edit') {
+    return { operation: 'files.edit', ...(await editTextFile(body.path, body.old_text, body.new_text)) };
+  }
+  return null;
+}
+
 async function handle(request, response) {
   if (!authorized(request)) {
     json(response, 401, { error: 'Computer runtime authentication failed.' });
@@ -429,13 +457,19 @@ async function handle(request, response) {
       return;
     }
 
+    const direct = await unqueued(request, body);
+    if (direct) {
+      json(response, 200, { computer_id: computerId, ...direct });
+      return;
+    }
+
     const result = await enqueue(async () => {
       if (request.method === 'POST' && request.url === '/navigate') {
         const url = assertHttpUrl(body.url);
         const target = await ensurePage();
         await target.bringToFront();
         await raiseBrowser();
-        await target.goto(url, { waitUntil: 'domcontentloaded', timeout: COMMAND_TIMEOUT_MS });
+        await target.goto(url, { waitUntil: 'domcontentloaded', timeout: NAVIGATE_TIMEOUT_MS });
         return { operation: 'browser.navigate', url: target.url(), title: await target.title() };
       }
 
@@ -450,30 +484,6 @@ async function handle(request, response) {
           frame_id: `frame-${Date.now()}`,
           data: await captureDesktop(),
         };
-      }
-
-      if (request.method === 'POST' && request.url === '/terminal') {
-        return { operation: 'terminal.exec', ...(await executeCommand(body.command)) };
-      }
-
-      if (request.method === 'POST' && request.url === '/files') {
-        return {
-          operation: 'files.list',
-          path: workspacePath(body.path),
-          entries: await listFiles(body.path),
-        };
-      }
-
-      if (request.method === 'POST' && request.url === '/files/read') {
-        return { operation: 'files.read', ...(await readTextFile(body.path)) };
-      }
-
-      if (request.method === 'POST' && request.url === '/files/write') {
-        return { operation: 'files.write', ...(await writeTextFile(body.path, body.content)) };
-      }
-
-      if (request.method === 'POST' && request.url === '/files/edit') {
-        return { operation: 'files.edit', ...(await editTextFile(body.path, body.old_text, body.new_text)) };
       }
 
       if (request.method === 'POST' && request.url === '/input') {

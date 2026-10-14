@@ -187,6 +187,26 @@ class ChatGateTests(unittest.TestCase):
         self.assertEqual(self.broker.resolved[0][2], "user")
         self.assertEqual(self.storage.get_gate_decisions()[0]["decided_by"], "user")
 
+    def test_a_bots_own_threshold_decides_for_that_bot(self):
+        # A score the app threshold (0.2) holds, which this bot's own 0.5 lets through.
+        ScriptedDecider.scores = {**{key: 0.02 for key in QUESTIONS}, "remote_code": 0.35}
+        events = self._run()
+        scored = next(e for e in events if e["type"] == "gate.scored")
+        self.assertEqual(scored["verdict"]["outcome"], "ask")
+        self.assertEqual(scored["verdict"]["threshold"], 0.2)
+
+        bots = self.storage.get_bots()
+        bots[0]["gate_threshold"] = 0.5
+        self.storage.save_bots(bots)
+        self.storage.add_message({"id": "m2", "thread_id": self.bot["id"], "bot_id": self.bot["id"], "sender": "user", "text": "again"})
+        events = self._run()
+        scored = next(e for e in events if e["type"] == "gate.scored")
+        self.assertEqual(scored["verdict"]["outcome"], "auto_approved")
+        self.assertEqual(scored["verdict"]["threshold"], 0.5)
+        self.assertEqual(self.gate.threshold_for({"gate_threshold": 0.5}), 0.5)
+        self.assertEqual(self.gate.threshold_for({"gate_threshold": None}), 0.2)
+        self.assertEqual(self.gate.threshold_for({"gate_threshold": 7}), 0.2)
+
     def test_bot_override_off_skips_the_decider_entirely(self):
         self._set_bot_mode("off")
         events = self._run()

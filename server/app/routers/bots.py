@@ -25,7 +25,7 @@ MAX_SHORT = 200
 MAX_PROMPT = 20_000
 # Only these fields can be changed from the client; ids, counters, and
 # timestamps are the server's.
-EDITABLE_FIELDS = {"name", "role", "description", "avatar", "model", "accent_color", "system_prompt", "tools", "pinned", "tool_settings", "auto_approval"}  # memory is handled separately
+EDITABLE_FIELDS = {"name", "role", "description", "avatar", "model", "accent_color", "system_prompt", "tools", "pinned", "tool_settings", "auto_approval", "gate_threshold"}  # memory is handled separately
 MAX_TOOL_SETTINGS_ENTRIES = 2000
 
 
@@ -80,6 +80,8 @@ class BotUpdate(BaseModel):
     archived: Optional[bool] = None
     tool_settings: Optional[Dict[str, Any]] = None
     auto_approval: Optional[Literal["inherit", "off", "shadow", "on"]] = None
+    # A number from 0.01 to 0.99, or "inherit" to follow App Settings again.
+    gate_threshold: Optional[Any] = None
     memory: Optional[str] = Field(default=None, max_length=MEMORY_MAX_CHARS)
     todo: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=TODO_MAX_ITEMS)
 
@@ -114,6 +116,7 @@ async def create_bot(bot_data: BotInput):
         "tools": bot_data.tools,
         "tool_settings": {},
         "auto_approval": "inherit",
+        "gate_threshold": None,
         "pinned": False,
         "archived": False,
         "unread_count": 0,
@@ -138,6 +141,18 @@ async def update_bot(bot_id: str, updates: BotUpdate):
         changes.pop("model")
     if "tool_settings" in changes:
         changes["tool_settings"] = clean_tool_settings(changes["tool_settings"])
+    if "gate_threshold" in changes:
+        raw = changes["gate_threshold"]
+        if raw in ("inherit", "", None):
+            changes["gate_threshold"] = None
+        else:
+            try:
+                value = float(raw)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail="gate_threshold must be a number from 0.01 to 0.99, or \"inherit\".") from exc
+            if not 0.01 <= value <= 0.99:
+                raise HTTPException(status_code=422, detail="gate_threshold must be between 0.01 and 0.99.")
+            changes["gate_threshold"] = round(value, 2)
     memory_note = None
     if "memory" in changes:
         try:

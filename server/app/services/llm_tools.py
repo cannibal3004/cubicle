@@ -19,6 +19,7 @@ from app.services.computer_provider import (
     ComputerProviderError,
     check_package_names,
     computer_id_for_bot,
+    check_timeout,
 )
 from app.services.workspace_service import WorkspaceToolCall
 from app.services.bot_todo import STATES as TODO_STATES
@@ -131,8 +132,14 @@ COMPUTER_TOOLS: List[ToolSpec] = [
     ),
     ToolSpec(
         name="computer_terminal_execute",
-        description=f"Run a shell command inside the sandbox as its unprivileged user ({int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT)} second limit, after which it is killed and returns exit code 124 with its output so far; 1 MB of output). /workspace and the home directory persist between starts; /tmp does not. There is no sudo: for apt packages use computer_install_packages; pip (in a venv), npm, cargo and similar work normally in the home directory. To create or change files use computer_write_file and computer_edit_file rather than heredocs.",
-        parameters=_obj({"command": {"type": "string", "description": "Shell command to run"}}, ["command"]),
+        description=f"Run a shell command inside the sandbox as its unprivileged user (1 MB of output). It may run for {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT)} seconds unless you set timeout_seconds: longer (up to {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX)}) for builds, installs and test runs, shorter for probes of hosts that may hang. A command that hits its limit is killed and returns exit code 124 with its output so far. /workspace and the home directory persist between starts; /tmp does not. There is no sudo: for apt packages use computer_install_packages; pip (in a venv), npm, cargo and similar work normally in the home directory. To create or change files use computer_write_file and computer_edit_file rather than heredocs.",
+        parameters=_obj(
+            {
+                "command": {"type": "string", "description": "Shell command to run"},
+                "timeout_seconds": {"type": "integer", "description": f"How long it may run, in seconds (default {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT)}, at most {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX)})"},
+            },
+            ["command"],
+        ),
         group="computer",
         needs_approval=True,
     ),
@@ -567,6 +574,11 @@ def describe_tools(
 # ---- turning a model call into a gateway invocation ---------------------------
 
 
+def _duration(seconds: float) -> str:
+    seconds = int(seconds)
+    return f"{seconds // 60} min" if seconds >= 60 and seconds % 60 == 0 else f"{seconds} s"
+
+
 def parse_arguments(raw: Any) -> Dict[str, Any]:
     if raw is None or raw == "":
         return {}
@@ -662,7 +674,17 @@ def build_invocation(
         return _computer_invocation("browser_navigate", bot_id, {"url": url}, f"Navigate the computer for {bot_id} to {url}")
     if name == "computer_terminal_execute":
         command = _string(arguments, "command", required=True, max_len=TERMINAL_COMMAND_MAX_CHARS)
-        return _computer_invocation("terminal_execute", bot_id, {"command": command}, f"Run in the computer for {bot_id}: {command[:120]}")
+        args: Dict[str, Any] = {"command": command}
+        preview = f"Run in the computer for {bot_id}"
+        if arguments.get("timeout_seconds") not in (None, ""):
+            try:
+                limit = check_timeout(arguments.get("timeout_seconds"))
+            except ComputerProviderError as exc:
+                raise ToolCallError(str(exc)) from exc
+            args["timeout_seconds"] = int(limit)
+            if limit != float(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT):
+                preview += f" (up to {_duration(limit)})"
+        return _computer_invocation("terminal_execute", bot_id, args, f"{preview}: {command[:120]}")
     if name == "computer_read_file":
         path = _computer_file_path(arguments)
         return _computer_invocation("files_read", bot_id, {"path": path}, f"Read {path} from the computer for {bot_id}")
