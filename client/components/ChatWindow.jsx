@@ -416,6 +416,8 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
         if (cancelled) return;
         const turn = status?.turn;
         if (turn && turn.status === 'running') {
+          const attached = attachmentsRef.current[botId];
+          if (attached && attached.turnId === turn.turn_id) return; // This tab started it; nothing to pull in.
           // A turn started elsewhere (another machine, a schedule) may have
           // posted messages this tab has not seen: pull them in, ahead of
           // the reply the replayed events are about to build.
@@ -658,7 +660,14 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     updateMessages((prev) => [...prev, userMsgObj]);
 
     try {
-      await sendMessage(botId, botId, userText, activeModel, finalImageUrl);
+      const sent = await sendMessage(botId, botId, userText, activeModel, finalImageUrl);
+      // Take the server's id for the message, so a later history merge (a
+      // turn seen through the poll, a reload) recognises it as the same one.
+      if (sent?.message?.id) {
+        updateMessages((prev) =>
+          prev.map((msg) => (msg.id === userMsgObj.id ? { ...msg, id: sent.message.id, created_at: sent.message.created_at || msg.created_at } : msg))
+        );
+      }
       const started = await startTurn(botId, activeModel);
       attachToTurn(botId, started?.turn?.turn_id || null, 0);
     } catch (err) {
