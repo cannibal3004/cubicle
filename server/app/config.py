@@ -59,6 +59,14 @@ class Settings:
     # How many items a bot's to-do list may hold. The list travels with every
     # todo tool result and every compaction, so this bounds that cost.
     BOT_TODO_MAX_ITEMS: int = int(os.getenv("BOT_TODO_MAX_ITEMS", "50"))
+    # Scheduled tasks: the zone their times are written in (TZ is the usual
+    # name; SCHEDULE_TIMEZONE overrides it for schedules only), how often due
+    # schedules are checked, and bounds. SCHEDULER_ENABLED=0 turns the loop off.
+    SCHEDULE_TIMEZONE: str = (os.getenv("SCHEDULE_TIMEZONE") or os.getenv("TZ") or "UTC").strip()
+    SCHEDULE_TICK_SECONDS: float = float(os.getenv("SCHEDULE_TICK_SECONDS", "30"))
+    SCHEDULER_ENABLED: bool = os.getenv("SCHEDULER_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off")
+    SCHEDULES_MAX_PER_BOT: int = int(os.getenv("SCHEDULES_MAX_PER_BOT", "20"))
+    SCHEDULE_MIN_MINUTES: int = int(os.getenv("SCHEDULE_MIN_MINUTES", "5"))
     # Screenshots as images for the model: auto (unless the catalog says the
     # model has no vision), always, or never.
     LLM_SCREENSHOTS_TO_MODEL: str = os.getenv("LLM_SCREENSHOTS_TO_MODEL", "auto").strip().lower()

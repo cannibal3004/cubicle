@@ -696,6 +696,20 @@ async def turn_status(thread_id: str):
     return {"turn": turn.to_dict() if turn else None}
 
 
+async def start_scheduled_turn(bot_id: str, message: Dict[str, Any]) -> Turn:
+    """A schedule's run: store its prompt as the user's message and start the turn.
+
+    Raises TurnBusyError while a reply is in progress, so the scheduler
+    records a skip instead of posting a message nobody answers.
+    """
+    current = turn_manager.current(bot_id)
+    if current is not None and not current.finished:
+        raise TurnBusyError(current)
+    storage_service.add_message(message)
+    runner, selected_model = await _build_turn_runner(bot_id, None)
+    return turn_manager.start(bot_id, _bot_id_for(bot_id), selected_model, runner)
+
+
 @router.post("/turns/{thread_id}")
 async def start_turn(thread_id: str, body: Optional[StartTurnRequest] = None):
     """Start the bot's reply to the latest message as a server-owned task.

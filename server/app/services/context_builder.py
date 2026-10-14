@@ -25,6 +25,8 @@ MEMORY_EDIT_LEAD = "The user edited your notes (memory). They now read:"
 TODO_ITEM_TYPE = "todo"
 TODO_LEAD = "Your to-do list at this point:"
 TODO_EDIT_LEAD = "The user edited your to-do list. It is now:"
+# A user message a schedule posted; the model is told so it reports rather than converses.
+SCHEDULED_LEAD = "[Scheduled task '{name}', run automatically at {at}. Nobody is reading live: do the job and reply with a report.]"
 
 
 def is_compaction(message: Dict[str, Any]) -> bool:
@@ -174,7 +176,11 @@ def build_history_messages(history: List[Dict[str, Any]], *, replay_tools: bool)
     for message in live_messages(history):
         sender = message.get("sender")
         if sender == "user":
-            messages.append({"role": "user", "content": message.get("text", ""), "image_url": message.get("image_url")})
+            text = message.get("text", "") or ""
+            scheduled = (message.get("raw_payload") or {}).get("scheduled")
+            if isinstance(scheduled, dict):
+                text = f"{SCHEDULED_LEAD.format(name=scheduled.get('name', ''), at=scheduled.get('at', ''))}\n\n{text}"
+            messages.append({"role": "user", "content": text, "image_url": message.get("image_url")})
             continue
         if is_memory_note(message):
             messages.extend(memory_note_messages(message))

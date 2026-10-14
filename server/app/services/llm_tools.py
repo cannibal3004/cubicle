@@ -22,6 +22,7 @@ from app.services.computer_provider import (
 )
 from app.services.workspace_service import WorkspaceToolCall
 from app.services.bot_todo import STATES as TODO_STATES
+from app.services.schedule_service import ScheduleError, clean_cadence, describe_cadence
 
 
 class ToolCallError(ValueError):
@@ -351,6 +352,48 @@ TODO_TOOLS: List[ToolSpec] = [
 ]
 
 
+SCHEDULE_TOOLS: List[ToolSpec] = [
+    ToolSpec(
+        name="schedule_list",
+        description="Show your schedules: prompts set to run in this chat later, with the current time and timezone.",
+        parameters=_obj({}),
+        group="schedule",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="schedule_create",
+        description=(
+            "Schedule a prompt to run in this chat later: once at a time (or in a number of minutes), every N minutes, daily at a time, "
+            "or weekly on chosen days at a time. The run starts a fresh turn with the prompt as the user's message, so the prompt must "
+            "say everything needed to do the job from scratch: what to do, where things are, what to report. Call schedule_list first "
+            "when the time matters; it gives the current time and timezone. The user approves each new schedule."
+        ),
+        parameters=_obj(
+            {
+                "name": {"type": "string", "description": "A short name, e.g. Morning digest"},
+                "prompt": {"type": "string", "description": "The message to run, complete in itself"},
+                "kind": {"type": "string", "enum": ["once", "every", "daily", "weekly"]},
+                "at": {"type": "string", "description": "once: the date and time, YYYY-MM-DD HH:MM in the app's timezone"},
+                "in_minutes": {"type": "integer", "description": "once: alternatively, how many minutes from now"},
+                "minutes": {"type": "integer", "description": "every: the interval in minutes (at least 5)"},
+                "time": {"type": "string", "description": "daily and weekly: the time of day, HH:MM"},
+                "days": {"type": "array", "items": {"type": "integer"}, "description": "weekly: the weekdays, 0 = Monday to 6 = Sunday"},
+            },
+            ["name", "prompt", "kind"],
+        ),
+        group="schedule",
+        needs_approval=True,
+    ),
+    ToolSpec(
+        name="schedule_delete",
+        description="Delete one of your schedules by id (schedule_list shows them). The user approves.",
+        parameters=_obj({"id": {"type": "string", "description": "The schedule id, e.g. sch-1a2b3c4d"}}, ["id"]),
+        group="schedule",
+        needs_approval=True,
+    ),
+]
+
+
 def available_tools(
     *, computer: bool, github: bool = False, connectors: Optional[List[ToolSpec]] = None
 ) -> List[ToolSpec]:
@@ -365,6 +408,7 @@ def available_tools(
     specs.extend(SHARE_TOOLS)
     specs.extend(MEMORY_TOOLS)
     specs.extend(TODO_TOOLS)
+    specs.extend(SCHEDULE_TOOLS)
     if connectors:
         taken = {spec.name for spec in specs}
         specs.extend(spec for spec in connectors if spec.name not in taken)
@@ -493,6 +537,13 @@ def describe_tools(
             "steps, todo_add the steps first, mark each doing when you start it and done when it is finished (todo_update), and add "
             "steps you discover. Every todo result shows the whole list, the user sees and can edit it, and after a compaction the "
             "current list comes with the summary. Keep items short; it is a checklist, not notes."
+        )
+    if "schedule" in groups:
+        lines.append(
+            "- Schedules: schedule_create runs a prompt for you later in this chat, once or on a cadence, after the user approves it; "
+            "schedule_list shows them with the current time and timezone; schedule_delete removes one. Use them when the user asks to be "
+            "reminded, to check something later or to repeat a job. Write the prompt as a complete message to your future self: the run "
+            "starts a fresh turn in which only your notes and to-do list carry over."
         )
     if "github" in groups:
         lines.append("- GitHub: github_list_issues and github_create_issue act through the user's connected GitHub account.")
@@ -713,6 +764,28 @@ def build_invocation(
             changes["text"] = text
         what = "Remove" if remove else "Update"
         return ActionInvocation(name="todo.update", arguments=changes, target={"bot_id": bot_id}, preview=f"{what} to-do item {item_id} of {bot_id}")
+    if name == "schedule_list":
+        return ActionInvocation(name="schedule.list", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the schedules of {bot_id}")
+    if name == "schedule_create":
+        title = _string(arguments, "name", required=True, max_len=80)
+        prompt = _string(arguments, "prompt", required=True, max_len=4000)
+        cadence: Dict[str, Any] = {"kind": _string(arguments, "kind", required=True, max_len=10).lower()}
+        for key in ("at", "in_minutes", "minutes", "time", "days"):
+            if arguments.get(key) not in (None, "", []):
+                cadence[key] = arguments.get(key)
+        try:
+            cleaned = clean_cadence(cadence)
+        except ScheduleError as exc:
+            raise ToolCallError(str(exc)) from exc
+        return ActionInvocation(
+            name="schedule.create",
+            arguments={"bot_id": bot_id, "name": title, "prompt": prompt, "cadence": cleaned},
+            target={"bot_id": bot_id},
+            preview=f"Schedule '{title}' {describe_cadence(cleaned)} for {bot_id}: {prompt[:120]}",
+        )
+    if name == "schedule_delete":
+        schedule_id = _string(arguments, "id", required=True, max_len=40)
+        return ActionInvocation(name="schedule.delete", arguments={"bot_id": bot_id, "id": schedule_id}, target={"bot_id": bot_id}, preview=f"Delete schedule {schedule_id} of {bot_id}")
     if name == "memory_read":
         return ActionInvocation(
             name="memory.read", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the notes of {bot_id}"

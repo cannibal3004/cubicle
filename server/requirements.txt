@@ -6,3 +6,5 @@ pydantic>=2.6.0
 python-dotenv>=1.0.0
 python-multipart>=0.0.9
 cryptography>=42.0.0
+# IANA timezone database for scheduled tasks (slim images and Windows have none).
+tzdata>=2024.1

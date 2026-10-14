@@ -5,7 +5,17 @@ import { FiX, FiArchive, FiTrash2, FiRotateCcw, FiAlertTriangle } from 'react-ic
 import ModelPicker from './ModelPicker';
 import BotToolsSection from './BotToolsSection';
 import SecretsSection from './SecretsSection';
-import { fetchBotSecrets, setBotSecret, deleteBotSecret } from '../lib/api';
+import SchedulesSection from './SchedulesSection';
+import {
+  fetchBotSecrets,
+  setBotSecret,
+  deleteBotSecret,
+  fetchBotSchedules,
+  createBotSchedule,
+  updateBotSchedule,
+  deleteBotSchedule,
+  runBotSchedule,
+} from '../lib/api';
 
 const AVATARS = ['🤖', '🧠', '🦊', '🐙', '🦉', '🐝', '🧭', '🛠️', '📚', '🎯', '🧪', '🌱'];
 const ACCENTS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#f43f5e', '#a3a3a3'];
@@ -105,6 +115,12 @@ export default function BotEditorModal({
   const loadBotSecrets = useCallback(() => fetchBotSecrets(botId), [botId]);
   const saveBotSecret = useCallback((name, value) => setBotSecret(botId, name, value), [botId]);
   const removeBotSecret = useCallback((name) => deleteBotSecret(botId, name), [botId]);
+  const [showSchedules, setShowSchedules] = useState(false);
+  const loadSchedules = useCallback(() => fetchBotSchedules(botId), [botId]);
+  const addSchedule = useCallback((schedule) => createBotSchedule(botId, schedule), [botId]);
+  const changeSchedule = useCallback((id, changes) => updateBotSchedule(botId, id, changes), [botId]);
+  const removeSchedule = useCallback((id) => deleteBotSchedule(botId, id), [botId]);
+  const runSchedule = useCallback((id) => runBotSchedule(botId, id), [botId]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -372,6 +388,25 @@ export default function BotEditorModal({
                     remove={removeBotSecret}
                     hint="Set as environment variables in this bot's computer, on top of the app-wide secrets. Values are stored encrypted and never shown again; a running computer picks up changes at its next start."
                   />
+                </div>
+              )}
+            </div>
+          )}
+
+          {bot && (
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowSchedules((v) => !v)}
+                className="flex items-center justify-between w-full text-left"
+                aria-expanded={showSchedules}
+              >
+                <span className={labelClass + ' mb-0'}>Schedules</span>
+                <span className="text-[11px] text-zinc-500">{showSchedules ? 'Hide' : 'Prompts that run on their own'}</span>
+              </button>
+              {showSchedules && (
+                <div className="mt-2">
+                  <SchedulesSection load={loadSchedules} create={addSchedule} update={changeSchedule} remove={removeSchedule} runNow={runSchedule} />
                 </div>
               )}
             </div>

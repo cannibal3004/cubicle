@@ -415,7 +415,25 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
       .then((status) => {
         if (cancelled) return;
         const turn = status?.turn;
-        if (turn && turn.status === 'running') attachToTurn(botId, turn.turn_id, 0);
+        if (turn && turn.status === 'running') {
+          // A turn started elsewhere (another machine, a schedule) may have
+          // posted messages this tab has not seen: pull them in, ahead of
+          // the reply the replayed events are about to build.
+          fetchChatHistory(botId)
+            .then((history) => {
+              if (cancelled) return;
+              setMessagesFor(botId, (prev) => {
+                const current = prev || [];
+                const seen = new Set(current.map((m) => m.id));
+                const missing = (history || []).filter((m) => !seen.has(m.id));
+                if (!missing.length) return current;
+                const at = current.findIndex((m) => m.isStreaming);
+                return at === -1 ? [...current, ...missing] : [...current.slice(0, at), ...missing, ...current.slice(at)];
+              });
+            })
+            .catch(() => {});
+          attachToTurn(botId, turn.turn_id, 0);
+        }
       })
       .catch(() => {});
     return () => {

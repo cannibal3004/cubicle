@@ -1,16 +1,31 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.routers import auth, bots, models, chat, approvals, upload, settings as settings_router, connectors, audit, computers, tools, files, gate, commands, secrets
+from app.routers import auth, bots, models, chat, approvals, upload, settings as settings_router, connectors, audit, computers, tools, files, gate, commands, secrets, schedules
+from app.services.scheduler import scheduler
 from app.services.auth_service import auth_service
 from app.services.llm_service import current_llm_config
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Due schedules post their prompt into the bot's chat and start a turn
+    # through the chat router, exactly as a user message would.
+    if settings.SCHEDULER_ENABLED:
+        scheduler.start(chat.start_scheduled_turn)
+    yield
+    await scheduler.stop()
+
 
 app = FastAPI(
     title="Cubicle API",
     description="FastAPI backend for Cubicle. Talks to any OpenAI-compatible LLM server (OpenRouter, Ollama, LM Studio, llama.cpp, vLLM) or the legacy MUAPI API.",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Configure CORS for Next.js frontend
@@ -66,6 +81,7 @@ app.include_router(files.router)
 app.include_router(gate.router)
 app.include_router(commands.router)
 app.include_router(secrets.router)
+app.include_router(schedules.router)
 
 
 @app.get("/api/v1/health")

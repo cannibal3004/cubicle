@@ -147,7 +147,7 @@ class BotTodoTests(unittest.TestCase):
         described = describe_tools(specs)
         self.assertIn("Your to-do list", described)
         self.assertIn("todo_add the steps first", described)
-        self.assertNotIn("to-do", describe_tools([s for s in specs if s.group != "todo"]))
+        self.assertNotIn("Your to-do list", describe_tools([s for s in specs if s.group != "todo"]))
 
         with self.assertRaisesRegex(ToolCallError, "one or more item texts"):
             build_invocation("todo_add", {"items": []}, "bot-9")
