@@ -79,6 +79,15 @@ class FakeComposio:
         if toolkit == "context7_mcp":
             # MCP-backed toolkits flag nothing as important.
             return [] if important_only else [{"slug": "CONTEXT7_MCP_QUERY_DOCS", "toolkit": {"slug": "context7_mcp", "name": "Context7 MCP"}, "tags": ["readOnlyHint"]}]
+        if toolkit == "composio":
+            kit = {"slug": "composio", "name": "Composio"}
+            return [
+                {"slug": "COMPOSIO_SEARCH_TOOLS", "toolkit": kit, "tags": ["important", "readOnlyHint"]},
+                {"slug": "COMPOSIO_MANAGE_CONNECTIONS", "toolkit": kit, "tags": ["destructiveHint"]},
+                {"slug": "COMPOSIO_EXECUTE_TOOL", "toolkit": kit, "tags": ["important", "destructiveHint"]},
+                {"slug": "COMPOSIO_REMOTE_BASH_TOOL", "toolkit": kit, "tags": ["important"]},
+                {"slug": "COMPOSIO_WAIT_FOR_CONNECTIONS", "toolkit": kit, "tags": ["readOnlyHint"]},
+            ]
         if toolkit == "gmail":
             tools = [GMAIL_SEND, GMAIL_FETCH, {"slug": "GMAIL_OLD", "is_deprecated": True, "toolkit": {"slug": "gmail"}}]
             if not important_only:
@@ -131,6 +140,68 @@ class SpecTests(unittest.TestCase):
         self.assertEqual([s.name for s in specs], ["gmail_send_email", "gmail_list_filters"])
         # Exactly the allowed slugs were requested, not a page of the catalog.
         self.assertEqual(service.listed, [("gmail", ["GMAIL_LIST_FILTERS", "GMAIL_SEND_EMAIL"])])
+
+    def test_composios_own_toolkit_is_curated_to_search_and_connections(self):
+        from app.services.connector_tools import BUILTIN_ALLOW_LISTS
+
+        service = FakeComposio(toolkits=("composio",))
+        specs = asyncio.run(connector_tool_specs(service))
+        # The remote sandbox and the blocking wait are not offered; the rest keep Composio's own hints.
+        self.assertEqual([s.name for s in specs], ["composio_search_tools", "composio_execute_tool"])
+        self.assertEqual([s.needs_approval for s in specs], [False, True])
+        self.assertEqual(service.listed, [("composio", sorted(BUILTIN_ALLOW_LISTS["composio"]))])
+        # A dashboard allow list still wins over the built-in one.
+        service = FakeComposio(toolkits=("composio",), allowed={"composio": ["COMPOSIO_SEARCH_TOOLS"]})
+        self.assertEqual([s.name for s in asyncio.run(connector_tool_specs(service))], ["composio_search_tools"])
+        prompt = describe_tools(asyncio.run(connector_tool_specs(FakeComposio(toolkits=("composio",)))))
+        self.assertIn("composio_search_tools finds apps", prompt)
+
+    def test_connect_and_status_tools_use_the_apps_own_flow(self):
+        from unittest import mock
+
+        from app.services import connector_tools as module
+        from app.services.action_gateway import ActionInvocation
+        from app.services.llm_tools import CONNECTOR_TOOLS, ToolCallError, available_tools, build_invocation, describe_tools
+
+        offered = available_tools(computer=False, connector_management=True)
+        self.assertEqual([s.name for s in offered if s.group == "connectors"], ["connector_connect", "connector_status"])
+        self.assertNotIn("connector_connect", [s.name for s in available_tools(computer=False)])
+        self.assertEqual([s.needs_approval for s in CONNECTOR_TOOLS], [True, False])
+        self.assertIn("call connector_connect with its toolkit slug", describe_tools(offered))
+
+        connect = build_invocation("connector_connect", {"toolkit": "GoogleDrive"}, "bot-1")
+        self.assertEqual((connect.name, connect.arguments), ("connector.connect", {"toolkit": "googledrive"}))
+        self.assertIn("Connect googledrive through Composio", connect.preview)
+        status = build_invocation("connector_status", {"toolkits": ["googledrive", "gmail", "googledrive"]}, "bot-1")
+        self.assertEqual(status.arguments, {"toolkits": ["googledrive", "gmail"]})
+        with self.assertRaises(ToolCallError):
+            build_invocation("connector_connect", {"toolkit": "not a slug!"}, "bot-1")
+
+        class Service:
+            def __init__(self):
+                self.forgot = 0
+
+            async def create_auth_link(self, slug, api_key=None):
+                if slug == "hackernews":
+                    return {"url": None, "connected": True, "no_auth": True}
+                return {"url": f"https://connect.composio.dev/link/{slug}", "expires_at": "soon", "connected_account_id": "ca_1"}
+
+            async def connection_status(self, slugs, api_key=None):
+                return {slug: {"connected": slug == "gmail"} for slug in slugs}
+
+            def forget_connections(self):
+                self.forgot += 1
+
+        service = Service()
+        with mock.patch.object(module, "composio_service", service):
+            linked = asyncio.run(module.connect_app(ActionInvocation(name="connector.connect", arguments={"toolkit": "googledrive"}, target={}, preview="")))
+            self.assertEqual((linked["connected"], linked["url"]), (False, "https://connect.composio.dev/link/googledrive"))
+            self.assertIn("sign in", linked["note"])
+            direct = asyncio.run(module.connect_app(ActionInvocation(name="connector.connect", arguments={"toolkit": "hackernews"}, target={}, preview="")))
+            self.assertTrue(direct["connected"])
+            checked = asyncio.run(module.connection_status(ActionInvocation(name="connector.status", arguments={"toolkits": ["gmail", "googledrive"]}, target={}, preview="")))
+            self.assertEqual(checked["services"], {"gmail": {"connected": True}, "googledrive": {"connected": False}})
+        self.assertEqual(service.forgot, 3)
 
     def test_toolkits_without_important_tools_offer_everything_they_have(self):
         service = FakeComposio(toolkits=("context7_mcp",))

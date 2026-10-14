@@ -105,6 +105,21 @@ def spec_from_composio_tool(tool: Dict[str, Any]) -> Optional[ToolSpec]:
     )
 
 
+# Toolkits whose catalog needs curating when the dashboard sets no allow list.
+# Composio's own toolkit also carries remote sandboxes, agent runners and
+# trigger management, none of which belong in a local-first bot.
+BUILTIN_ALLOW_LISTS: Dict[str, List[str]] = {
+    "composio": [
+        "COMPOSIO_SEARCH_TOOLS",
+        "COMPOSIO_RETRIEVE_TOOLKITS",
+        "COMPOSIO_GET_TOOL_SCHEMAS",
+        "COMPOSIO_GET_REQUIRED_PARAMETERS",
+        "COMPOSIO_CHECK_ACTIVE_CONNECTIONS",
+        "COMPOSIO_EXECUTE_TOOL",
+    ],
+}
+
+
 async def connector_tool_specs(service: Any = None) -> List[ToolSpec]:
     """Specs for every tool in every connected toolkit, or [] when unavailable.
 
@@ -134,6 +149,8 @@ async def connector_tool_specs(service: Any = None) -> List[ToolSpec]:
             allowed = None
             if hasattr(service, "allowed_tools"):
                 allowed = await service.allowed_tools(toolkit)
+            if allowed is None and toolkit in BUILTIN_ALLOW_LISTS:
+                allowed = list(BUILTIN_ALLOW_LISTS[toolkit])
             if allowed is not None:
                 tools = await service.list_tools(toolkit, important_only=False, limit=200, tool_slugs=list(allowed))
                 wanted = set(allowed)
@@ -174,8 +191,63 @@ async def execute_composio_tool(call: ActionInvocation) -> Dict[str, Any]:
     version = arguments.get("version")
     if not isinstance(slug, str) or not isinstance(payload, dict):
         raise ConnectorServiceError("The connector tool call is malformed.")
-    return await composio_service.execute_tool(slug, payload, version=version if isinstance(version, str) else None)
+    result = await composio_service.execute_tool(slug, payload, version=version if isinstance(version, str) else None)
+    if slug.upper().startswith("COMPOSIO_"):
+        # Connections may have changed (the bot connected an app for the
+        # user): the next turn lists toolkits afresh.
+        composio_service.forget_connections()
+    return result
 
+
+async def connect_app(call: ActionInvocation) -> Dict[str, Any]:
+    """Start a connection the way the marketplace does; the model relays the link."""
+    arguments = call.arguments if isinstance(call.arguments, dict) else {}
+    slug = str(arguments.get("toolkit") or "").strip().lower()
+    if not slug:
+        raise ConnectorServiceError("A toolkit slug is required.")
+    link = await composio_service.create_auth_link(slug)
+    composio_service.forget_connections()
+    if link.get("connected"):
+        return {"toolkit": slug, "connected": True, "url": None, "note": "This app needs no sign-in; its tools are offered from your next turn."}
+    return {
+        "toolkit": slug,
+        "connected": False,
+        "url": link.get("url"),
+        "expires_at": link.get("expires_at"),
+        "note": "Give the user this link to sign in. Call connector_status once they say they have finished.",
+    }
+
+
+async def connection_status(call: ActionInvocation) -> Dict[str, Any]:
+    arguments = call.arguments if isinstance(call.arguments, dict) else {}
+    slugs = [str(s).lower() for s in (arguments.get("toolkits") or []) if isinstance(s, str)]
+    composio_service.forget_connections()
+    return {"services": await composio_service.connection_status(slugs)}
+
+
+action_gateway.register_action(
+    ActionDefinition(
+        name="connector.connect",
+        tool="connector",
+        action="connect",
+        intent="Start connecting an app through Composio for the user.",
+        risk="external",
+        requires_approval=True,
+    ),
+    connect_app,
+)
+
+action_gateway.register_action(
+    ActionDefinition(
+        name="connector.status",
+        tool="connector",
+        action="status",
+        intent="Check which apps the user has connected.",
+        risk="read",
+        requires_approval=False,
+    ),
+    connection_status,
+)
 
 action_gateway.register_action(
     ActionDefinition(

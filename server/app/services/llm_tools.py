@@ -405,8 +405,36 @@ SCHEDULE_TOOLS: List[ToolSpec] = [
 ]
 
 
+# Connecting apps through Composio, with Cubicle's own flow (the same one the
+# marketplace uses). Composio's COMPOSIO_MANAGE_CONNECTIONS only works inside
+# a Composio tool-router session, which this app does not use.
+_TOOLKIT_SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+CONNECTOR_TOOLS: List[ToolSpec] = [
+    ToolSpec(
+        name="connector_connect",
+        description=(
+            "Start connecting an app through Composio for the user, by toolkit slug (find slugs with composio_search_tools "
+            "or composio_retrieve_toolkits). The result carries a sign-in link: give the user that link as a Markdown link and "
+            "stop there; the app's own tools are offered from the turn after they sign in. An app that needs no sign-in is "
+            "connected at once. The user approves each new connection."
+        ),
+        parameters=_obj({"toolkit": {"type": "string", "description": "The toolkit slug, e.g. googledrive"}}, ["toolkit"]),
+        group="connectors",
+        needs_approval=True,
+    ),
+    ToolSpec(
+        name="connector_status",
+        description="Whether the user has active connections for the given toolkits (by slug), e.g. after they say they signed in.",
+        parameters=_obj({"toolkits": {"type": "array", "items": {"type": "string"}, "description": "Toolkit slugs to check"}}, ["toolkits"]),
+        group="connectors",
+        needs_approval=False,
+    ),
+]
+
+
 def available_tools(
-    *, computer: bool, github: bool = False, connectors: Optional[List[ToolSpec]] = None
+    *, computer: bool, github: bool = False, connectors: Optional[List[ToolSpec]] = None, connector_management: bool = False
 ) -> List[ToolSpec]:
     """The built-in tools plus any discovered for connected apps.
 
@@ -420,6 +448,8 @@ def available_tools(
     specs.extend(MEMORY_TOOLS)
     specs.extend(TODO_TOOLS)
     specs.extend(SCHEDULE_TOOLS)
+    if connector_management:
+        specs.extend(CONNECTOR_TOOLS)
     if connectors:
         taken = {spec.name for spec in specs}
         specs.extend(spec for spec in connectors if spec.name not in taken)
@@ -568,6 +598,18 @@ def describe_tools(
             f"- Connected apps ({apps}): tools named <app>_<action>, such as {next(s.name for s in specs if s.connector)}, "
             "act through the user's own accounts. Read tools run directly; anything that sends, changes, or deletes asks the user first. "
             "Results are the app's raw API response."
+        )
+        if "composio" in toolkits:
+            lines.append(
+                "- Composio itself: composio_search_tools finds apps and their tools for a task (read-only; results include Composio's own "
+                "skills for the task). composio_execute_tool runs any tool of a connected app by slug, after approval; prefer the app's "
+                "own tools when they are offered."
+            )
+    if "connectors" in groups:
+        lines.append(
+            "- Connecting apps: when the user asks to connect an app, call connector_connect with its toolkit slug (after approval it "
+            "returns a sign-in link): give the user that link as a Markdown link and stop. Once they say they have signed in, "
+            "connector_status confirms it, and the app's own tools are offered from your next turn."
         )
     approval = sorted(spec.name for spec in specs if spec.needs_approval)
     if approval:
@@ -817,6 +859,32 @@ def build_invocation(
     if name == "schedule_delete":
         schedule_id = _string(arguments, "id", required=True, max_len=40)
         return ActionInvocation(name="schedule.delete", arguments={"bot_id": bot_id, "id": schedule_id}, target={"bot_id": bot_id}, preview=f"Delete schedule {schedule_id} of {bot_id}")
+    if name == "connector_connect":
+        toolkit = _string(arguments, "toolkit", required=True, max_len=64).lower()
+        if not _TOOLKIT_SLUG.fullmatch(toolkit):
+            raise ToolCallError("'toolkit' must be a Composio toolkit slug such as googledrive.")
+        return ActionInvocation(
+            name="connector.connect",
+            arguments={"toolkit": toolkit},
+            target={"toolkit": toolkit},
+            preview=f"Connect {toolkit} through Composio: the user gets a sign-in link",
+        )
+    if name == "connector_status":
+        raw = arguments.get("toolkits")
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, list) or not raw:
+            raise ToolCallError("'toolkits' must list one or more toolkit slugs.")
+        slugs = []
+        for item in raw[:20]:
+            slug = str(item).strip().lower()
+            if not _TOOLKIT_SLUG.fullmatch(slug):
+                raise ToolCallError(f"{str(item)[:40]!r} is not a toolkit slug.")
+            if slug not in slugs:
+                slugs.append(slug)
+        return ActionInvocation(
+            name="connector.status", arguments={"toolkits": slugs}, target={"toolkits": slugs}, preview=f"Check connections: {', '.join(slugs)}"
+        )
     if name == "memory_read":
         return ActionInvocation(
             name="memory.read", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the notes of {bot_id}"

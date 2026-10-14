@@ -328,6 +328,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
             computer=settings.COMPUTER_PROVIDER == "docker",
             github=bool(composio_service.get_api_key()) and not connector_specs,
             connectors=connector_specs,
+            connector_management=bool(composio_service.get_api_key()),
         )
         # The bot's own tool choices, then apps switched off for every bot.
         tool_specs = filter_tools(

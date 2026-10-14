@@ -19,6 +19,9 @@ from app.services.storage_service import StorageService, storage_service
 
 
 BACKEND_URL = "https://backend.composio.dev/api/v3"
+# Composio's own toolkit: catalog search and connection management. It needs
+# no auth, so it is on as soon as a key is set.
+COMPOSIO_TOOLKIT = "composio"
 # Composio scopes connected accounts to a user id. This app has one owner, so
 # one fixed id keeps link creation, status checks, and tool execution aligned.
 # The value predates the rename to Cubicle and is kept on purpose: every
@@ -202,18 +205,38 @@ class ComposioService:
     # is kept in app settings and counts as connected from then on.
 
     def enabled_no_auth_toolkits(self) -> List[str]:
-        raw = self.storage.get_settings().get("no_auth_toolkits") or []
-        slugs = []
+        """No-auth toolkits that count as connected: Composio's own (whenever a key
+        is set, unless the user switched it off) plus the ones the user connected.
+        """
+        config = self.storage.get_settings()
+        off = self._no_auth_off(config)
+        slugs: List[str] = []
+        if COMPOSIO_TOOLKIT not in off and self.get_api_key():
+            slugs.append(COMPOSIO_TOOLKIT)
+        raw = config.get("no_auth_toolkits") or []
         for slug in raw if isinstance(raw, list) else []:
             text = str(slug).lower()
-            if _SAFE_TOOLKIT_SLUG.fullmatch(text) and text not in slugs:
+            if _SAFE_TOOLKIT_SLUG.fullmatch(text) and text not in slugs and text not in off:
                 slugs.append(text)
         return slugs
 
-    def _set_no_auth_toolkits(self, slugs: List[str]) -> None:
+    @staticmethod
+    def _stored_no_auth(config: Dict[str, Any]) -> List[str]:
+        raw = config.get("no_auth_toolkits") or []
+        return [str(s).lower() for s in raw if isinstance(s, str) and _SAFE_TOOLKIT_SLUG.fullmatch(str(s).lower())] if isinstance(raw, list) else []
+
+    @staticmethod
+    def _no_auth_off(config: Dict[str, Any]) -> List[str]:
+        raw = config.get("no_auth_toolkits_off") or []
+        return [str(s).lower() for s in raw if isinstance(s, str)] if isinstance(raw, list) else []
+
+    def _set_no_auth_toolkits(self, slugs: List[str], off: Optional[List[str]] = None) -> None:
         save = getattr(self.storage, "save_settings", None)
         if callable(save):
-            save({"no_auth_toolkits": sorted(set(slugs))})
+            data: Dict[str, Any] = {"no_auth_toolkits": sorted(set(slugs))}
+            if off is not None:
+                data["no_auth_toolkits_off"] = sorted(set(off))
+            save(data)
         self.forget_connections()
 
     async def is_no_auth_toolkit(self, toolkit_slug: str, api_key: Optional[str] = None) -> bool:
@@ -436,7 +459,10 @@ class ComposioService:
         slug = self._validate_toolkit_slug(toolkit_slug)
         info = await self.toolkit_auth_info(slug, api_key=api_key)
         if "NO_AUTH" in info["auth_schemes"] and not info["managed_schemes"]:
-            self._set_no_auth_toolkits(self.enabled_no_auth_toolkits() + [slug])
+            config = self.storage.get_settings()
+            off = [s for s in self._no_auth_off(config) if s != slug]
+            stored = self._stored_no_auth(config)
+            self._set_no_auth_toolkits(stored + ([slug] if slug != COMPOSIO_TOOLKIT else []), off=off)
             return {"url": None, "connected": True, "no_auth": True}
         auth_config_id = await self.ensure_auth_config(slug, api_key=api_key, info=info)
         body: Dict[str, Any] = {"auth_config_id": auth_config_id, "user_id": self.user_id}
@@ -456,9 +482,9 @@ class ComposioService:
         """Delete every connected account for the toolkit; returns how many."""
         slug = self._validate_toolkit_slug(toolkit_slug)
         removed = 0
-        enabled = self.enabled_no_auth_toolkits()
-        if slug in enabled:
-            self._set_no_auth_toolkits([s for s in enabled if s != slug])
+        if slug in self.enabled_no_auth_toolkits():
+            config = self.storage.get_settings()
+            self._set_no_auth_toolkits([s for s in self._stored_no_auth(config) if s != slug], off=self._no_auth_off(config) + [slug])
             removed += 1
         for account in await self.list_connected_accounts([slug], api_key=api_key):
             account_id = account.get("id")
