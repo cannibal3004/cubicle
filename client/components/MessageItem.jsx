@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { FiX, FiChevronRight, FiTool, FiZap } from 'react-icons/fi';
 import FileCard from './FileCard';
 
@@ -223,8 +224,26 @@ function MessageItem({ message, botId }) {
         )}
         {toolCalls.length > 0 && <ToolCallList calls={toolCalls} />}
         <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
           components={{
             p: ({ node, ...props }) => <div className="mb-2 last:mb-0 leading-relaxed" {...props} />,
+            h1: ({ node, ...props }) => <h1 className="text-sm font-bold text-white mt-3 mb-1.5 first:mt-0" {...props} />,
+            h2: ({ node, ...props }) => <h2 className="text-sm font-bold text-white mt-3 mb-1.5 first:mt-0" {...props} />,
+            h3: ({ node, ...props }) => <h3 className="text-xs font-semibold text-zinc-100 mt-2.5 mb-1 first:mt-0" {...props} />,
+            h4: ({ node, ...props }) => <h4 className="text-xs font-semibold text-zinc-100 mt-2 mb-1" {...props} />,
+            a: ({ node, ...props }) => <a className="text-cyan-300 underline underline-offset-2 hover:text-cyan-200" target="_blank" rel="noreferrer" {...props} />,
+            del: ({ node, ...props }) => <del className="text-zinc-500" {...props} />,
+            blockquote: ({ node, ...props }) => <blockquote className="border-l-2 border-[#3f3f46] pl-3 my-2 text-zinc-400 italic" {...props} />,
+            hr: ({ node, ...props }) => <hr className="my-3 border-[#26262b]" {...props} />,
+            table: ({ node, ...props }) => (
+              <div className="my-2 overflow-x-auto rounded-lg border border-[#2b2b32]">
+                <table className="w-full text-left text-[11px] border-collapse" {...props} />
+              </div>
+            ),
+            thead: ({ node, ...props }) => <thead className="bg-[#1a1a1e] text-zinc-100" {...props} />,
+            th: ({ node, ...props }) => <th className="px-2.5 py-1.5 font-semibold border-b border-[#2b2b32] whitespace-nowrap" {...props} />,
+            td: ({ node, ...props }) => <td className="px-2.5 py-1 border-b border-[#1f1f23] align-top text-zinc-200" {...props} />,
+            input: ({ node, ...props }) => <input className="mr-1.5 accent-cyan-400 align-middle" {...props} />,
             strong: ({ node, ...props }) => <strong className="font-bold text-white" {...props} />,
             code: ({ node, inline, className, children, ...props }) => {
               const isInline = inline || (!className && typeof children === 'string' && !children.includes('\n'));
