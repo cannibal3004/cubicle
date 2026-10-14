@@ -795,9 +795,8 @@ class DockerComputerProvider:
 
     async def files_list(self, computer_id: str, path: str = "/workspace") -> Dict[str, Any]:
         record = self._active_record(computer_id)
-        if not isinstance(path, str) or len(path) > 512 or not path.strip().startswith("/"):
-            raise ComputerProviderError("Computer file paths must be absolute and at most 512 characters.")
-        result = await self._request(record, "POST", "/files", {"path": path.strip()})
+        normalized = check_file_path(path if isinstance(path, str) and path.strip() else "/workspace")
+        result = await self._request(record, "POST", "/files", {"path": normalized})
         self._touch(record.status, "files.list")
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
 

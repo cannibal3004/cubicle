@@ -19,6 +19,7 @@ from app.services.computer_provider import (
     ComputerProviderError,
     check_package_names,
     computer_id_for_bot,
+    check_file_path,
     check_timeout,
 )
 from app.services.workspace_service import WorkspaceToolCall
@@ -106,6 +107,9 @@ def _file_roots(shared_in_computer: bool) -> str:
     return "/workspace, /shared or the home directory" if shared_in_computer else "/workspace or the home directory"
 
 
+_PATH_HINT = "Path inside the sandbox; a relative path is taken from /workspace, ~ is the home directory"
+
+
 _FILE_ROOTS = _file_roots(SHARED_IN_COMPUTER)
 
 COMPUTER_TOOLS: List[ToolSpec] = [
@@ -146,14 +150,14 @@ COMPUTER_TOOLS: List[ToolSpec] = [
     ToolSpec(
         name="computer_files_list",
         description="List files inside the sandbox at a path (default /workspace).",
-        parameters=_obj({"path": {"type": "string", "description": "Absolute path inside the sandbox"}}),
+        parameters=_obj({"path": {"type": "string", "description": _PATH_HINT}}),
         group="computer",
         needs_approval=False,
     ),
     ToolSpec(
         name="computer_read_file",
         description=f"Read a UTF-8 text file inside the sandbox (under {_FILE_ROOTS}, at most 512 KB).",
-        parameters=_obj({"path": {"type": "string", "description": "Absolute path inside the sandbox"}}, ["path"]),
+        parameters=_obj({"path": {"type": "string", "description": _PATH_HINT}}, ["path"]),
         group="computer",
         needs_approval=False,
     ),
@@ -162,7 +166,7 @@ COMPUTER_TOOLS: List[ToolSpec] = [
         description=f"Create or replace a UTF-8 text file inside the sandbox (under {_FILE_ROOTS}). Missing parent directories are created. Give the complete file contents; for a change to an existing file use computer_edit_file.",
         parameters=_obj(
             {
-                "path": {"type": "string", "description": "Absolute path inside the sandbox"},
+                "path": {"type": "string", "description": _PATH_HINT},
                 "content": {"type": "string", "description": "Full file contents"},
             },
             ["path", "content"],
@@ -175,7 +179,7 @@ COMPUTER_TOOLS: List[ToolSpec] = [
         description="Change one passage of a text file inside the sandbox: old_text is replaced by new_text. old_text must match the file exactly and only once, so copy it verbatim (computer_read_file shows the file) and include enough surrounding lines to be unique; an empty new_text removes the passage.",
         parameters=_obj(
             {
-                "path": {"type": "string", "description": "Absolute path inside the sandbox"},
+                "path": {"type": "string", "description": _PATH_HINT},
                 "old_text": {"type": "string", "description": "The exact passage to replace"},
                 "new_text": {"type": "string", "description": "What it becomes; empty to remove the passage"},
             },
@@ -506,7 +510,7 @@ def describe_tools(
             "Navigate with computer_browser_navigate, then computer_screenshot to see the page, computer_send_input to click or type, "
             "and computer_terminal_execute for commands. The computer starts itself the first time you use it (that first call can take a little longer); computer_start only warms it up. "
             f"Files: computer_read_file, computer_write_file and computer_edit_file handle files under {_file_roots(shared_in_computer)}; "
-            "use them instead of heredocs or sed in the terminal. "
+            "use them instead of heredocs or sed in the terminal; a relative path means under /workspace, so 'report.md' is /workspace/report.md. "
             + (
                 "/workspace is your own project space. /shared is the user's shared folder: a directory on the host that the user "
                 "and other bots see too; put anything the user should find outside the chat there, and nothing else. "
@@ -620,10 +624,11 @@ def _number(args: Dict[str, Any], key: str, *, required: bool = False, default: 
 
 
 def _computer_file_path(arguments: Dict[str, Any]) -> str:
-    path = _string(arguments, "path", required=True, max_len=512).strip()
-    if not path.startswith("/"):
-        raise ToolCallError("'path' must be an absolute path inside the sandbox, e.g. /workspace/app/main.py.")
-    return path
+    path = _string(arguments, "path", required=True, max_len=512)
+    try:
+        return check_file_path(path)
+    except ComputerProviderError as exc:
+        raise ToolCallError(str(exc)) from exc
 
 
 def _computer_invocation(action: str, bot_id: str, arguments: Dict[str, Any], preview: str) -> ActionInvocation:
@@ -705,7 +710,11 @@ def build_invocation(
             f"Edit {path} in the computer for {bot_id} ({len(old_text)} characters become {len(new_text)})",
         )
     if name == "computer_files_list":
-        path = _string(arguments, "path", default="/workspace", max_len=1000)
+        path = _string(arguments, "path", default="/workspace", max_len=512)
+        try:
+            path = check_file_path(path or "/workspace")
+        except ComputerProviderError as exc:
+            raise ToolCallError(str(exc)) from exc
         return _computer_invocation("files_list", bot_id, {"path": path}, f"List computer files for {bot_id} at {path}")
     if name == "computer_install_packages":
         try:
