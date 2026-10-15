@@ -433,6 +433,57 @@ CONNECTOR_TOOLS: List[ToolSpec] = [
 ]
 
 
+# Managing MCP servers: a bot can set one up when asked. Secret values never
+# pass through the model; a value written as $NAME refers to an app secret.
+MCP_TOOLS: List[ToolSpec] = [
+    ToolSpec(
+        name="mcp_list_servers",
+        description="List the configured MCP servers with their status and tool counts.",
+        parameters=_obj({}),
+        group="mcp",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="mcp_add_server",
+        description=(
+            "Add an MCP server (the user approves). Either a command run over stdio (command plus args, e.g. npx -y @upstash/context7-mcp) "
+            "or a streamable-HTTP url. For an API key, never ask the user to paste it into the chat: tell them to add it as an app secret "
+            "(App Settings -> Secrets) and write $NAME as the env or header value. The server is connected and tested at once; its tools "
+            "are offered from your next turn. Set trust_read_only only for servers that cannot change anything (documentation, search)."
+        ),
+        parameters=_obj(
+            {
+                "name": {"type": "string", "description": "A short name, e.g. Context7"},
+                "transport": {"type": "string", "enum": ["stdio", "http"]},
+                "command": {"type": "string", "description": "stdio: the program to run, e.g. npx or uvx"},
+                "args": {"type": "array", "items": {"type": "string"}, "description": "stdio: its arguments"},
+                "env": {"type": "object", "additionalProperties": {"type": "string"}, "description": "stdio: environment variables; use $NAME for an app secret"},
+                "url": {"type": "string", "description": "http: the server URL"},
+                "headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "http: request headers; use $NAME for an app secret"},
+                "trust_read_only": {"type": "boolean", "description": "Treat every tool of this server as read-only (no approval)"},
+            },
+            ["name", "transport"],
+        ),
+        group="mcp",
+        needs_approval=True,
+    ),
+    ToolSpec(
+        name="mcp_test_server",
+        description="Connect to a configured MCP server by id and list its tools, to check it works or see what it offers.",
+        parameters=_obj({"id": {"type": "string", "description": "The server id, e.g. mcp-1a2b3c4d"}}, ["id"]),
+        group="mcp",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="mcp_remove_server",
+        description="Remove a configured MCP server by id (the user approves).",
+        parameters=_obj({"id": {"type": "string"}}, ["id"]),
+        group="mcp",
+        needs_approval=True,
+    ),
+]
+
+
 def available_tools(
     *, computer: bool, github: bool = False, connectors: Optional[List[ToolSpec]] = None, connector_management: bool = False
 ) -> List[ToolSpec]:
@@ -450,6 +501,7 @@ def available_tools(
     specs.extend(SCHEDULE_TOOLS)
     if connector_management:
         specs.extend(CONNECTOR_TOOLS)
+    specs.extend(MCP_TOOLS)
     if connectors:
         taken = {spec.name for spec in specs}
         specs.extend(spec for spec in connectors if spec.name not in taken)
@@ -605,6 +657,13 @@ def describe_tools(
                 "skills for the task). composio_execute_tool runs any tool of a connected app by slug, after approval; prefer the app's "
                 "own tools when they are offered."
             )
+    if "mcp" in groups:
+        lines.append(
+            "- MCP servers: tool servers the user runs or points at; their tools are offered like a connected app's, named <server>_<tool>. "
+            "When the user asks to add one, call mcp_add_server with the command (stdio) or URL (http) they give you; for an API key, "
+            "tell them to add it as an app secret and reference it as $NAME, never paste a key into the chat. mcp_list_servers and "
+            "mcp_test_server show what is configured and whether it works."
+        )
     if "connectors" in groups:
         lines.append(
             "- Connecting apps: when the user asks to connect an app, call connector_connect with its toolkit slug (after approval it "
@@ -859,6 +918,28 @@ def build_invocation(
     if name == "schedule_delete":
         schedule_id = _string(arguments, "id", required=True, max_len=40)
         return ActionInvocation(name="schedule.delete", arguments={"bot_id": bot_id, "id": schedule_id}, target={"bot_id": bot_id}, preview=f"Delete schedule {schedule_id} of {bot_id}")
+    if name == "mcp_list_servers":
+        return ActionInvocation(name="mcp.servers_list", arguments={}, target={}, preview="List the MCP servers")
+    if name == "mcp_add_server":
+        from app.services.mcp_service import McpError, clean_server
+
+        try:
+            record = clean_server({k: arguments.get(k) for k in ("name", "transport", "command", "args", "env", "url", "headers", "trust_read_only")})
+        except McpError as exc:
+            raise ToolCallError(str(exc)) from exc
+        where = f"{record['command']} {' '.join(record['args'])}".strip() if record["transport"] == "stdio" else record["url"]
+        return ActionInvocation(
+            name="mcp.servers_add",
+            arguments={"server": {k: record[k] for k in ("name", "transport", "command", "args", "env", "url", "headers", "trust_read_only")}},
+            target={"mcp_server": record["name"]},
+            preview=f"Add MCP server '{record['name']}' ({record['transport']}): {where[:120]}" + (" (trusted read-only)" if record["trust_read_only"] else ""),
+        )
+    if name == "mcp_test_server":
+        server_id = _string(arguments, "id", required=True, max_len=20)
+        return ActionInvocation(name="mcp.servers_test", arguments={"id": server_id}, target={"mcp_server": server_id}, preview=f"Test MCP server {server_id}")
+    if name == "mcp_remove_server":
+        server_id = _string(arguments, "id", required=True, max_len=20)
+        return ActionInvocation(name="mcp.servers_remove", arguments={"id": server_id}, target={"mcp_server": server_id}, preview=f"Remove MCP server {server_id}")
     if name == "connector_connect":
         toolkit = _string(arguments, "toolkit", required=True, max_len=64).lower()
         if not _TOOLKIT_SLUG.fullmatch(toolkit):
@@ -971,6 +1052,15 @@ def connector_invocation(spec: ToolSpec, arguments: Dict[str, Any]) -> ActionInv
     preview = f"{info.get('toolkit_name') or info.get('toolkit', 'app')}: {title}"
     if shown:
         preview = f"{preview} ({', '.join(shown)})"
+    mcp = info.get("mcp")
+    if isinstance(mcp, dict):
+        return ActionInvocation(
+            name="mcp.read" if info.get("read_only") else "mcp.call",
+            arguments={"server": mcp.get("server"), "tool": mcp.get("tool"), "arguments": arguments},
+            target={"mcp_server": mcp.get("server"), "tool": mcp.get("tool")},
+            preview=preview[:300],
+            display_arguments=arguments,
+        )
     action_name = "connector.composio_read" if info.get("read_only") else "connector.composio_action"
     gateway_arguments: Dict[str, Any] = {"tool": info["slug"], "arguments": arguments}
     if info.get("version"):

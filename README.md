@@ -337,6 +337,9 @@ With an OpenAI-compatible provider the model is offered these functions. The gat
 | `memory_read`, `memory_write`, `memory_edit` | `memory.*` | no (the bot's own notes, see below) |
 | `todo_list`, `todo_add`, `todo_update` | `todo.*` | no (the bot's working list, see below) |
 | `schedule_list`, `schedule_create`, `schedule_delete` | `schedule.*` | create and delete yes; list no (see below) |
+| `connector_connect`, `connector_status` | `connector.connect` / `connector.status` | connect yes; status no (start a Composio connection for the user and confirm it) |
+| `mcp_list_servers`, `mcp_add_server`, `mcp_test_server`, `mcp_remove_server` | `mcp.servers.*` | add and remove yes; list and test no (MCP servers, see below) |
+| `<server>_<tool>` (each tool of a connected MCP server) | `mcp.read` / `mcp.call` | no when the server marks the tool read-only (or is trusted read-only), otherwise yes |
 | `computer_start`, `computer_screenshot`, `computer_files_list`, `computer_read_file`, `computer_request_takeover` | `computer.*` | no |
 | `computer_browser_navigate`, `computer_terminal_execute`, `computer_write_file`, `computer_edit_file`, `computer_send_input`, `computer_install_packages` | `computer.*` | yes |
 | `<app>_<action>` for every app connected through Composio, e.g. `gmail_fetch_emails`, `github_create_a_pull_request` | `connector.composio_read` or `connector.composio_action` | no for tools Composio marks read-only, yes for everything else |
@@ -349,6 +352,10 @@ Each bot keeps one small document across conversations and compactions: the goal
 ### Bot to-do list
 
 Notes are for what stays true; the to-do list is for what is left to do on the job at hand. The bot adds the steps with `todo_add` and moves each through open, doing and done with `todo_update` (by a short id such as `t3`, so a change is one small call), and every result carries the whole list. The list is shown above the chat, where you can tick, reword, add and remove items; your edits appear in the thread so the model sees them. Like the notes it never enters the system prompt: the bot's own changes stay in the transcript and each compaction summary carries the current list, so work survives a compaction or a turn that was cut off. When a turn's tools are withdrawn (context full, no progress, round cap) and items remain unfinished, the bot is asked to name them in its reply so the next turn picks them up. `BOT_TODO_MAX_ITEMS` (default 50) bounds the size.
+
+### MCP servers
+
+Any server that speaks the [Model Context Protocol](https://modelcontextprotocol.io) can give the bots tools, with nothing hosted in between: a command run inside the API container over stdio (`npx -y @upstash/context7-mcp`, `uvx some-server`), or a streamable-HTTP URL such as a vendor's hosted MCP endpoint. Add them in **App Settings → MCP servers**, with a Test button, or ask a bot to add one: `mcp_add_server` pauses for approval, connects, and reports the tools it found. Keys never go in the definition: write `$NAME` as an env or header value and the app secret `NAME` is used when the server starts. Each server's tools are offered to every bot like a connected app's (named `<server>_<tool>`, switchable per bot in the Tools menu and for all bots in Plugins); the protocol's annotations decide approval, so a tool the server marks read-only runs directly and anything else asks, unless the server is marked *trusted read-only* in its settings (for documentation and search servers that cannot change anything). Connections are long-lived and started with the API; a server that fails shows its error in App Settings and is retried on its next use. The API image ships `node`, `npx` and `uvx` for stdio servers.
 
 ### Scheduled tasks
 

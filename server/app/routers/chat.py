@@ -25,6 +25,9 @@ from app.services.context_builder import build_history_messages, cap_message_res
 from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
 from app.services import bot_memory as _bot_memory  # noqa: F401 - registers memory.read/write
 from app.services.bot_todo import get_todo
+from app.services.mcp_tools import mcp_tool_specs
+from app.services.mcp_tools import mcp_tool_specs
+from app.services.mcp_tools import mcp_tool_specs
 from app.services.secrets_service import names_for, redactor_for
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
 from app.services.llm_tools import (
@@ -324,6 +327,8 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         # Every app connected through Composio becomes a set of tools. If the
         # catalog cannot be fetched, fall back to the two built-in GitHub tools.
         connector_specs = await connector_tool_specs(composio_service)
+        # MCP servers the user runs join the same family as connected apps.
+        connector_specs = connector_specs + mcp_tool_specs()
         tool_specs = available_tools(
             computer=settings.COMPUTER_PROVIDER == "docker",
             github=bool(composio_service.get_api_key()) and not connector_specs,

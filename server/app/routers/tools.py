@@ -6,6 +6,9 @@ from fastapi import APIRouter
 
 from app.config import settings
 from app.services.composio_service import composio_service
+from app.services.mcp_tools import mcp_tool_specs
+from app.services.mcp_tools import mcp_tool_specs
+from app.services.mcp_tools import mcp_tool_specs
 from app.services.connector_tools import connector_tool_specs
 from app.services.llm_tools import ToolSpec, available_tools
 from app.services.storage_service import storage_service
@@ -21,6 +24,9 @@ GROUP_LABELS = {
     "schedule": "Schedules",
     "github": "GitHub (built-in)",
     "connectors": "App connections",
+    "mcp": "MCP servers",
+    "mcp": "MCP servers",
+    "mcp": "MCP servers",
 }
 
 
@@ -41,7 +47,7 @@ async def tool_catalog():
     Settings on a bot refer to these by group id, toolkit slug, or tool name;
     anything not mentioned is enabled.
     """
-    connector_specs = await connector_tool_specs(composio_service)
+    connector_specs = await connector_tool_specs(composio_service) + mcp_tool_specs()
     builtin = available_tools(
         computer=settings.COMPUTER_PROVIDER == "docker",
         github=bool(composio_service.get_api_key()) and not connector_specs,
