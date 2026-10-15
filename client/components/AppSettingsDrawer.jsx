@@ -2,9 +2,25 @@
 
 import React, { useState, useEffect } from "react";
 import { FiX, FiCheck, FiEye, FiEyeOff } from "react-icons/fi";
-import { fetchSettings, saveSettings, logout, checkDecider, fetchSecrets, setSecret, deleteSecret } from "../lib/api";
+import {
+  fetchSettings,
+  saveSettings,
+  logout,
+  checkDecider,
+  fetchSecrets,
+  setSecret,
+  deleteSecret,
+  fetchMcpServers,
+  createMcpServer,
+  updateMcpServer,
+  deleteMcpServer,
+  testMcpServer,
+  reconnectMcpServer,
+  testMcpDefinition,
+} from "../lib/api";
 import ModelPicker from "./ModelPicker";
 import SecretsSection from "./SecretsSection";
+import McpServersSection from "./McpServersSection";
 
 const PROVIDERS = [
   {
@@ -595,6 +611,25 @@ export default function AppSettingsDrawer({
             </p>
           </div>
           <SecretsSection scope="app" load={fetchSecrets} save={setSecret} remove={deleteSecret} />
+        </div>
+
+        {/* MCP servers */}
+        <div className="bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm">
+          <div>
+            <h3 className="text-sm font-bold text-zinc-100">MCP servers</h3>
+            <p className="text-[11px] text-zinc-500 mt-1">
+              Tool servers that speak the Model Context Protocol: a command run here over stdio, or a URL. Their tools are offered to every bot like a connected app&apos;s. A bot can add one for you if you ask it to.
+            </p>
+          </div>
+          <McpServersSection
+            load={fetchMcpServers}
+            create={createMcpServer}
+            update={updateMcpServer}
+            remove={deleteMcpServer}
+            test={testMcpServer}
+            testDraft={testMcpDefinition}
+            reconnect={reconnectMcpServer}
+          />
         </div>
       </div>
     </aside>

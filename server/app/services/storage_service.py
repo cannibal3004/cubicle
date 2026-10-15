@@ -32,6 +32,7 @@ SETTING_KEYS = {
     "disabled_toolkits",
     "no_auth_toolkits",
     "no_auth_toolkits_off",
+    "mcp_servers",
     "auto_approval",
     "decider_url",
     "decider_threshold",

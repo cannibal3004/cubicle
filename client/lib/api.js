@@ -592,6 +592,34 @@ export async function runBotSchedule(botId, scheduleId) {
   return secretsCall(`/bots/${encodeURIComponent(botId)}/schedules/${encodeURIComponent(scheduleId)}/run`, { method: 'POST' });
 }
 
+export async function fetchMcpServers() {
+  return secretsCall('/mcp/servers');
+}
+
+export async function createMcpServer(server) {
+  return secretsCall('/mcp/servers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(server) });
+}
+
+export async function updateMcpServer(serverId, changes) {
+  return secretsCall(`/mcp/servers/${encodeURIComponent(serverId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+}
+
+export async function deleteMcpServer(serverId) {
+  return secretsCall(`/mcp/servers/${encodeURIComponent(serverId)}`, { method: 'DELETE' });
+}
+
+export async function testMcpServer(serverId) {
+  return secretsCall(`/mcp/servers/${encodeURIComponent(serverId)}/test`, { method: 'POST' });
+}
+
+export async function reconnectMcpServer(serverId) {
+  return secretsCall(`/mcp/servers/${encodeURIComponent(serverId)}/reconnect`, { method: 'POST' });
+}
+
+export async function testMcpDefinition(server) {
+  return secretsCall('/mcp/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(server) });
+}
+
 export async function fetchBotSecrets(botId) {
   return secretsCall(`/bots/${encodeURIComponent(botId)}/secrets`);
 }
