@@ -82,6 +82,8 @@ class DockerComputerProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("--security-opt", run_args)
         self.assertIn("no-new-privileges:true", run_args)
         self.assertIn("--pids-limit", run_args)
+        # Threads count against it, and a browser holds a few hundred.
+        self.assertEqual(run_args[run_args.index("--pids-limit") + 1], "2048")
         self.assertIn("/tmp:rw,nosuid,size=2g", run_args)
         # Home and apt cache are bind mounts beside the workspace, created up front.
         mounts = [run_args[i + 1] for i, a in enumerate(run_args) if a == "--mount"]
