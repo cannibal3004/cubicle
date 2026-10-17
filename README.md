@@ -116,9 +116,9 @@ The local server creates a mode-0600 session token in `DATA_DIR` and the browser
 The default provider is the deterministic local adapter. To enable the real sandbox desktop (browser, terminal, file manager, input, screenshots, and live VNC), build the pinned runtime image and opt in to the Docker provider:
 
 ```bash
-docker build -t cubicle-computer:2.5.0 ./runtime
+docker build -t cubicle-computer:2.6.0 ./runtime
 export COMPUTER_PROVIDER=docker
-export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.5.0
+export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.6.0
 ```
 
 The Docker daemon must be running before starting the API. Each bot gets a separate container, a separate workspace under `DATA_DIR/computers`, an ephemeral loopback-only port, and an internal runtime token. The sandbox user has no capabilities and cannot gain any; CPU, memory, process, and shared-memory limits are applied.
@@ -225,11 +225,11 @@ The server reads these variables from the environment:
 | `AUTH_COOKIE_SECURE` | `0` | Set to `1` when serving over HTTPS |
 | `CORS_ORIGINS` | localhost and loopback client origins | Comma-separated browser origins allowed by the API |
 | `COMPUTER_PROVIDER` | `fake` | Computer adapter: `fake` or `docker` |
-| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.5.0` | Pinned local runtime image |
+| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.6.0` | Pinned local runtime image |
 | `COMPUTER_DOCKER_WORKSPACE_ROOT` | `DATA_DIR/computers` | Root for per-bot runtime workspaces |
 | `COMPUTER_DOCKER_CPU_LIMIT` | `2.0` | Docker CPU limit per computer |
 | `COMPUTER_DOCKER_MEMORY_LIMIT` | `2g` | Docker memory limit per computer |
-| `COMPUTER_DOCKER_PIDS_LIMIT` | `512` | Maximum processes per computer |
+| `COMPUTER_DOCKER_PIDS_LIMIT` | `2048` | Process slots per computer. Linux counts every thread, and the browser alone holds a few hundred; once the limit is reached nothing new can start inside the computer (screenshots, input and terminal commands fail until something exits) |
 | `COMPUTER_DOCKER_START_TIMEOUT` | `20` | Runtime readiness timeout in seconds |
 | `COMPUTER_DOCKER_COMMAND_TIMEOUT` | `60` | Seconds a terminal command may run when the model sets no `timeout_seconds`; the driver kills it at the limit and returns exit code 124 with its output so far |
 | `COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX` | `600` | The most the model may ask for with `timeout_seconds` |
@@ -516,7 +516,7 @@ Confirm that the daemon is running, the runtime image was built, and the API use
 
 ```bash
 docker info
-docker image inspect cubicle-computer:2.5.0
+docker image inspect cubicle-computer:2.6.0
 echo "$COMPUTER_PROVIDER"
 ```
 

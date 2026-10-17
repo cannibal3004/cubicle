@@ -66,8 +66,39 @@ function json(response, statusCode, payload) {
 const { COMPUTER_TOKEN: _driverToken, ...inheritedEnv } = process.env;
 const terminalEnv = { ...inheritedEnv, ...desktopEnv };
 
-function errorPayload(error) {
-  return { error: error instanceof Error ? error.message : String(error) };
+// Why a process could not start. Linux counts every thread against the
+// container's pids limit and a browser alone holds a few hundred, so a spawn
+// failing with EAGAIN means the computer is full, not that the program is
+// broken. Reading the cgroup files needs no new process, so it still works.
+async function pidsUsage() {
+  const layouts = [
+    ['/sys/fs/cgroup/pids.current', '/sys/fs/cgroup/pids.max'],
+    ['/sys/fs/cgroup/pids/pids.current', '/sys/fs/cgroup/pids/pids.max'],
+  ];
+  for (const [current, max] of layouts) {
+    try {
+      return `${(await readFile(current, 'utf8')).trim()} of ${(await readFile(max, 'utf8')).trim()}`;
+    } catch {
+      // not this cgroup layout
+    }
+  }
+  return null;
+}
+
+function outOfProcessSlots(error) {
+  return Boolean(error) && error.code === 'EAGAIN' && typeof error.syscall === 'string' && error.syscall.startsWith('spawn');
+}
+
+async function describeError(error) {
+  if (outOfProcessSlots(error)) {
+    const usage = await pidsUsage();
+    return `The computer has no free process slots (${usage ? `${usage} in use` : 'its pids limit is reached'}; every thread counts and the browser holds many), so nothing new can start. Close browser pages or wait for running commands to finish, then try again. The operator can raise COMPUTER_DOCKER_PIDS_LIMIT.`;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function errorPayload(error) {
+  return { error: await describeError(error) };
 }
 
 function authorized(request) {
@@ -204,6 +235,9 @@ async function executeCommand(command, timeoutMs) {
     });
     return { exit_code: 0, stdout: result.stdout, stderr: result.stderr };
   } catch (error) {
+    // The shell itself could not start: that is a failed action, not a
+    // command that ran and exited.
+    if (outOfProcessSlots(error)) throw error;
     if (error.killed || error.signal) {
       // Hit the time limit: report it as `timeout` would, with the output so far.
       const seconds = Math.round(limit / 1000);
@@ -505,7 +539,7 @@ async function handle(request, response) {
     });
     json(response, 200, { computer_id: computerId, ...result });
   } catch (error) {
-    json(response, 400, errorPayload(error));
+    json(response, 400, await errorPayload(error));
   }
 }
 
