@@ -9,7 +9,7 @@ import ToolsPopover from './ToolsPopover';
 import ContextMeter from './ContextMeter';
 import TodoCard from './TodoCard';
 import MascotAvatar from './MascotAvatar';
-import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiEdit2, FiArrowDown } from 'react-icons/fi';
+import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiEdit2, FiArrowDown, FiFile } from 'react-icons/fi';
 import {
   sendMessage,
   subscribeToChatStream,
@@ -17,6 +17,7 @@ import {
   fetchTurnStatus,
   cancelTurn,
   uploadImage,
+  uploadAttachment,
   respondApproval,
   fetchCommands,
   clearChatHistory,
@@ -25,6 +26,13 @@ import {
 } from '../lib/api';
 
 const AUTO_APPROVAL_MODES = ['off', 'shadow', 'on', 'inherit'];
+
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes)) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 // Mirrors the server's commands.command_name: only a leading slash counts.
 function commandNameOf(text) {
@@ -80,6 +88,8 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
   const [isListening, setIsListening] = useState(false);
   const [activeModel, setActiveModel] = useState(bot?.model || defaultModel || '');
   const [selectedImage, setSelectedImage] = useState(null);
+  // Files for the next message: uploaded as they are picked, sent as cards.
+  const [pendingFiles, setPendingFiles] = useState([]);
   const [pendingApprovals, setPendingApprovals] = useState([]);
   // Cards shown when the bot asks the user to take over its computer.
   const [takeoverRequests, setTakeoverRequests] = useState([]);
@@ -202,19 +212,11 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     await respondApproval(requestId, action);
   };
 
-  const handleImageSelect = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Strict IMAGE ONLY validation
-    if (!file.type.startsWith('image/')) {
-      alert('Only image files (JPEG, PNG, WEBP, GIF, AVIF) are allowed.');
-      return;
-    }
-
+  // Attaching: the first image goes to the model as a picture; every other
+  // file is uploaded to where the bot can reach it and arrives as a card.
+  const attachImage = async (file) => {
     const previewUrl = URL.createObjectURL(file);
     setSelectedImage({ file, previewUrl, isUploading: true, uploadedUrl: null, error: null });
-
     try {
       const res = await uploadImage(file);
       setSelectedImage((prev) => (prev ? { ...prev, isUploading: false, uploadedUrl: res.url } : null));
@@ -222,6 +224,46 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
       console.error('Failed to upload image:', err);
       setSelectedImage((prev) => (prev ? { ...prev, isUploading: false, error: err.message } : null));
     }
+  };
+
+  const attachFile = async (file) => {
+    const key = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setPendingFiles((prev) => [...prev, { key, name: file.name, size: file.size, status: 'uploading', attachment: null, error: null }]);
+    try {
+      const res = await uploadAttachment(file, bot?.id);
+      setPendingFiles((prev) => prev.map((item) => (item.key === key ? { ...item, status: 'ready', attachment: res.attachment } : item)));
+    } catch (err) {
+      setPendingFiles((prev) => prev.map((item) => (item.key === key ? { ...item, status: 'error', error: err?.message || 'Upload failed' } : item)));
+    }
+  };
+
+  const addFiles = (files) => {
+    let imageTaken = Boolean(selectedImage);
+    for (const file of Array.from(files || [])) {
+      if (file.type.startsWith('image/') && !imageTaken) {
+        imageTaken = true;
+        attachImage(file);
+      } else {
+        attachFile(file);
+      }
+    }
+  };
+
+  const handleFileSelect = (e) => {
+    addFiles(e.target.files);
+    e.target.value = '';
+  };
+
+  const handlePaste = (e) => {
+    const files = Array.from(e.clipboardData?.files || []);
+    if (files.length === 0) return;
+    e.preventDefault();
+    addFiles(files);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    addFiles(e.dataTransfer?.files);
   };
 
   // One live subscription per bot. Attaching replays the turn's events from
@@ -625,16 +667,19 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
       // Action commands (/shared, /connector) go to the server as a normal
       // message; it parses them and runs them through the gateway.
     }
-    if ((!rawText.trim() && !selectedImage) || isStreaming) return;
+    if (pendingFiles.some((item) => item.status === 'uploading')) return; // still uploading: Enter again in a moment
+    const readyFiles = pendingFiles.filter((item) => item.status === 'ready' && item.attachment);
+    if ((!rawText.trim() && !selectedImage && readyFiles.length === 0) || isStreaming) return;
 
     const botId = bot?.id;
     if (!botId) return;
     const updateMessages = (updater) => setMessagesFor(botId, updater);
     const userText = rawText;
     const currentSelected = selectedImage;
-    
+
     setInputPrompt('');
     setSelectedImage(null);
+    setPendingFiles([]);
     followRef.current = true;
     setShowJumpPill(false);
 
@@ -655,12 +700,20 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
       sender: 'user',
       text: userText,
       image_url: currentSelected?.previewUrl || finalImageUrl,
+      attachments: readyFiles.map((item) => item.attachment),
       created_at: new Date().toISOString(),
     };
     updateMessages((prev) => [...prev, userMsgObj]);
 
     try {
-      const sent = await sendMessage(botId, botId, userText, activeModel, finalImageUrl);
+      const sent = await sendMessage(
+        botId,
+        botId,
+        userText,
+        activeModel,
+        finalImageUrl,
+        readyFiles.map((item) => ({ source: item.attachment.source, path: item.attachment.path }))
+      );
       // Take the server's id for the message, so a later history merge (a
       // turn seen through the poll, a reload) recognises it as the same one.
       if (sent?.message?.id) {
@@ -874,12 +927,12 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
 
       {/* Bottom Floating Pill Composer Input */}
       <div className="p-6 flex flex-col items-center z-20 bg-gradient-to-t from-[#09090b] via-[#09090b]/90 to-transparent">
-        {/* Hidden Image File Input */}
+        {/* Hidden file input: images and documents, several at once */}
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
-          onChange={handleImageSelect}
+          multiple
+          onChange={handleFileSelect}
           className="hidden"
         />
 
@@ -918,6 +971,31 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
           </div>
         )}
 
+        {pendingFiles.length > 0 && (
+          <div className="w-full max-w-2xl flex flex-wrap gap-1.5 mb-2">
+            {pendingFiles.map((item) => (
+              <div
+                key={item.key}
+                className={`flex items-center gap-2 bg-[#1c1c20] border px-2.5 py-1.5 rounded-xl text-[11px] shadow-md animate-fade-in ${item.status === 'error' ? 'border-rose-500/50' : 'border-[#2b2b32]'}`}
+              >
+                <FiFile className="text-zinc-400 flex-shrink-0" />
+                <span className="text-zinc-200 font-semibold truncate max-w-[180px]" title={item.name}>{item.name}</span>
+                <span className={`text-[10px] ${item.status === 'error' ? 'text-rose-300' : 'text-zinc-400'}`}>
+                  {item.status === 'uploading' ? 'Uploading…' : item.status === 'error' ? item.error : formatFileSize(item.size)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPendingFiles((prev) => prev.filter((p) => p.key !== item.key))}
+                  className="text-zinc-400 hover:text-white p-0.5 rounded-md hover:bg-[#2a2a30] transition"
+                  title="Remove"
+                >
+                  <FiX className="text-xs" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {pickerOpen && (
           <CommandPicker
             commands={filteredCommands}
@@ -929,6 +1007,8 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
 
         <form
           onSubmit={handleSendMessage}
+          onDrop={handleDrop}
+          onDragOver={(e) => e.preventDefault()}
           className="w-full max-w-2xl dark-pill-input px-4 py-2.5 flex items-end gap-3 bg-[#1c1c20] border border-[#2b2b32] shadow-2xl transition focus-within:border-zinc-500"
         >
           {/* Plus / Image Upload Action Button */}
@@ -937,7 +1017,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             type="button"
             onClick={() => fileInputRef.current?.click()}
             className="text-zinc-400 hover:text-white transition p-1 text-base flex-shrink-0"
-            title="Upload Image (JPEG, PNG, WEBP, GIF, AVIF)"
+            title="Attach images or files (or drop and paste them here)"
           >
             <FiPlus />
           </button>
@@ -950,6 +1030,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             value={inputPrompt}
             onChange={(e) => { setInputPrompt(e.target.value); setPickerDismissed(false); }}
             onKeyDown={handleComposerKeyDown}
+            onPaste={handlePaste}
             placeholder={`Message ${botTitle}, or / for commands`}
             aria-autocomplete="list"
             aria-expanded={pickerOpen}

@@ -107,6 +107,13 @@ class Settings:
     WORKSPACE_MAX_FILE_BYTES: int = int(os.getenv("WORKSPACE_MAX_FILE_BYTES", "131072"))
     # Largest file a bot may hand to the user as a download card.
     FILE_SHARE_MAX_BYTES: int = int(os.getenv("FILE_SHARE_MAX_BYTES", str(200 * 1024 * 1024)))
+    # Files attached to a message: the upload size limit, how much of a
+    # file's text goes into the model's context, and how long extraction
+    # (PDF and Office conversion) may take before the model is told to use
+    # the file on disk instead.
+    ATTACHMENT_MAX_BYTES: int = int(os.getenv("ATTACHMENT_MAX_BYTES", str(50 * 1024 * 1024)))
+    ATTACHMENT_INLINE_MAX_CHARS: int = int(os.getenv("ATTACHMENT_INLINE_MAX_CHARS", "40000"))
+    ATTACHMENT_EXTRACT_TIMEOUT: float = float(os.getenv("ATTACHMENT_EXTRACT_TIMEOUT", "60"))
     # Turns run server-side and outlive the page, so an approval can wait
     # for someone to come back to it.
     APPROVAL_TIMEOUT_SECONDS: int = int(os.getenv("APPROVAL_TIMEOUT_SECONDS", "900"))
@@ -123,7 +130,7 @@ class Settings:
     AUTH_COOKIE_SECURE: bool = os.getenv("AUTH_COOKIE_SECURE", "0").lower() in {"1", "true", "yes"}
     COMPUTER_PROVIDER: str = os.getenv("COMPUTER_PROVIDER", "fake").strip().lower()
     COMPUTER_DOCKER_IMAGE: str = os.getenv(
-        "COMPUTER_DOCKER_IMAGE", "cubicle-computer:2.6.0"
+        "COMPUTER_DOCKER_IMAGE", "cubicle-computer:2.7.0"
     ).strip()
     COMPUTER_DOCKER_BINARY: str = os.getenv("COMPUTER_DOCKER_BINARY", "docker").strip()
     COMPUTER_DOCKER_WORKSPACE_ROOT: Path = Path(

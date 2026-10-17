@@ -29,7 +29,9 @@ from app.services.mcp_tools import mcp_tool_specs
 from app.services.mcp_tools import mcp_tool_specs
 from app.services.mcp_tools import mcp_tool_specs
 from app.services.secrets_service import names_for, redactor_for
+from app.services import attachments as attachment_service
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
+from app.services.file_share import FileShareError, resolve_shared_file
 from app.services.llm_tools import (
     ToolCallError,
     available_tools,
@@ -124,7 +126,13 @@ def _model_accepts_images(model: str, llm_config) -> bool:
 
 @router.get("/history/{thread_id}", response_model=List[Message])
 async def get_history(thread_id: str):
-    return storage_service.get_messages(thread_id=thread_id)
+    # Attachment text is for the model; the chat gets the card fields.
+    messages = []
+    for message in storage_service.get_messages(thread_id=thread_id):
+        if message.get("attachments"):
+            message = {**message, "attachments": attachment_service.without_text(message["attachments"])}
+        messages.append(message)
+    return messages
 
 
 @router.post("/compact/{thread_id}")
@@ -170,8 +178,21 @@ async def send_message(req: TurnRequest):
         "model": req.model or llm_service.current_llm_config().default_model,
         "item_type": "user_text"
     }
+    if req.attachments:
+        if len(req.attachments) > attachment_service.MAX_PER_MESSAGE:
+            raise HTTPException(status_code=400, detail=f"At most {attachment_service.MAX_PER_MESSAGE} files can be attached to one message.")
+        attached = []
+        for ref in req.attachments:
+            try:
+                shared = resolve_shared_file(ref.source, ref.path, req.bot_id)
+            except FileShareError as exc:
+                raise HTTPException(status_code=400, detail=f"Attachment {ref.path}: {exc}")
+            attached.append(await attachment_service.attach(shared, req.bot_id))
+        user_msg["attachments"] = attached
 
     storage_service.add_message(user_msg)
+    if user_msg.get("attachments"):
+        user_msg = {**user_msg, "attachments": attachment_service.without_text(user_msg["attachments"])}
     return {"status": "ok", "message": user_msg}
 
 

@@ -9,8 +9,11 @@ RUN apt-get update \
         xfwm4 plank thunar xfce4-terminal \
         dbus-x11 x11-utils x11-xserver-utils xdotool scrot feh \
         adwaita-icon-theme librsvg2-common \
-        python3-pip python3-venv jq unzip \
+        python3-pip python3-venv jq unzip poppler-utils \
     && rm -rf /var/lib/apt/lists/*
+# Document converters for attached files: markitdown (PDF, Word, Excel,
+# PowerPoint to Markdown) for the bot's own use, and pdftotext above.
+RUN pip3 install --no-cache-dir --break-system-packages "markitdown[docx,pdf,pptx,xls,xlsx]>=0.1.8"
 
 WORKDIR /opt/cubicle-computer
 

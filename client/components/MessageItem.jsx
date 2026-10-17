@@ -122,6 +122,13 @@ function MessageItem({ message, botId }) {
               className="max-w-full max-h-56 rounded-lg object-cover border border-white/10 mb-1.5"
             />
           )}
+          {attachments.length > 0 && (
+            <div className="space-y-1.5 mb-1.5 min-w-[240px]">
+              {attachments.map((attachment) => (
+                <FileCard key={`${attachment.source}:${attachment.path}`} attachment={attachment} botId={botId || message.bot_id} />
+              ))}
+            </div>
+          )}
           <div className="flex justify-end gap-3">
             <span className="break-words">
               {message.raw_payload?.scheduled && (

@@ -14,6 +14,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
+from app.services.attachments import for_model as attachment_for_model
 
 COMPACTION_ITEM_TYPE = "compaction"
 # A user edit of the bot's notes, recorded in the thread where it happened.
@@ -206,6 +207,11 @@ def build_history_messages(history: List[Dict[str, Any]], *, replay_tools: bool)
             scheduled = (message.get("raw_payload") or {}).get("scheduled")
             if isinstance(scheduled, dict):
                 text = f"{SCHEDULED_LEAD.format(name=scheduled.get('name', ''), at=scheduled.get('at', ''))}\n\n{text}"
+            # Attached files follow the user's words: a header saying where
+            # each one is, then its text (capped at upload time).
+            blocks = [attachment_for_model(a) for a in (message.get("attachments") or []) if isinstance(a, dict)]
+            if blocks:
+                text = "\n\n".join(([text] if text.strip() else []) + blocks)
             messages.append({"role": "user", "content": text, "image_url": message.get("image_url")})
             continue
         if is_memory_note(message):
