@@ -146,7 +146,9 @@ class TurnManager:
         try:
             await runner(turn)
         except asyncio.CancelledError:
-            turn.emit({"type": "turn.cancelled", "botMsgId": None})
+            # A runner that saved its partial reply has announced the stop itself.
+            if not turn.events or turn.events[-1].get("type") != "turn.cancelled":
+                turn.emit({"type": "turn.cancelled", "botMsgId": None})
             turn.finish("cancelled")
             return
         except Exception as exc:  # The turn must never take the server down.
