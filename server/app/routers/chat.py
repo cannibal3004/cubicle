@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import uuid
@@ -70,6 +71,7 @@ _STOP_NOTES = {
     "rounds": "[Stopped after {rounds} tool rounds without a final answer.]",
     "context": "[Stopped: the context window is full and could not be compacted further.]",
     "stalled": "[Stopped: the last tool rounds only repeated earlier calls with the same results.]",
+    "cancelled": "[Stopped by you.]",
 }
 
 
@@ -460,249 +462,267 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             formatted_history = build_history_messages(history, replay_tools=replay_tools)
             return True
 
-        turn.emit({"type": "turn.started", "botMsgId": bot_msg_id, "model": selected_model})
-
-        # --- compaction: the thread has outgrown its share of the window ------
-        await compact_if_needed(last_prompt_tokens(history))
-
-        # --- explicit slash commands typed by the user ------------------------
-        last_user_text = formatted_history[-1]["content"] if formatted_history else ""
+        # Stop can arrive at any await below. What the turn has produced by
+        # then is kept, so the chat and the next turn both see it.
+        stopped = False
+        round_text = ""
         try:
-            action_call = parse_action_command(last_user_text)
-        except CommandError as exc:
-            action_call = None
-            tool_context = f"A {exc.tool} request was rejected before execution: {exc}"
-            turn.emit({"type": "tool.failed", "tool": exc.tool, "error": str(exc)})
+            turn.emit({"type": "turn.started", "botMsgId": bot_msg_id, "model": selected_model})
 
-        if action_call:
-            outcome = await _perform_action(
-                turn, thread_id, action_call, gate_mode=gate_mode, user_request=last_user_text, gate_threshold=gate_threshold
-            )
-            if outcome.get("status") == "completed":
-                tool_context = f"Action result ({action_call.name}): {_tool_result_text(_compact_result(outcome['result']))}"
-            else:
-                tool_context = outcome.get("error") or "The action did not complete."
+            # --- compaction: the thread has outgrown its share of the window ------
+            await compact_if_needed(last_prompt_tokens(history))
 
-        turn_system_prompt = system_prompt
-        if tools_prompt:
-            turn_system_prompt = f"{turn_system_prompt}\n\n{tools_prompt}"
-        if tool_context:
-            turn_system_prompt = f"{turn_system_prompt}\n\n{tool_context}"
+            # --- explicit slash commands typed by the user ------------------------
+            last_user_text = formatted_history[-1]["content"] if formatted_history else ""
+            try:
+                action_call = parse_action_command(last_user_text)
+            except CommandError as exc:
+                action_call = None
+                tool_context = f"A {exc.tool} request was rejected before execution: {exc}"
+                turn.emit({"type": "tool.failed", "tool": exc.tool, "error": str(exc)})
 
-        # --- model turn, looping while it calls tools ------------------------
-        messages: List[Dict[str, Any]] = list(formatted_history)
-        # Where the stored history ends and this turn's own rounds begin.
-        prefix_len = len(messages)
-        max_rounds = max(1, settings.LLM_MAX_TOOL_ROUNDS)
-        stall_limit = max(0, settings.LLM_STALLED_ROUNDS)
-        rounds = 0
-        # The loop ends when the model answers. Tools are withdrawn, and the
-        # model gets one last call without them so the user always receives
-        # an answer, when the context is full and compaction could not make
-        # room, when the model only repeats itself, or at the round cap (a
-        # safety net). The reason is told to the model.
-        final_answer_only = False
-        stop_reason = ""
-        # (name, arguments) -> what the call returned, to spot rounds that
-        # add nothing: every call a repeat with the same result.
-        seen_results: Dict[tuple, Any] = {}
-        stalled_rounds = 0
-
-        def withdraw_tools(reason: str, tool_rounds: int) -> None:
-            nonlocal final_answer_only, stop_reason
-            final_answer_only = True
-            stop_reason = reason
-            turn.emit({"type": "turn.limit", "botMsgId": bot_msg_id, "reason": reason, "rounds": tool_rounds})
-
-        while True:
-            rounds += 1
-            if rounds > 1:
-                # Between rounds the previous round has reported how big the
-                # prompt grew. A turn of many tool calls can cross the line
-                # on its own, so fold the stored history here too, and carry
-                # this turn's rounds over verbatim as the pending work.
-                if await compact_if_needed(usage_prompt):
-                    messages = list(formatted_history) + messages[prefix_len:]
-                    prefix_len = len(formatted_history)
-                elif not final_answer_only:
-                    if at_hard_limit(usage_prompt, context_window):
-                        withdraw_tools("context", rounds - 1)
-                    elif stall_limit and stalled_rounds >= stall_limit:
-                        withdraw_tools("stalled", rounds - 1)
-            round_text = ""
-            pending_calls: List[Dict[str, Any]] = []
-            round_ok = True
-            round_cut = False
-
-            round_prompt = turn_system_prompt
-            round_tools = tool_definitions
-            if final_answer_only:
-                round_tools = None
-                round_prompt = (
-                    f"{turn_system_prompt}\n\n{_STOP_PROMPTS[stop_reason]} "
-                    "Do not call tools. Reply to the user now with what you found, and say what is still unverified."
+            if action_call:
+                outcome = await _perform_action(
+                    turn, thread_id, action_call, gate_mode=gate_mode, user_request=last_user_text, gate_threshold=gate_threshold
                 )
-                # The list is the handoff to the next turn: name what is left.
-                left = [item for item in get_todo(thread_id) if item["state"] != "done"]
-                if left:
-                    round_prompt += f" Your to-do list still has {len(left)} unfinished item(s); say which they are so the next turn can pick them up."
+                if outcome.get("status") == "completed":
+                    tool_context = f"Action result ({action_call.name}): {_tool_result_text(_compact_result(outcome['result']))}"
+                else:
+                    tool_context = outcome.get("error") or "The action did not complete."
 
-            async for event in llm_service.stream_chat_completion(
-                model=selected_model,
-                messages=messages,
-                system_prompt=round_prompt,
-                config=llm_config,
-                tools=round_tools,
-            ):
-                if event["type"] == "content.delta":
-                    round_text += event["delta"]
-                    turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": event["delta"]})
-                elif event["type"] == "reasoning.delta":
-                    accumulated_reasoning += event["delta"]
-                    turn.emit({"type": "reasoning.delta", "botMsgId": bot_msg_id, "delta": event["delta"]})
-                elif event["type"] == "tool_calls":
-                    pending_calls = list(event.get("calls") or [])
-                elif event["type"] == "usage":
-                    usage_rounds += 1
-                    usage_prompt = int(event.get("prompt_tokens") or 0)
-                    usage_completion += int(event.get("completion_tokens") or 0)
-                    turn.emit({"type": "turn.usage", "botMsgId": bot_msg_id, "usage": usage_payload()})
-                elif event["type"] == "truncated":
-                    round_cut = True
-                    turn.emit({"type": "turn.truncated", "botMsgId": bot_msg_id, "reason": event.get("reason") or "length"})
-                elif event["type"] == "turn.completed":
-                    round_ok = bool(event.get("ok", True))
+            turn_system_prompt = system_prompt
+            if tools_prompt:
+                turn_system_prompt = f"{turn_system_prompt}\n\n{tools_prompt}"
+            if tool_context:
+                turn_system_prompt = f"{turn_system_prompt}\n\n{tool_context}"
 
-            if round_text.strip():
-                text_pieces.append(round_text)
-            if round_cut and not pending_calls:
-                # A text reply stopped at the output limit: say so rather
-                # than leave a sentence hanging as if it were the answer.
-                text_pieces.append(f"\n\n{_CUT_NOTE}")
-                turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": f"\n\n{_CUT_NOTE}"})
+            # --- model turn, looping while it calls tools ------------------------
+            messages: List[Dict[str, Any]] = list(formatted_history)
+            # Where the stored history ends and this turn's own rounds begin.
+            prefix_len = len(messages)
+            max_rounds = max(1, settings.LLM_MAX_TOOL_ROUNDS)
+            stall_limit = max(0, settings.LLM_STALLED_ROUNDS)
+            rounds = 0
+            # The loop ends when the model answers. Tools are withdrawn, and the
+            # model gets one last call without them so the user always receives
+            # an answer, when the context is full and compaction could not make
+            # room, when the model only repeats itself, or at the round cap (a
+            # safety net). The reason is told to the model.
+            final_answer_only = False
+            stop_reason = ""
+            # (name, arguments) -> what the call returned, to spot rounds that
+            # add nothing: every call a repeat with the same result.
+            seen_results: Dict[tuple, Any] = {}
+            stalled_rounds = 0
 
-            if final_answer_only:
-                if not round_text.strip():
-                    note = _STOP_NOTES[stop_reason].format(rounds=max_rounds)
-                    text_pieces.append(note)
-                    turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": note})
-                break
-            if not pending_calls or not round_ok:
-                break
-            if round_text.strip():
-                # Visually separate a "let me check" preamble from the answer.
-                turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": "\n\n"})
+            def withdraw_tools(reason: str, tool_rounds: int) -> None:
+                nonlocal final_answer_only, stop_reason
+                final_answer_only = True
+                stop_reason = reason
+                turn.emit({"type": "turn.limit", "botMsgId": bot_msg_id, "reason": reason, "rounds": tool_rounds})
 
-            messages.append({
-                "role": "assistant",
-                "content": round_text,
-                "tool_calls": [
-                    {"id": call["id"], "name": call["name"], "arguments": safe_arguments(call.get("arguments"))}
-                    for call in pending_calls
-                ],
-            })
+            while True:
+                rounds += 1
+                if rounds > 1:
+                    # Between rounds the previous round has reported how big the
+                    # prompt grew. A turn of many tool calls can cross the line
+                    # on its own, so fold the stored history here too, and carry
+                    # this turn's rounds over verbatim as the pending work.
+                    if await compact_if_needed(usage_prompt):
+                        messages = list(formatted_history) + messages[prefix_len:]
+                        prefix_len = len(formatted_history)
+                    elif not final_answer_only:
+                        if at_hard_limit(usage_prompt, context_window):
+                            withdraw_tools("context", rounds - 1)
+                        elif stall_limit and stalled_rounds >= stall_limit:
+                            withdraw_tools("stalled", rounds - 1)
+                round_text = ""
+                pending_calls: List[Dict[str, Any]] = []
+                round_ok = True
+                round_cut = False
 
-            if rounds >= max_rounds:
-                # Budget spent: answer the pending calls without running
-                # them, then ask for a text-only reply.
-                for call in pending_calls:
-                    tool_records.append({"id": call["id"], "name": call["name"], "status": "skipped",
-                                         "raw_arguments": call.get("arguments") or "{}",
-                                         "error": "Tool budget for this turn was used up."})
-                    turn.emit({"type": "tool.failed", "tool": call["name"], "callName": call["name"],
-                               "error": "Not run: the tool budget for this turn was used up."})
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": call["id"],
-                        "content": _tool_result_text({"status": "skipped", "error": "Tool budget used up; answer the user now."}),
-                    })
-                withdraw_tools("rounds", rounds)
-                continue
+                round_prompt = turn_system_prompt
+                round_tools = tool_definitions
+                if final_answer_only:
+                    round_tools = None
+                    round_prompt = (
+                        f"{turn_system_prompt}\n\n{_STOP_PROMPTS[stop_reason]} "
+                        "Do not call tools. Reply to the user now with what you found, and say what is still unverified."
+                    )
+                    # The list is the handoff to the next turn: name what is left.
+                    left = [item for item in get_todo(thread_id) if item["state"] != "done"]
+                    if left:
+                        round_prompt += f" Your to-do list still has {len(left)} unfinished item(s); say which they are so the next turn can pick them up."
 
-            image_messages: List[Dict[str, Any]] = []
-            replies_start = len(messages)
-            for call in pending_calls:
-                call_id = call["id"]
-                call_name = call["name"]
-                record: Dict[str, Any] = {
-                    "id": call_id,
-                    "name": call_name,
-                    "status": "running",
-                    # The model's own argument text, replayed verbatim in later turns
-                    # (a malformed one is quoted inside a JSON object instead).
-                    "raw_arguments": safe_arguments(call.get("arguments")),
-                }
-                tool_records.append(record)
+                async for event in llm_service.stream_chat_completion(
+                    model=selected_model,
+                    messages=messages,
+                    system_prompt=round_prompt,
+                    config=llm_config,
+                    tools=round_tools,
+                ):
+                    if event["type"] == "content.delta":
+                        round_text += event["delta"]
+                        turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": event["delta"]})
+                    elif event["type"] == "reasoning.delta":
+                        accumulated_reasoning += event["delta"]
+                        turn.emit({"type": "reasoning.delta", "botMsgId": bot_msg_id, "delta": event["delta"]})
+                    elif event["type"] == "tool_calls":
+                        pending_calls = list(event.get("calls") or [])
+                    elif event["type"] == "usage":
+                        usage_rounds += 1
+                        usage_prompt = int(event.get("prompt_tokens") or 0)
+                        usage_completion += int(event.get("completion_tokens") or 0)
+                        turn.emit({"type": "turn.usage", "botMsgId": bot_msg_id, "usage": usage_payload()})
+                    elif event["type"] == "truncated":
+                        round_cut = True
+                        turn.emit({"type": "turn.truncated", "botMsgId": bot_msg_id, "reason": event.get("reason") or "length"})
+                    elif event["type"] == "turn.completed":
+                        round_ok = bool(event.get("ok", True))
 
-                try:
-                    arguments = parse_arguments(call.get("arguments"))
-                    invocation = build_invocation(call_name, arguments, thread_id, specs=tool_specs)
-                except ToolCallError as exc:
-                    error = str(exc)
-                    if round_cut:
-                        error += _CUT_HINT
-                    record.update({"status": "failed", "error": error})
-                    turn.emit({"type": "tool.failed", "tool": call_name, "callName": call_name, "error": error})
-                    messages.append({"role": "tool", "tool_call_id": call_id, "content": _tool_result_text({"error": error})})
+                if round_text.strip():
+                    text_pieces.append(round_text)
+                if round_cut and not pending_calls:
+                    # A text reply stopped at the output limit: say so rather
+                    # than leave a sentence hanging as if it were the answer.
+                    text_pieces.append(f"\n\n{_CUT_NOTE}")
+                    turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": f"\n\n{_CUT_NOTE}"})
+
+                if final_answer_only:
+                    if not round_text.strip():
+                        note = _STOP_NOTES[stop_reason].format(rounds=max_rounds)
+                        text_pieces.append(note)
+                        turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": note})
+                    break
+                if not pending_calls or not round_ok:
+                    break
+                if round_text.strip():
+                    # Visually separate a "let me check" preamble from the answer.
+                    turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": "\n\n"})
+
+                messages.append({
+                    "role": "assistant",
+                    "content": round_text,
+                    "tool_calls": [
+                        {"id": call["id"], "name": call["name"], "arguments": safe_arguments(call.get("arguments"))}
+                        for call in pending_calls
+                    ],
+                })
+
+                if rounds >= max_rounds:
+                    # Budget spent: answer the pending calls without running
+                    # them, then ask for a text-only reply.
+                    for call in pending_calls:
+                        tool_records.append({"id": call["id"], "name": call["name"], "status": "skipped",
+                                             "raw_arguments": call.get("arguments") or "{}",
+                                             "error": "Tool budget for this turn was used up."})
+                        turn.emit({"type": "tool.failed", "tool": call["name"], "callName": call["name"],
+                                   "error": "Not run: the tool budget for this turn was used up."})
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": call["id"],
+                            "content": _tool_result_text({"status": "skipped", "error": "Tool budget used up; answer the user now."}),
+                        })
+                    withdraw_tools("rounds", rounds)
                     continue
 
-                record["summary"] = getattr(invocation, "summary", None) or getattr(invocation, "preview", call_name)
-                outcome = await _perform_action(
-                    turn, thread_id, invocation, call_name=call_name, gate_mode=gate_mode, user_request=last_user_text,
-                    gate_threshold=gate_threshold,
-                )
+                image_messages: List[Dict[str, Any]] = []
+                replies_start = len(messages)
+                for call in pending_calls:
+                    call_id = call["id"]
+                    call_name = call["name"]
+                    record: Dict[str, Any] = {
+                        "id": call_id,
+                        "name": call_name,
+                        "status": "running",
+                        # The model's own argument text, replayed verbatim in later turns
+                        # (a malformed one is quoted inside a JSON object instead).
+                        "raw_arguments": safe_arguments(call.get("arguments")),
+                    }
+                    tool_records.append(record)
 
-                status = outcome.get("status", "failed")
-                record["status"] = status
-                request_obj = outcome.get("request")
-                if request_obj is not None:
-                    record["requestId"] = request_obj.request_id
-                    record["arguments"] = request_obj.arguments
-                if outcome.get("gate") is not None:
-                    record["gate"] = outcome["gate"].to_event()
-                if status == "completed":
-                    result = outcome.get("result") or {}
-                    payload = _compact_result(result)
-                    if call_name == "computer_request_takeover":
-                        turn.emit({
-                            "type": "computer.takeover_requested",
-                            "botMsgId": bot_msg_id,
-                            "botId": thread_id,
-                            "reason": str(arguments.get("reason") or ""),
+                    try:
+                        arguments = parse_arguments(call.get("arguments"))
+                        invocation = build_invocation(call_name, arguments, thread_id, specs=tool_specs)
+                    except ToolCallError as exc:
+                        error = str(exc)
+                        if round_cut:
+                            error += _CUT_HINT
+                        record.update({"status": "failed", "error": error})
+                        turn.emit({"type": "tool.failed", "tool": call_name, "callName": call_name, "error": error})
+                        messages.append({"role": "tool", "tool_call_id": call_id, "content": _tool_result_text({"error": error})})
+                        continue
+
+                    record["summary"] = getattr(invocation, "summary", None) or getattr(invocation, "preview", call_name)
+                    outcome = await _perform_action(
+                        turn, thread_id, invocation, call_name=call_name, gate_mode=gate_mode, user_request=last_user_text,
+                        gate_threshold=gate_threshold,
+                    )
+
+                    status = outcome.get("status", "failed")
+                    record["status"] = status
+                    request_obj = outcome.get("request")
+                    if request_obj is not None:
+                        record["requestId"] = request_obj.request_id
+                        record["arguments"] = request_obj.arguments
+                    if outcome.get("gate") is not None:
+                        record["gate"] = outcome["gate"].to_event()
+                    if status == "completed":
+                        result = outcome.get("result") or {}
+                        payload = _compact_result(result)
+                        if call_name == "computer_request_takeover":
+                            turn.emit({
+                                "type": "computer.takeover_requested",
+                                "botMsgId": bot_msg_id,
+                                "botId": thread_id,
+                                "reason": str(arguments.get("reason") or ""),
+                            })
+                        if call_name == "share_file" and isinstance(result.get("attachment"), dict):
+                            attachment = dict(result["attachment"])
+                            if not any(a.get("source") == attachment.get("source") and a.get("path") == attachment.get("path") for a in attachments):
+                                attachments.append(attachment)
+                            turn.emit({"type": "attachment.added", "botMsgId": bot_msg_id, "attachment": attachment})
+                        screenshot = _screenshot_message(result)
+                        if screenshot is not None:
+                            if _model_accepts_images(selected_model, llm_config):
+                                image_messages.append(screenshot)
+                                payload["image"] = "attached as the next message"
+                            else:
+                                payload["image"] = "omitted: the selected model does not accept images"
+                        result_text = _tool_result_text(payload)
+                        messages.append({"role": "tool", "tool_call_id": call_id, "content": result_text})
+                        # Kept with the reply so later turns can see what came back.
+                        record["result"] = trim_result_text(result_text)
+                    else:
+                        record["error"] = outcome.get("error")
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "content": _tool_result_text({"status": status, "error": outcome.get("error")}),
                         })
-                    if call_name == "share_file" and isinstance(result.get("attachment"), dict):
-                        attachment = dict(result["attachment"])
-                        if not any(a.get("source") == attachment.get("source") and a.get("path") == attachment.get("path") for a in attachments):
-                            attachments.append(attachment)
-                        turn.emit({"type": "attachment.added", "botMsgId": bot_msg_id, "attachment": attachment})
-                    screenshot = _screenshot_message(result)
-                    if screenshot is not None:
-                        if _model_accepts_images(selected_model, llm_config):
-                            image_messages.append(screenshot)
-                            payload["image"] = "attached as the next message"
-                        else:
-                            payload["image"] = "omitted: the selected model does not accept images"
-                    result_text = _tool_result_text(payload)
-                    messages.append({"role": "tool", "tool_call_id": call_id, "content": result_text})
-                    # Kept with the reply so later turns can see what came back.
-                    record["result"] = trim_result_text(result_text)
-                else:
-                    record["error"] = outcome.get("error")
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "content": _tool_result_text({"status": status, "error": outcome.get("error")}),
-                    })
-            # Every call above appended exactly one tool reply. A round in
-            # which each call is a repeat with the same reply made no progress.
-            progress = False
-            for call, reply in zip(pending_calls, messages[replies_start:]):
-                key = (call["name"], call.get("arguments") or "{}")
-                if seen_results.get(key) != reply.get("content"):
-                    progress = True
-                seen_results[key] = reply.get("content")
-            stalled_rounds = 0 if progress else stalled_rounds + 1
-            messages.extend(image_messages)
+                # Every call above appended exactly one tool reply. A round in
+                # which each call is a repeat with the same reply made no progress.
+                progress = False
+                for call, reply in zip(pending_calls, messages[replies_start:]):
+                    key = (call["name"], call.get("arguments") or "{}")
+                    if seen_results.get(key) != reply.get("content"):
+                        progress = True
+                    seen_results[key] = reply.get("content")
+                stalled_rounds = 0 if progress else stalled_rounds + 1
+                messages.extend(image_messages)
+        except asyncio.CancelledError:
+            stopped = True
+            # Text streamed in the round that was cut off, if not yet collected.
+            if round_text.strip() and round_text not in text_pieces:
+                text_pieces.append(round_text)
+            # A call still running (or waiting for approval) did not finish;
+            # the replay to the model needs a reply for it all the same.
+            for record in tool_records:
+                if record.get("status") == "running":
+                    record.update({"status": "cancelled", "error": "Stopped by the user before it finished."})
+            note = _STOP_NOTES["cancelled"]
+            text_pieces.append(note)
+            turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": f"\n\n{note}"})
 
         raw_payload: Dict[str, Any] = {}
         if accumulated_reasoning:
@@ -727,6 +747,9 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             "raw_payload": raw_payload or None,
         }
         storage_service.add_message(bot_msg)
+        if stopped:
+            turn.emit({"type": "turn.cancelled", "botMsgId": bot_msg_id})
+            raise asyncio.CancelledError()
         turn.emit({"type": "turn.completed", "ok": True, "botMsgId": bot_msg_id})
 
     return run, selected_model

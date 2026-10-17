@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from app.routers import chat as chat_router
+from app.services.context_builder import build_history_messages
 from app.services.turn_manager import TurnManager
 from app.services.action_gateway import ActionGateway
 from app.services.llm_config import LLMConfig
@@ -648,6 +649,108 @@ class ChatStreamRouteTests(unittest.TestCase):
         saved = self.storage.get_messages(bot["id"])
         # The seeded bot starts with a greeting; both turns were persisted after it.
         self.assertEqual([m["text"] for m in saved if m["sender"] == "bot"][-2:], ["Hello there", "late"])
+
+    def test_stop_keeps_what_the_turn_produced(self):
+        bot = self.storage.get_bots()[0]
+        self.storage.add_message(
+            {"id": "m1", "thread_id": bot["id"], "bot_id": bot["id"], "sender": "user", "text": "hi"}
+        )
+        manager = TurnManager()
+        gate = asyncio.Event()
+
+        async def slow_stream(model, messages, system_prompt="", config=None, tools=None):
+            yield {"type": "reasoning.delta", "delta": "Thinking."}
+            yield {"type": "content.delta", "delta": "Half an "}
+            yield {"type": "content.delta", "delta": "answer"}
+            await gate.wait()  # never set: the user presses stop here
+            yield {"type": "turn.completed", "ok": True}
+
+        patches = self._patches({}, stream=slow_stream, manager=manager)
+        for p in patches:
+            p.start()
+        try:
+            async def scenario():
+                started = await chat_router.start_turn(bot["id"], chat_router.StartTurnRequest())
+                turn_id = started["turn"]["turn_id"]
+                await asyncio.sleep(0.05)
+                await chat_router.cancel_turn(bot["id"])
+                task = manager.get(turn_id).task
+                try:
+                    await asyncio.wait_for(task, 2)
+                except asyncio.CancelledError:
+                    pass
+                status = await chat_router.turn_status(bot["id"])
+                self.assertEqual(status["turn"]["status"], "cancelled")
+                events = manager.get(turn_id).events
+                self.assertEqual([e["type"] for e in events if e["type"] == "turn.cancelled"], ["turn.cancelled"])
+                self.assertEqual(events[-1]["botMsgId"], events[0]["botMsgId"])
+                self.assertEqual(events[-2], {**events[-2], "type": "content.delta", "delta": "\n\n[Stopped by you.]"})
+
+            asyncio.run(scenario())
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        saved = self.storage.get_messages(bot["id"])[-1]
+        self.assertEqual(saved["sender"], "bot")
+        self.assertEqual(saved["text"], "Half an answer\n\n[Stopped by you.]")
+        self.assertEqual(saved["raw_payload"]["reasoning"], "Thinking.")
+
+    def test_stop_while_a_call_waits_for_approval_records_it_as_cancelled(self):
+        bot = self.storage.get_bots()[0]
+        self.storage.add_message(
+            {"id": "m1", "thread_id": bot["id"], "bot_id": bot["id"], "sender": "user", "text": "what is in the workspace?"}
+        )
+        gateway, broker = self._gateway("allow")
+
+        async def wait_forever(request_id):
+            await asyncio.Event().wait()
+
+        broker.wait = wait_forever  # the approval card stays open until the user stops the turn
+        manager = TurnManager()
+        stream = _scripted_stream(
+            {},
+            [[
+                {"type": "content.delta", "delta": "Let me look."},
+                {"type": "tool_calls", "calls": [{"id": "call_1", "name": "shared_folder_list", "arguments": "{}"}]},
+                {"type": "turn.completed", "ok": True},
+            ]],
+        )
+        patches = self._patches({}, stream=stream, gateway=gateway, manager=manager)
+        for p in patches:
+            p.start()
+        try:
+            async def scenario():
+                started = await chat_router.start_turn(bot["id"], chat_router.StartTurnRequest())
+                turn_id = started["turn"]["turn_id"]
+                for _ in range(50):
+                    await asyncio.sleep(0.01)
+                    if manager.get(turn_id).pending_approval:
+                        break
+                self.assertIsNotNone(manager.get(turn_id).pending_approval)
+                await chat_router.cancel_turn(bot["id"])
+                try:
+                    await asyncio.wait_for(manager.get(turn_id).task, 2)
+                except asyncio.CancelledError:
+                    pass
+                self.assertEqual(manager.get(turn_id).status, "cancelled")
+                self.assertIsNone(manager.get(turn_id).pending_approval)
+
+            asyncio.run(scenario())
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+        saved = self.storage.get_messages(bot["id"])[-1]
+        self.assertEqual(saved["text"], "Let me look.\n\n[Stopped by you.]")
+        record = saved["raw_payload"]["tool_calls"][0]
+        self.assertEqual((record["name"], record["status"]), ("shared_folder_list", "cancelled"))
+        self.assertIn("Stopped by the user", record["error"])
+        # The next turn replays a reply for the call, so the transcript stays valid.
+        replay = build_history_messages(self.storage.get_messages(bot["id"]), replay_tools=True)
+        self.assertEqual([m["role"] for m in replay[-3:]], ["assistant", "tool", "assistant"])
+        self.assertEqual(replay[-2]["tool_call_id"], "call_1")
+        self.assertIn("did not complete", replay[-2]["content"])
 
     def test_tool_results_persist_and_replay_on_the_next_turn(self):
         bot = self.storage.get_bots()[0]
