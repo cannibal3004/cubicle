@@ -130,7 +130,7 @@ function MessageItem({ message, botId }) {
             </div>
           )}
           <div className="flex justify-end gap-3">
-            <span className="break-words">
+            <span className="min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
               {message.raw_payload?.scheduled && (
                 <span className="block text-[10px] font-mono text-zinc-300/70 mb-0.5" title={message.raw_payload.scheduled.cadence || ''}>
                   scheduled · {message.raw_payload.scheduled.name}
