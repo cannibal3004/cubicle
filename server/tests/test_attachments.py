@@ -84,6 +84,7 @@ class AttachmentTests(unittest.TestCase):
         self.assertEqual(record["location"], "/workspace/uploads/Q3 report.txt")
         self.assertEqual(record["size"], 5)
         self.assertEqual(record["mime"], "text/plain")
+        self.assertEqual(attachments.save_upload("bot-1", "memo.docx", b"zip")["mime"], "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
         self.assertTrue((self.computers / computer_id_for_bot("bot-1") / "uploads" / "Q3 report.txt").is_file())
 
     def test_upload_without_a_computer_goes_to_the_shared_folder(self):
