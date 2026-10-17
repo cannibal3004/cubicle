@@ -71,6 +71,14 @@ class ApprovalDecision(BaseModel):
     action: Literal["allow", "deny"]
 
 
+class QuestionAnswer(BaseModel):
+    """The user's answer to a question a bot asked (ask_user)."""
+
+    request_id: str
+    answer: str = ""
+    option_index: Optional[int] = None
+
+
 class ActionRequest(BaseModel):
     """The stable envelope used before a side-effecting action executes."""
 

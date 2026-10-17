@@ -117,6 +117,8 @@ class Settings:
     # Turns run server-side and outlive the page, so an approval can wait
     # for someone to come back to it.
     APPROVAL_TIMEOUT_SECONDS: int = int(os.getenv("APPROVAL_TIMEOUT_SECONDS", "900"))
+    # How long a bot's question to the user (ask_user) waits for an answer.
+    QUESTION_TIMEOUT_SECONDS: int = int(os.getenv("QUESTION_TIMEOUT_SECONDS", "900"))
     # Auto-approval: a decision model (decider-4b on a halogen-flash-server
     # NPU, or anything serving POST /v1/systemone) scores each action that
     # needs approval. These are the defaults; App Settings overrides them.

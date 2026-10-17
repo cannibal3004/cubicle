@@ -25,6 +25,7 @@ This is an independent open-source project and is not affiliated with xAI.
 - **Tool control:** A Tools menu in the chat header switches tool groups and connected apps on or off for that bot, the bot editor picks individual tools, and Plugins can withhold an app's tools from every bot without disconnecting it.
 - **Model picker:** Search the live model list reported by your server, or type any model ID. Models that advertise reasoning or vision support are tagged. The default model is `x-ai/grok-4.5` on OpenRouter.
 - **Server-side turns:** A reply runs as a server task, not inside the browser connection. Close the tab, reload, or open the same bot on another machine and the chat reattaches to the turn in progress and replays it. Approvals keep waiting until you answer, and the sidebar marks bots that are working or need you.
+- **Questions to you:** A bot can ask you a question with the `ask_user` tool and wait for the answer: a card with the choices (and a box for an answer of your own) appears in the chat, the sidebar shows the bot is waiting, and the reply continues once you answer. The answer is recorded with the reply like any tool result.
 - **Attachments:** Attach images and files to a message with the + button, by dropping them on the composer, or by pasting. Images go to vision-capable models inline as data URLs. Other files (PDF, Word, Excel, PowerPoint, CSV, text, code) are saved where the bot can reach them, in its computer's `/workspace/uploads` or else the shared folder, shown as a download card, and their text is extracted with MarkItDown and placed in the message up to a cap; above it the model is told where the whole file is and works on it with its tools. Nothing leaves your machine except as part of the model request.
 - **Markdown messages:** Render assistant replies as Markdown in the chat transcript.
 - **Visible thinking:** Reasoning models' thinking (`reasoning_content` or `reasoning` in the stream) is shown live in a collapsible block above the reply. It is stored for display but never replayed to the model.
@@ -245,6 +246,7 @@ The server reads these variables from the environment:
 | `ATTACHMENT_INLINE_MAX_CHARS` | `40000` | How much of an attached file's text is placed in the model's context; the rest stays in the file |
 | `ATTACHMENT_EXTRACT_TIMEOUT` | `60` | Seconds a PDF or Office conversion may take before the file is attached without text |
 | `APPROVAL_TIMEOUT_SECONDS` | `900` | How long a pending approval remains open. Turns run server-side, so this can be generous |
+| `QUESTION_TIMEOUT_SECONDS` | `900` | Seconds a bot's question to you (`ask_user`) waits for an answer before the bot is told to carry on without one |
 | `AUTO_APPROVAL` | `off` | Default auto-approval mode: `off`, `shadow` (score and log, the user still decides), or `on`. App Settings overrides it; each bot can override that |
 | `DECIDER_URL` | empty | Base URL of the decision server used for auto-approval (a halogen-flash-server with `decider-4b`, or any server with `POST /v1/systemone`) |
 | `DECIDER_THRESHOLD` | `0.2` | An action is auto-approved only when every risk score is below this |
@@ -339,6 +341,7 @@ With an OpenAI-compatible provider the model is offered these functions. The gat
 | `share_file` | `files.share` | no (puts a download card for a shared folder or computer file in the chat) |
 | `memory_read`, `memory_write`, `memory_edit` | `memory.*` | no (the bot's own notes, see below) |
 | `todo_list`, `todo_add`, `todo_update` | `todo.*` | no (the bot's working list, see below) |
+| `ask_user` | `user.ask` | no (shows a question card and waits for your answer; `QUESTION_TIMEOUT_SECONDS`) |
 | `schedule_list`, `schedule_create`, `schedule_delete` | `schedule.*` | create and delete yes; list no (see below) |
 | `connector_connect`, `connector_status` | `connector.connect` / `connector.status` | connect yes; status no (start a Composio connection for the user and confirm it) |
 | `mcp_list_servers`, `mcp_add_server`, `mcp_test_server`, `mcp_remove_server` | `mcp.servers.*` | add and remove yes; list and test no (MCP servers, see below) |
@@ -421,6 +424,7 @@ All routes are prefixed with `/api/v1`.
 | POST | `/attachments` | Upload a file for the next message (multipart `file`, `bot_id`); it is saved in the bot's computer workspace or the shared folder and returned as a card |
 | GET, POST | `/settings` | Read public settings or save write-only credentials and app settings |
 | POST | `/approvals/respond` | Submit an Allow/Deny approval response |
+| POST | `/questions/answer` | Answer a question a bot asked (`request_id`, `answer`, optional `option_index`) |
 | POST | `/gate/check` | Probe the auto-approval decision server with a harmless action |
 | GET | `/gate/decisions?limit=200` | What the auto-approval gate was shown and concluded, with the final decision |
 | GET | `/audit?limit=100` | Read recent approval, tool, and connector events |

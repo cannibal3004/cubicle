@@ -410,6 +410,28 @@ SCHEDULE_TOOLS: List[ToolSpec] = [
 # a Composio tool-router session, which this app does not use.
 _TOOLKIT_SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
+QUESTION_TOOLS: List[ToolSpec] = [
+    ToolSpec(
+        name="ask_user",
+        description=(
+            "Ask the user one question and wait for the answer; the reply pauses until they respond. Use it when a decision is "
+            "theirs to make or when something you need is missing and cannot be found with your other tools. Offer 2 to 6 short "
+            "options when there are natural choices (the user can still type something else unless allow_other is false); leave "
+            "options out for a free-text answer. Ask one thing at a time, and do not ask what you could find out yourself."
+        ),
+        parameters=_obj(
+            {
+                "question": {"type": "string", "description": "The question, in one or two sentences"},
+                "options": {"type": "array", "items": {"type": "string"}, "description": "2 to 6 short choices, in the order to show them"},
+                "allow_other": {"type": "boolean", "description": "Whether the user may type an answer of their own (default true)"},
+            },
+            ["question"],
+        ),
+        group="questions",
+        needs_approval=False,
+    ),
+]
+
 CONNECTOR_TOOLS: List[ToolSpec] = [
     ToolSpec(
         name="connector_connect",
@@ -499,6 +521,7 @@ def available_tools(
     specs.extend(MEMORY_TOOLS)
     specs.extend(TODO_TOOLS)
     specs.extend(SCHEDULE_TOOLS)
+    specs.extend(QUESTION_TOOLS)
     if connector_management:
         specs.extend(CONNECTOR_TOOLS)
     specs.extend(MCP_TOOLS)
@@ -630,6 +653,13 @@ def describe_tools(
             "steps, todo_add the steps first, mark each doing when you start it and done when it is finished (todo_update), and add "
             "steps you discover. Every todo result shows the whole list, the user sees and can edit it, and after a compaction the "
             "current list comes with the summary. Keep items short; it is a checklist, not notes."
+        )
+    if "questions" in groups:
+        lines.append(
+            "- Questions to the user: ask_user shows a card and waits for the answer, so the user sees that you need them. Use it for "
+            "decisions that are theirs (which of several ways to proceed, whether to go further than asked) and for missing "
+            "information you cannot find; give short options when there are natural ones. Do not ask in a scheduled run unless "
+            "you cannot continue without the answer, since nobody may be watching, and do not ask things you can look up."
         )
     if "schedule" in groups:
         lines.append(
@@ -866,6 +896,31 @@ def build_invocation(
 
     if name == "todo_list":
         return ActionInvocation(name="todo.list", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the to-do list of {bot_id}")
+    if name == "ask_user":
+        question = _string(arguments, "question", required=True, max_len=2000).strip()
+        if not question:
+            raise ToolCallError("'question' is required.")
+        options = arguments.get("options")
+        if options is None:
+            options = []
+        if isinstance(options, str):
+            options = [options]
+        if not isinstance(options, list) or not all(isinstance(o, str) and o.strip() for o in options):
+            raise ToolCallError("'options' must be a list of short non-empty strings.")
+        options = [o.strip()[:200] for o in options]
+        if len(options) == 1:
+            raise ToolCallError("Offer at least two options, or none for a free-text answer.")
+        if len(options) > 6:
+            raise ToolCallError("At most 6 options can be offered.")
+        allow_other = arguments.get("allow_other", True)
+        if not isinstance(allow_other, bool):
+            raise ToolCallError("'allow_other' must be true or false.")
+        return ActionInvocation(
+            name="user.ask",
+            arguments={"bot_id": bot_id, "question": question, "options": options, "allow_other": allow_other or not options},
+            target={"bot_id": bot_id},
+            preview=f"Ask the user: {question[:160]}",
+        )
     if name == "todo_add":
         items = arguments.get("items")
         if isinstance(items, str):

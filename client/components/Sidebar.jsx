@@ -147,7 +147,7 @@ export default function Sidebar({
               {needsApproval && (
                 <span
                   className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0 animate-pulse"
-                  title={`Waiting for your approval: ${turn.pending_approval.summary || ''}`}
+                  title={`${turn.pending_approval.kind === 'question' ? 'Waiting for your answer' : 'Waiting for your approval'}: ${turn.pending_approval.summary || ''}`}
                 />
               )}
               {isWorking && <span className="w-2 h-2 rounded-full bg-blue-400 flex-shrink-0" title="Working on a reply" />}
