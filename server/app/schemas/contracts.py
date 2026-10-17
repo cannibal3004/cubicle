@@ -47,6 +47,15 @@ class Message(BaseModel):
     item_type: Optional[str] = "assistant_text"  # assistant_text, tool_call, approval_card
     image_url: Optional[str] = None
     raw_payload: Optional[Dict[str, Any]] = None
+    # Files the user attached: download-card fields plus where the bot finds them.
+    attachments: Optional[List[Dict[str, Any]]] = None
+
+class AttachmentRef(BaseModel):
+    """An uploaded file, named the way download cards name files."""
+
+    source: str  # 'computer' or 'workspace'
+    path: str
+
 
 class TurnRequest(BaseModel):
     thread_id: str
@@ -54,6 +63,7 @@ class TurnRequest(BaseModel):
     user_text: str
     model: Optional[str] = None
     image_url: Optional[str] = None
+    attachments: Optional[List[AttachmentRef]] = None
 
 
 class ApprovalDecision(BaseModel):

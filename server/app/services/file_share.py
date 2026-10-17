@@ -19,6 +19,22 @@ from app.services.action_gateway import ActionDefinition, ActionInvocation, acti
 from app.services.computer_provider import computer_id_for_bot
 
 SOURCES = ("workspace", "computer")
+
+# Slim images ship a short MIME table; make sure the common document types
+# are named on cards rather than falling back to octet-stream.
+for _mime, _suffix in (
+    ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx"),
+    ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx"),
+    ("application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx"),
+    ("application/msword", ".doc"),
+    ("application/vnd.ms-excel", ".xls"),
+    ("application/vnd.ms-powerpoint", ".ppt"),
+    ("text/markdown", ".md"),
+    ("text/csv", ".csv"),
+    ("application/json", ".json"),
+    ("application/yaml", ".yaml"),
+):
+    mimetypes.add_type(_mime, _suffix)
 SHARE_ACTION = "files.share"
 
 

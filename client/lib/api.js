@@ -172,7 +172,7 @@ export async function fetchChatHistory(threadId) {
   }
 }
 
-export async function sendMessage(threadId, botId, text, model = null, imageUrl = null) {
+export async function sendMessage(threadId, botId, text, model = null, imageUrl = null, attachments = null) {
   try {
     const res = await apiFetch(`${API_BASE_URL}/chat/send`, {
       method: 'POST',
@@ -183,6 +183,7 @@ export async function sendMessage(threadId, botId, text, model = null, imageUrl 
         user_text: text,
         model,
         image_url: imageUrl,
+        attachments: attachments && attachments.length ? attachments : null,
       }),
     });
     if (!res.ok) throw new Error('Failed to send message');
@@ -203,6 +204,20 @@ export async function uploadImage(file) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Failed to upload image' }));
     throw new Error(err.detail || 'Failed to upload image');
+  }
+  return res.json();
+}
+
+// A file for the next message: saved where the bot can reach it, returned as
+// the same card a shared file gets ({source, path, name, size, mime, ...}).
+export async function uploadAttachment(file, botId) {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('bot_id', botId || '');
+  const res = await apiFetch(`${API_BASE_URL}/attachments`, { method: 'POST', body: formData });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to upload the file' }));
+    throw new Error(err.detail || 'Failed to upload the file');
   }
   return res.json();
 }

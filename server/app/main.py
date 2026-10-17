@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.routers import auth, bots, models, chat, approvals, upload, settings as settings_router, connectors, audit, computers, tools, files, gate, commands, secrets, schedules, mcp
+from app.routers import attachments, auth, bots, models, chat, approvals, upload, settings as settings_router, connectors, audit, computers, tools, files, gate, commands, secrets, schedules, mcp
 from app.services.mcp_service import mcp_manager
 from app.services.scheduler import scheduler
 from app.services.computer_provider import computer_provider
@@ -86,6 +86,7 @@ app.include_router(bots.router)
 app.include_router(models.router)
 app.include_router(chat.router)
 app.include_router(upload.router)
+app.include_router(attachments.router)
 app.include_router(approvals.router)
 app.include_router(settings_router.router)
 app.include_router(connectors.router)

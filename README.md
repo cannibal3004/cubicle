@@ -25,7 +25,7 @@ This is an independent open-source project and is not affiliated with xAI.
 - **Tool control:** A Tools menu in the chat header switches tool groups and connected apps on or off for that bot, the bot editor picks individual tools, and Plugins can withhold an app's tools from every bot without disconnecting it.
 - **Model picker:** Search the live model list reported by your server, or type any model ID. Models that advertise reasoning or vision support are tagged. The default model is `x-ai/grok-4.5` on OpenRouter.
 - **Server-side turns:** A reply runs as a server task, not inside the browser connection. Close the tab, reload, or open the same bot on another machine and the chat reattaches to the turn in progress and replays it. Approvals keep waiting until you answer, and the sidebar marks bots that are working or need you.
-- **Image attachments:** Upload JPEG, PNG, WEBP, GIF, or AVIF images. They are sent inline to vision-capable models as data URLs, so the image never leaves your machine except as part of the model request.
+- **Attachments:** Attach images and files to a message with the + button, by dropping them on the composer, or by pasting. Images go to vision-capable models inline as data URLs. Other files (PDF, Word, Excel, PowerPoint, CSV, text, code) are saved where the bot can reach them, in its computer's `/workspace/uploads` or else the shared folder, shown as a download card, and their text is extracted with MarkItDown and placed in the message up to a cap; above it the model is told where the whole file is and works on it with its tools. Nothing leaves your machine except as part of the model request.
 - **Markdown messages:** Render assistant replies as Markdown in the chat transcript.
 - **Visible thinking:** Reasoning models' thinking (`reasoning_content` or `reasoning` in the stream) is shown live in a collapsible block above the reply. It is stored for display but never replayed to the model.
 - **Voice dictation:** Use the browser's Web Speech API when the browser supports it.
@@ -116,9 +116,9 @@ The local server creates a mode-0600 session token in `DATA_DIR` and the browser
 The default provider is the deterministic local adapter. To enable the real sandbox desktop (browser, terminal, file manager, input, screenshots, and live VNC), build the pinned runtime image and opt in to the Docker provider:
 
 ```bash
-docker build -t cubicle-computer:2.6.0 ./runtime
+docker build -t cubicle-computer:2.7.0 ./runtime
 export COMPUTER_PROVIDER=docker
-export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.6.0
+export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.7.0
 ```
 
 The Docker daemon must be running before starting the API. Each bot gets a separate container, a separate workspace under `DATA_DIR/computers`, an ephemeral loopback-only port, and an internal runtime token. The sandbox user has no capabilities and cannot gain any; CPU, memory, process, and shared-memory limits are applied.
@@ -127,7 +127,7 @@ The Docker daemon must be running before starting the API. Each bot gets a separ
 
 **Secrets.** API keys and tokens a bot needs go in App Settings → Secrets (for every bot) or in the bot editor → Secrets (for one bot, overriding the app-wide value of the same name). They are stored encrypted with the same key as the provider credentials, the API never returns a value once set (`GET /api/v1/secrets` and `GET /api/v1/bots/{id}/secrets` list names and dates), and they reach a bot only as environment variables inside its computer, read at the computer's next start. The model is told the names, not the values. Since a shell can still print them, every tool result is scrubbed of the known values (`[secret NAME]`) before the model, the transcript or the screen sees it, and so are the encodings a shell or a library prints on its own: base64 (`[secret NAME as base64]`), hex and percent-encoding in a URL. That scrubbing is a guard against accidents, not a security boundary: it does not read screenshots, it does not catch a value cut in half by the output cap or transformed in some other way, and a bot that has a key in its computer can send that key anywhere its shell can reach, which is what the key is there for. A secret in a bot's computer is as safe as that bot's instructions and the model running it.
 
-Inside the container an Xvnc display runs a minimal desktop (xfwm4 with compositing): a centred, auto-hiding Plank dock with Chromium, Thunar and xfce4-terminal, no application menu and no session controls. Chromium is not running at boot: the dock button, the bot, and the sandbox shell all start it with the same launcher command, and the driver attaches to that one instance over the loopback DevTools port, so whoever opens a window, there is a single browser. Windows have maximize and close buttons only; there is no task list, so minimizing is disabled to keep windows from being stranded. Screenshots capture the whole desktop and input goes through xdotool, so the bot can use the terminal and file manager as well as the browser. Ubuntu 24.04 with Node, Python with pip and venv, git, curl, jq and unzip is available; `/workspace` and the home directory persist between starts and `/tmp` is wiped.
+Inside the container an Xvnc display runs a minimal desktop (xfwm4 with compositing): a centred, auto-hiding Plank dock with Chromium, Thunar and xfce4-terminal, no application menu and no session controls. Chromium is not running at boot: the dock button, the bot, and the sandbox shell all start it with the same launcher command, and the driver attaches to that one instance over the loopback DevTools port, so whoever opens a window, there is a single browser. Windows have maximize and close buttons only; there is no task list, so minimizing is disabled to keep windows from being stranded. Screenshots capture the whole desktop and input goes through xdotool, so the bot can use the terminal and file manager as well as the browser. Ubuntu 24.04 with Node, Python with pip and venv, git, curl, jq, unzip, pdftotext and `markitdown` (PDF, Word, Excel and PowerPoint to Markdown) is available; `/workspace` and the home directory persist between starts and `/tmp` is wiped.
 
 **The shared folder inside the computer.** When the API knows the host path of the shared folder (`COMPUTER_DOCKER_HOST_SHARED_DIR`, which compose fills from an absolute `WORKSPACE_DIR`; an API running directly on the host uses `WORKSPACE_ROOT`), every computer gets it mounted at `/shared`. The bot is told that `/workspace` is its own project space and `/shared` is the folder you can see, and it is not offered the host-side `shared_folder_*` tools at all, so there is one filesystem to reason about. `share_file` accepts `/shared/...` paths from the computer. Because the API and the sandbox run as different unprivileged users, both sides create files in the folder writable by everyone (the API sets the modes explicitly; the sandbox runs with `umask 000`), the same arrangement as the world-writable per-computer directories. The folder itself must be writable by both users as well: a plain `chmod 777` on it is the simplest way.
 
@@ -225,7 +225,7 @@ The server reads these variables from the environment:
 | `AUTH_COOKIE_SECURE` | `0` | Set to `1` when serving over HTTPS |
 | `CORS_ORIGINS` | localhost and loopback client origins | Comma-separated browser origins allowed by the API |
 | `COMPUTER_PROVIDER` | `fake` | Computer adapter: `fake` or `docker` |
-| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.6.0` | Pinned local runtime image |
+| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.7.0` | Pinned local runtime image |
 | `COMPUTER_DOCKER_WORKSPACE_ROOT` | `DATA_DIR/computers` | Root for per-bot runtime workspaces |
 | `COMPUTER_DOCKER_CPU_LIMIT` | `2.0` | Docker CPU limit per computer |
 | `COMPUTER_DOCKER_MEMORY_LIMIT` | `2g` | Docker memory limit per computer |
@@ -241,6 +241,9 @@ The server reads these variables from the environment:
 | `COMPUTER_DOCKER_HOST_SHARED_DIR` | `WORKSPACE_DIR` when absolute, else `WORKSPACE_ROOT` for an API that sees host paths | Host path of the shared folder, mounted at `/shared` in every computer. Empty: no mount, and bots with a computer keep the host-side tools |
 | `WORKSPACE_ROOT` | repository root | The shared folder: the directory the `shared_folder_*` tools and `/shared` commands are confined to |
 | `WORKSPACE_MAX_FILE_BYTES` | `131072` | Read/write size limit for the host-side shared folder tools |
+| `ATTACHMENT_MAX_BYTES` | `52428800` | Largest file that can be attached to a message (50 MB) |
+| `ATTACHMENT_INLINE_MAX_CHARS` | `40000` | How much of an attached file's text is placed in the model's context; the rest stays in the file |
+| `ATTACHMENT_EXTRACT_TIMEOUT` | `60` | Seconds a PDF or Office conversion may take before the file is attached without text |
 | `APPROVAL_TIMEOUT_SECONDS` | `900` | How long a pending approval remains open. Turns run server-side, so this can be generous |
 | `AUTO_APPROVAL` | `off` | Default auto-approval mode: `off`, `shadow` (score and log, the user still decides), or `on`. App Settings overrides it; each bot can override that |
 | `DECIDER_URL` | empty | Base URL of the decision server used for auto-approval (a halogen-flash-server with `decider-4b`, or any server with `POST /v1/systemone`) |
@@ -257,7 +260,7 @@ A key saved before the provider setting existed is migrated automatically: the d
 
 | Surface | Purpose |
 | --- | --- |
-| Chat | Bot roster, model selection, Markdown replies, image attachments, voice dictation, and streamed responses |
+| Chat | Bot roster, model selection, Markdown replies, image and file attachments, voice dictation, and streamed responses |
 | Computer | Bot-scoped provider lifecycle, screen metadata polling, and governed computer actions |
 | Marketplace | Searchable curated or live app catalog with explicit connect/disconnect actions |
 | Audit trail | Recent approval, shared-folder, and connector events persisted by the local API |
@@ -415,6 +418,7 @@ All routes are prefixed with `/api/v1`.
 | POST | `/chat/send` | Store a user message |
 | GET | `/chat/stream/{thread_id}?model=...` | Stream a response over SSE |
 | POST | `/upload` | Validate and upload an image attachment |
+| POST | `/attachments` | Upload a file for the next message (multipart `file`, `bot_id`); it is saved in the bot's computer workspace or the shared folder and returned as a card |
 | GET, POST | `/settings` | Read public settings or save write-only credentials and app settings |
 | POST | `/approvals/respond` | Submit an Allow/Deny approval response |
 | POST | `/gate/check` | Probe the auto-approval decision server with a harmless action |
@@ -516,7 +520,7 @@ Confirm that the daemon is running, the runtime image was built, and the API use
 
 ```bash
 docker info
-docker image inspect cubicle-computer:2.6.0
+docker image inspect cubicle-computer:2.7.0
 echo "$COMPUTER_PROVIDER"
 ```
 
