@@ -6,7 +6,7 @@ import ChatWindow from './ChatWindow';
 import ComputerPanel from './ComputerPanel';
 import Marketplace from './Marketplace';
 import AuditPanel from './AuditPanel';
-import AppSettingsDrawer from './AppSettingsDrawer';
+import SettingsPage from './SettingsPage';
 import BotEditorModal, { ConfirmDialog } from './BotEditorModal';
 
 import {
@@ -266,6 +266,33 @@ export default function Dashboard() {
 
       {/* Main Workspace Display Area */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
+        {/* Settings take over the main area; the chat stays mounted beneath, so streams go on. */}
+        {isSettingsOpen && (
+          <SettingsPage
+            user={currentUser}
+            isOpen={isSettingsOpen}
+            onClose={() => setIsSettingsOpen(false)}
+            currentModel={defaultModel}
+            models={models}
+            catalogError={catalogError}
+            onRefreshModels={refreshModels}
+            onConnectionSaved={async (saved) => {
+              if (saved?.default_model) setDefaultModel(saved.default_model);
+              await refreshModels();
+            }}
+            onUpdateDefaultModel={(newModel) => {
+              setDefaultModel(newModel);
+              if (activeBotId) {
+                handleUpdateBotModel(activeBotId, newModel);
+              }
+            }}
+            onProfileUpdate={(name) => setUserName(name || 'You')}
+            onSignOut={() => {
+              setIsSettingsOpen(false);
+              setAuthState('login');
+            }}
+          />
+        )}
         {/* The chat stays mounted on every tab so the draft, the open SSE
             stream, approvals, and tool events survive a visit to the
             Computer tab. `contents` keeps it out of the layout when shown. */}
@@ -336,31 +363,6 @@ export default function Dashboard() {
         />
       )}
 
-      {/* Right Side App Settings Drawer Panel */}
-      <AppSettingsDrawer
-        user={currentUser}
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        currentModel={defaultModel}
-        models={models}
-        catalogError={catalogError}
-        onRefreshModels={refreshModels}
-        onConnectionSaved={async (saved) => {
-          if (saved?.default_model) setDefaultModel(saved.default_model);
-          await refreshModels();
-        }}
-        onUpdateDefaultModel={(newModel) => {
-          setDefaultModel(newModel);
-          if (activeBotId) {
-            handleUpdateBotModel(activeBotId, newModel);
-          }
-        }}
-        onProfileUpdate={(name) => setUserName(name || 'You')}
-        onSignOut={() => {
-          setIsSettingsOpen(false);
-          setAuthState('login');
-        }}
-      />
     </div>
   );
 }
