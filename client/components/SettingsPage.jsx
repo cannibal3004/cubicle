@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { FiX, FiCheck, FiEye, FiEyeOff } from "react-icons/fi";
+import { FiX, FiCheck, FiEye, FiEyeOff, FiUser, FiUsers, FiServer, FiShield, FiLink, FiKey, FiCpu } from "react-icons/fi";
 import {
   fetchSettings,
   saveSettings,
@@ -46,6 +46,18 @@ const BASE_URL_PRESETS = [
   { label: "llama.cpp", value: "http://localhost:8080/v1" },
 ];
 
+// The page's sections. Admin-only ones are hidden from members, whose
+// saves never carry app-wide keys either.
+const SECTIONS = [
+  { id: "account", label: "Account", icon: FiUser, blurb: "Your profile, password, two-factor and API tokens." },
+  { id: "users", label: "Users", icon: FiUsers, admin: true, blurb: "Accounts on this server." },
+  { id: "model", label: "Model server", icon: FiCpu, admin: true, blurb: "The model server every bot uses, and the default model." },
+  { id: "approval", label: "Auto-approval", icon: FiShield, blurb: "Which actions ask you, and which a decision model may wave through." },
+  { id: "connectors", label: "Connectors", icon: FiLink, blurb: "App connections for your bots." },
+  { id: "secrets", label: "Secrets", icon: FiKey, blurb: "API keys and tokens your bots may use in their computers." },
+  { id: "mcp", label: "MCP servers", icon: FiServer, blurb: "Tool servers for your bots, and system-wide ones." },
+];
+
 const AUTO_APPROVAL_OPTIONS = [
   { value: "off", label: "Off: every approval asks you" },
   { value: "shadow", label: "Shadow: score and log, you still decide" },
@@ -63,7 +75,7 @@ const REASONING_OPTIONS = [
   { value: "max", label: "max" },
 ];
 
-export default function AppSettingsDrawer({
+export default function SettingsPage({
   user,
   isOpen,
   onClose,
@@ -78,6 +90,7 @@ export default function AppSettingsDrawer({
 }) {
   const [userName, setUserName] = useState("");
   const [userEmail, setUserEmail] = useState("");
+  const [section, setSection] = useState("account");
   // Admins manage what is shared by everyone: the model server, the
   // connector key, the decision server, system MCP servers, accounts.
   const admin = ['owner', 'admin'].includes(user?.role);
@@ -148,6 +161,9 @@ export default function AppSettingsDrawer({
   if (!isOpen) return null;
 
   const providerInfo = PROVIDERS.find((p) => p.id === provider) || PROVIDERS[0];
+  const sections = SECTIONS.filter((s) => admin || !s.admin);
+  const current = sections.find((s) => s.id === section) || sections[0];
+  const show = (id) => current.id === id;
 
   const triggerSavedNotice = (field) => {
     setSavedField(field);
@@ -248,10 +264,13 @@ export default function AppSettingsDrawer({
     "w-full bg-[#222226] border border-[#2e2e34] rounded-xl px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-400 transition font-sans";
 
   return (
-    <aside className="w-96 md:w-[420px] h-screen bg-[#111113] border-l border-[#1c1c20] flex flex-col z-30 shadow-2xl animate-fade-in select-none font-sans text-zinc-100 flex-shrink-0">
-      {/* Drawer Header */}
-      <div className="p-5 border-b border-[#1c1c20] flex items-center justify-between">
-        <h2 className="text-sm font-bold text-zinc-100 tracking-wide">App Settings</h2>
+    <section className="absolute inset-0 z-30 bg-[#0d0d10] flex flex-col animate-fade-in font-sans text-zinc-100">
+      {/* Page header */}
+      <div className="px-6 py-3.5 border-b border-[#1c1c20] flex items-center justify-between bg-[#09090b]/80 backdrop-blur-md">
+        <div className="min-w-0">
+          <h2 className="text-sm font-bold text-zinc-100 tracking-wide">Settings</h2>
+          <p className="text-[11px] text-zinc-500 truncate">{current.blurb}</p>
+        </div>
         <button
           suppressHydrationWarning={true}
           onClick={onClose}
@@ -262,10 +281,34 @@ export default function AppSettingsDrawer({
         </button>
       </div>
 
-      {/* Drawer Content */}
-      <div className="flex-1 overflow-y-auto p-5 space-y-6">
+      <div className="flex-1 flex min-h-0">
+        {/* Section nav */}
+        <nav className="w-52 flex-shrink-0 border-r border-[#1c1c20] p-3 space-y-0.5 overflow-y-auto select-none">
+          {sections.map((item) => {
+            const Icon = item.icon;
+            const active = item.id === current.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setSection(item.id)}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-left transition ${
+                  active ? "bg-[#27272a] text-white border border-[#34343a]" : "text-zinc-400 hover:bg-[#1c1c20] hover:text-zinc-100 border border-transparent"
+                }`}
+              >
+                <Icon className="text-sm flex-shrink-0" />
+                <span className="truncate">{item.label}</span>
+                {item.admin && <span className="ml-auto text-[9px] uppercase tracking-wider text-amber-300/80">admin</span>}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* The section's cards */}
+        <div className="flex-1 overflow-y-auto p-6">
+        <div className="max-w-3xl space-y-6">
         {/* Profile Card Section */}
-        <div className="bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm">
+        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm ${show("account") ? "" : "hidden"}`}>
           <div>
             <h3 className="text-sm font-bold text-zinc-100">Profile</h3>
             <p className="text-xs text-zinc-400 mt-0.5">Shown in the sidebar. Saved as you go.</p>
@@ -301,7 +344,7 @@ export default function AppSettingsDrawer({
         </div>
 
         {/* LLM Connection Card (admins) */}
-        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm ${admin ? "" : "hidden"}`}>
+        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm ${admin && show("model") ? "" : "hidden"}`}>
           <div>
             <h3 className="text-sm font-bold text-zinc-100">Model server</h3>
             <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
@@ -413,7 +456,7 @@ export default function AppSettingsDrawer({
         </div>
 
         {/* Model defaults (admins) */}
-        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm ${admin ? "" : "hidden"}`}>
+        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm ${admin && show("model") ? "" : "hidden"}`}>
           <div>
             <h3 className="text-sm font-bold text-zinc-100">Model defaults</h3>
             <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
@@ -470,7 +513,7 @@ export default function AppSettingsDrawer({
         </div>
 
         {/* Auto-approval */}
-        <div className="bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm">
+        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm ${show("approval") ? "" : "hidden"}`}>
           <div>
             <h3 className="text-sm font-bold text-zinc-100">Auto-approval</h3>
             <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
@@ -567,7 +610,7 @@ export default function AppSettingsDrawer({
         </div>
 
         {/* Connectors */}
-        <div className="bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm">
+        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm ${show("connectors") ? "" : "hidden"}`}>
           <div>
             <h3 className="text-sm font-bold text-zinc-100">Connectors</h3>
           </div>
@@ -605,7 +648,7 @@ export default function AppSettingsDrawer({
         </div>
 
         {/* The signed-in account */}
-        <div className="bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm">
+        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm ${show("account") ? "" : "hidden"}`}>
           <div>
             <h3 className="text-sm font-bold text-zinc-100">Account</h3>
             <p className="text-[11px] text-zinc-500 mt-1">
@@ -616,7 +659,7 @@ export default function AppSettingsDrawer({
         </div>
 
         {admin && (
-          <div className="bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm">
+          <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm ${show("users") ? "" : "hidden"}`}>
             <div>
               <h3 className="text-sm font-bold text-zinc-100">Users</h3>
               <p className="text-[11px] text-zinc-500 mt-1">
@@ -628,7 +671,7 @@ export default function AppSettingsDrawer({
         )}
 
         {/* Secrets for bot computers */}
-        <div className="bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm">
+        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm ${show("secrets") ? "" : "hidden"}`}>
           <div>
             <h3 className="text-sm font-bold text-zinc-100">Secrets</h3>
             <p className="text-[11px] text-zinc-500 mt-1">
@@ -639,7 +682,7 @@ export default function AppSettingsDrawer({
         </div>
 
         {/* MCP servers */}
-        <div className="bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm">
+        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm ${show("mcp") ? "" : "hidden"}`}>
           <div>
             <h3 className="text-sm font-bold text-zinc-100">MCP servers</h3>
             <p className="text-[11px] text-zinc-500 mt-1">
@@ -657,7 +700,9 @@ export default function AppSettingsDrawer({
             reconnect={reconnectMcpServer}
           />
         </div>
+        </div>
+        </div>
       </div>
-    </aside>
+    </section>
   );
 }
