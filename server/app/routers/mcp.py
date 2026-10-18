@@ -132,3 +132,62 @@ async def mcp_test_definition(body: ServerInput):
 
     record = _guard(lambda: clean_server(body.model_dump(exclude_none=True, exclude={"scope"})))
     return await mcp_manager.test(record)
+
+
+# ---- a bot's own servers (run inside its computer) -------------------------------------------
+
+from app.services.storage_service import current_storage  # noqa: E402
+
+
+def _owned_bot(bot_id: str) -> None:
+    if not any(bot.get("id") == bot_id for bot in current_storage().get_bots()):
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+
+@router.get("/bots/{bot_id}/servers")
+async def bot_mcp_list(bot_id: str):
+    _owned_bot(bot_id)
+    return {"servers": [_entry(r) for r in mcp_manager.bot_store(bot_id).list()]}
+
+
+@router.post("/bots/{bot_id}/servers")
+async def bot_mcp_add(bot_id: str, body: ServerInput):
+    _owned_bot(bot_id)
+    store = mcp_manager.bot_store(bot_id)
+    record = _guard(lambda: store.add(body.model_dump(exclude_none=True, exclude={"scope"}), created_by="user"))
+    if record.get("enabled", True):
+        mcp_manager.connection(record["id"], bot_id).start()
+    return {"server": _entry(record)}
+
+
+@router.put("/bots/{bot_id}/servers/{server_id}")
+async def bot_mcp_update(bot_id: str, server_id: str, body: ServerUpdate):
+    _owned_bot(bot_id)
+    store = mcp_manager.bot_store(bot_id)
+    record = _guard(lambda: store.update(server_id, body.model_dump(exclude_none=True)))
+    await mcp_manager.forget(server_id)
+    if record.get("enabled", True):
+        mcp_manager.connection(server_id, bot_id).start()
+    return {"server": _entry(record)}
+
+
+@router.delete("/bots/{bot_id}/servers/{server_id}")
+async def bot_mcp_remove(bot_id: str, server_id: str):
+    _owned_bot(bot_id)
+    record = _guard(lambda: mcp_manager.bot_store(bot_id).remove(server_id))
+    await mcp_manager.forget(server_id)
+    try:
+        from app.services.computer_provider import computer_provider
+
+        await computer_provider.mcp_stop(computer_provider.describe(bot_id).computer_id, server_id)
+    except Exception:
+        pass  # the computer may not be running; nothing to stop then
+    return {"status": "ok", "removed": public(record)}
+
+
+@router.post("/bots/{bot_id}/servers/{server_id}/test")
+async def bot_mcp_test(bot_id: str, server_id: str):
+    _owned_bot(bot_id)
+    record = _guard(lambda: mcp_manager.bot_store(bot_id).get(server_id))
+    return await mcp_manager.test(record)
+

@@ -899,6 +899,24 @@ class DockerComputerProvider:
             "output": output[-4000:],
         }
 
+    async def mcp_start(self, computer_id: str, server: Dict[str, Any]) -> Dict[str, Any]:
+        """Run an MCP server inside the computer; the driver bridges its stdio to HTTP."""
+        record = self._active_record(computer_id)
+        payload = {"id": server.get("id"), "command": server.get("command"), "args": list(server.get("args") or []), "env": dict(server.get("env") or {})}
+        return await self._request(record, "POST", "/mcp/start", payload, timeout=30)
+
+    async def mcp_stop(self, computer_id: str, server_id: str) -> Dict[str, Any]:
+        record = self._runtimes.get(computer_id)
+        if record is None or record.status.state != "running" or not record.port:
+            return {"stopped": False}
+        return await self._request(record, "POST", "/mcp/stop", {"id": server_id}, timeout=10)
+
+    def mcp_endpoint(self, computer_id: str, server_id: str) -> Optional[Dict[str, Any]]:
+        record = self._runtimes.get(computer_id)
+        if record is None or record.status.state != "running" or not record.host or not record.port:
+            return None
+        return {"url": self._runtime_url(record, f"/mcp/{server_id}"), "headers": {"x-computer-token": record.token}}
+
     def vnc_target(self, computer_id: str) -> Optional[Dict[str, Any]]:
         record = self._runtimes.get(computer_id)
         if record is None or record.status.state not in {"running", "paused"}:

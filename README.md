@@ -118,9 +118,9 @@ On first start the UI shows a setup page that creates the owner's account (usern
 The default provider is the deterministic local adapter. To enable the real sandbox desktop (browser, terminal, file manager, input, screenshots, and live VNC), build the pinned runtime image and opt in to the Docker provider:
 
 ```bash
-docker build -t cubicle-computer:2.7.0 ./runtime
+docker build -t cubicle-computer:2.8.0 ./runtime
 export COMPUTER_PROVIDER=docker
-export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.7.0
+export COMPUTER_DOCKER_IMAGE=cubicle-computer:2.8.0
 ```
 
 The Docker daemon must be running before starting the API. Each bot gets a separate container, a separate workspace under `DATA_DIR/computers`, an ephemeral loopback-only port, and an internal runtime token. The sandbox user has no capabilities and cannot gain any; CPU, memory, process, and shared-memory limits are applied.
@@ -227,7 +227,7 @@ The server reads these variables from the environment:
 | `AUTH_COOKIE_SECURE` | `0` | Set to `1` when serving over HTTPS |
 | `CORS_ORIGINS` | localhost and loopback client origins | Comma-separated browser origins allowed by the API |
 | `COMPUTER_PROVIDER` | `fake` | Computer adapter: `fake` or `docker` |
-| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.7.0` | Pinned local runtime image |
+| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.8.0` | Pinned local runtime image |
 | `COMPUTER_DOCKER_WORKSPACE_ROOT` | `DATA_DIR/computers` | Root for per-bot runtime workspaces |
 | `COMPUTER_DOCKER_CPU_LIMIT` | `2.0` | Docker CPU limit per computer |
 | `COMPUTER_DOCKER_MEMORY_LIMIT` | `2g` | Docker memory limit per computer |
@@ -431,6 +431,8 @@ All routes are prefixed with `/api/v1`.
 | GET, POST | `/settings` | Read public settings or save write-only credentials and app settings |
 | POST | `/approvals/respond` | Submit an Allow/Deny approval response |
 | POST | `/questions/answer` | Answer a question a bot asked (`request_id`, `answer`, optional `option_index`) |
+| GET, POST, PUT, DELETE | `/mcp/servers`, `/mcp/servers/{id}`, `.../test`, `.../reconnect`, `/mcp/test` | MCP servers. A server has a `scope`: `user` (the caller's bots), `system` (every account's bots; admins only) or `bot` (one bot, run inside its computer; next row). `$NAME` references resolve from the owner's secrets for user servers and from the first account's for system servers |
+| GET, POST, PUT, DELETE | `/mcp/bots/{bot_id}/servers`, `/mcp/bots/{bot_id}/servers/{id}`, `.../test` | A bot's own servers: commands run inside its computer by the driver, which bridges their stdio to streamable HTTP for the API. Only that bot gets their tools; they start with the computer and stop with it; `$NAME` in `env` resolves from the computer's environment, where the user's secrets are. The bot adds one itself with `mcp_add_server` (scope `computer`, the default) after installing it with its terminal |
 | POST | `/gate/check` | Probe the auto-approval decision server with a harmless action |
 | GET | `/gate/decisions?limit=200` | What the auto-approval gate was shown and concluded, with the final decision |
 | GET | `/audit?limit=100` | Read recent approval, tool, and connector events |
@@ -530,7 +532,7 @@ Confirm that the daemon is running, the runtime image was built, and the API use
 
 ```bash
 docker info
-docker image inspect cubicle-computer:2.7.0
+docker image inspect cubicle-computer:2.8.0
 echo "$COMPUTER_PROVIDER"
 ```
 

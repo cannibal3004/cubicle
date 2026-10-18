@@ -6,6 +6,7 @@ import ModelPicker from './ModelPicker';
 import BotToolsSection from './BotToolsSection';
 import SecretsSection from './SecretsSection';
 import SchedulesSection from './SchedulesSection';
+import BotMcpSection from './BotMcpSection';
 import {
   fetchBotSecrets,
   setBotSecret,
@@ -15,6 +16,11 @@ import {
   updateBotSchedule,
   deleteBotSchedule,
   runBotSchedule,
+  fetchBotMcpServers,
+  createBotMcpServer,
+  updateBotMcpServer,
+  deleteBotMcpServer,
+  testBotMcpServer,
 } from '../lib/api';
 
 const AVATARS = ['🤖', '🧠', '🦊', '🐙', '🦉', '🐝', '🧭', '🛠️', '📚', '🎯', '🧪', '🌱'];
@@ -121,6 +127,12 @@ export default function BotEditorModal({
   const changeSchedule = useCallback((id, changes) => updateBotSchedule(botId, id, changes), [botId]);
   const removeSchedule = useCallback((id) => deleteBotSchedule(botId, id), [botId]);
   const runSchedule = useCallback((id) => runBotSchedule(botId, id), [botId]);
+  const [showMcp, setShowMcp] = useState(false);
+  const loadMcp = useCallback(() => fetchBotMcpServers(botId), [botId]);
+  const addMcp = useCallback((server) => createBotMcpServer(botId, server), [botId]);
+  const changeMcp = useCallback((id, changes) => updateBotMcpServer(botId, id, changes), [botId]);
+  const removeMcp = useCallback((id) => deleteBotMcpServer(botId, id), [botId]);
+  const testMcp = useCallback((id) => testBotMcpServer(botId, id), [botId]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -407,6 +419,25 @@ export default function BotEditorModal({
               {showSchedules && (
                 <div className="mt-2">
                   <SchedulesSection load={loadSchedules} create={addSchedule} update={changeSchedule} remove={removeSchedule} runNow={runSchedule} />
+                </div>
+              )}
+            </div>
+          )}
+
+          {bot && (
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowMcp((v) => !v)}
+                className="flex items-center justify-between w-full text-left"
+                aria-expanded={showMcp}
+              >
+                <span className={labelClass + ' mb-0'}>MCP servers on this computer</span>
+                <span className="text-[11px] text-zinc-500">{showMcp ? 'Hide' : 'Tool servers only this bot gets'}</span>
+              </button>
+              {showMcp && (
+                <div className="mt-2">
+                  <BotMcpSection load={loadMcp} create={addMcp} update={changeMcp} remove={removeMcp} test={testMcp} />
                 </div>
               )}
             </div>

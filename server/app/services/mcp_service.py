@@ -33,7 +33,7 @@ from app.services.storage_service import StorageService, current_storage, storag
 
 logger = logging.getLogger(__name__)
 
-TRANSPORTS = ("stdio", "http")
+TRANSPORTS = ("stdio", "http", "computer")
 MAX_SERVERS = 30
 MAX_NAME_CHARS = 60
 MAX_ARGS = 40
@@ -113,7 +113,7 @@ def clean_server(data: Any, *, existing: Optional[Dict[str, Any]] = None) -> Dic
     merged = {**base, **{k: v for k, v in data.items() if v is not None}}
     transport = str(merged.get("transport") or ("http" if merged.get("url") else "stdio")).strip().lower()
     if transport not in TRANSPORTS:
-        raise McpError("'transport' must be stdio (a command) or http (a URL).")
+        raise McpError("'transport' must be stdio (a command), http (a URL), or computer (a command run inside the bot's computer).")
     record: Dict[str, Any] = {
         "id": base.get("id") or f"mcp-{uuid.uuid4().hex[:8]}",
         "name": _clean_name(merged.get("name")),
@@ -128,7 +128,7 @@ def clean_server(data: Any, *, existing: Optional[Dict[str, Any]] = None) -> Dic
         "created_by": base.get("created_by") or (str(merged.get("created_by") or "user")),
         "created_at": base.get("created_at") or time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
-    if transport == "stdio":
+    if transport in ("stdio", "computer"):
         command = str(merged.get("command") or "").strip()
         if not command:
             raise McpError("A stdio server needs the command to run, e.g. npx.")
@@ -191,6 +191,8 @@ def public(record: Dict[str, Any]) -> Dict[str, Any]:
         "created_by": record.get("created_by") or "user",
         "created_at": record.get("created_at"),
         "secret_references": secret_references(record),
+        "scope": record.get("scope", "system"),
+        "bot_id": record.get("bot_id"),
     }
 
 
@@ -261,7 +263,113 @@ class McpStore:
         return next(s for s in servers if s["id"] == server_id)
 
 
+class BotMcpStore:
+    """A bot's own servers, kept on its record (`mcp_servers`): they run inside
+    the bot's computer and are offered to that bot only."""
+
+    scope = "bot"
+    MAX = 8
+
+    def __init__(self, bot_id: str, storage: Optional[StorageService] = None):
+        self.bot_id = bot_id
+        self._storage = storage
+
+    @property
+    def storage(self) -> StorageService:
+        return self._storage or current_storage()
+
+    def _bots(self) -> List[Dict[str, Any]]:
+        return self.storage.get_bots()
+
+    def _bot(self, bots: List[Dict[str, Any]]) -> Dict[str, Any]:
+        for bot in bots:
+            if bot.get("id") == self.bot_id:
+                return bot
+        raise McpError("There is no such bot.")
+
+    def list(self) -> List[Dict[str, Any]]:
+        try:
+            raw = self._bot(self._bots()).get("mcp_servers") or []
+        except McpError:
+            return []
+        servers = []
+        for item in raw if isinstance(raw, list) else []:
+            if isinstance(item, dict) and _ID.fullmatch(str(item.get("id") or "")):
+                servers.append({**item, "scope": "bot", "bot_id": self.bot_id, "transport": "computer"})
+        return servers
+
+    def get(self, server_id: str) -> Dict[str, Any]:
+        for item in self.list():
+            if item["id"] == server_id:
+                return item
+        raise McpError("There is no MCP server with that id.")
+
+    def _save(self, servers: List[Dict[str, Any]]) -> None:
+        bots = self._bots()
+        bot = self._bot(bots)
+        bot["mcp_servers"] = [{k: v for k, v in s.items() if k not in ("scope", "bot_id")} for s in servers]
+        self.storage.save_bots(bots)
+
+    def add(self, data: Any, *, created_by: str = "user") -> Dict[str, Any]:
+        servers = self.list()
+        if len(servers) >= self.MAX:
+            raise McpError(f"At most {self.MAX} MCP servers per bot.")
+        record = clean_server({**(data if isinstance(data, dict) else {}), "transport": "computer", "created_by": created_by})
+        if any(s["name"].lower() == record["name"].lower() for s in servers):
+            raise McpError(f"A server named {record['name']} already exists on this bot.")
+        servers.append(record)
+        self._save(servers)
+        return {**record, "scope": "bot", "bot_id": self.bot_id}
+
+    def update(self, server_id: str, changes: Any) -> Dict[str, Any]:
+        servers = self.list()
+        for index, item in enumerate(servers):
+            if item["id"] == server_id:
+                record = clean_server({**(changes if isinstance(changes, dict) else {}), "transport": "computer"}, existing={k: v for k, v in item.items() if k not in ("scope", "bot_id")})
+                servers[index] = record
+                self._save(servers)
+                return {**record, "scope": "bot", "bot_id": self.bot_id}
+        raise McpError("There is no MCP server with that id.")
+
+    def remove(self, server_id: str) -> Dict[str, Any]:
+        servers = self.list()
+        kept = [s for s in servers if s["id"] != server_id]
+        if len(kept) == len(servers):
+            raise McpError("There is no MCP server with that id.")
+        self._save(kept)
+        return next(s for s in servers if s["id"] == server_id)
+
+
 # ---- connections ------------------------------------------------------------
+
+
+def _computer_running(record: Dict[str, Any]) -> bool:
+    try:
+        from app.services.computer_provider import computer_provider
+
+        return computer_provider.describe(str(record.get("bot_id") or "")).state == "running"
+    except Exception:
+        return False
+
+
+async def computer_endpoint(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Make sure the bot's computer runs and the server runs in it; the endpoint to talk to."""
+    from app.services.computer_provider import ComputerProviderError, computer_provider
+
+    bot_id = str(record.get("bot_id") or "")
+    if not bot_id:
+        raise McpError("A computer server needs the bot it belongs to.")
+    try:
+        status = computer_provider.get_or_create(bot_id)
+        if status.state != "running":
+            status = await computer_provider.start(status.computer_id)
+        await computer_provider.mcp_start(status.computer_id, {"id": record["id"], "command": record.get("command"), "args": record.get("args") or [], "env": record.get("env") or {}})
+        endpoint = computer_provider.mcp_endpoint(status.computer_id, record["id"])
+    except ComputerProviderError as exc:
+        raise McpError(f"The bot's computer could not run the server: {exc}") from exc
+    if not endpoint:
+        raise McpError("The bot's computer is not running.")
+    return endpoint
 
 
 @dataclass
@@ -359,6 +467,10 @@ class McpConnection:
                     except Exception as exc:  # One failed call must not end the session.
                         if not request.future.done():
                             request.future.set_exception(McpError(str(exc) or exc.__class__.__name__))
+                        if self.record.get("transport") == "computer":
+                            # The computer restarted or the server died: the
+                            # next turn starts a fresh session (and server).
+                            raise
         except asyncio.CancelledError:
             raise
         except BaseException as exc:  # anyio raises groups; keep the first message.
@@ -394,9 +506,16 @@ class McpConnection:
             import httpx
             from mcp.client.streamable_http import streamable_http_client
 
-            headers = resolve_values(record.get("headers") or {}, self.secrets)
+            if record["transport"] == "computer":
+                # Started (or already running) inside the bot's computer; its
+                # $NAME values resolve there, from the computer's environment.
+                endpoint = await computer_endpoint(record)
+                url, headers = endpoint["url"], dict(endpoint.get("headers") or {})
+            else:
+                url = record["url"]
+                headers = resolve_values(record.get("headers") or {}, self.secrets)
             async with httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(CALL_TIMEOUT, connect=CONNECT_TIMEOUT)) as client:
-                async with streamable_http_client(record["url"], http_client=client) as streams:
+                async with streamable_http_client(url, http_client=client) as streams:
                     async with ClientSession(streams[0], streams[1]) as session:
                         yield session
 
@@ -483,21 +602,45 @@ class McpManager:
         except Exception:
             return {}
 
-    def records(self) -> List[Dict[str, Any]]:
-        """System servers plus the current account's own."""
-        return self.store.list() + self.user_store.list()
+    def bot_store(self, bot_id: str) -> BotMcpStore:
+        return BotMcpStore(bot_id, storage=self.store._storage)
 
-    def find(self, server_id: str) -> Dict[str, Any]:
-        for record in self.records():
+    def records(self, bot_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """System servers, the current account's own, and (given a bot) that bot's."""
+        found = self.store.list() + self.user_store.list()
+        if bot_id:
+            found += self.bot_store(bot_id).list()
+        return found
+
+    def _all_bot_records(self) -> List[Dict[str, Any]]:
+        found: List[Dict[str, Any]] = []
+        try:
+            bots = self.user_store.storage.get_bots()
+        except Exception:
+            return found
+        for bot in bots:
+            if bot.get("mcp_servers"):
+                found += self.bot_store(str(bot.get("id"))).list()
+        return found
+
+    def find(self, server_id: str, bot_id: Optional[str] = None) -> Dict[str, Any]:
+        for record in self.records(bot_id):
             if record["id"] == server_id:
                 return record
+        if bot_id is None:
+            # A bot's server called by its tools: look across the account's bots.
+            for record in self._all_bot_records():
+                if record["id"] == server_id:
+                    return record
         raise McpError("There is no MCP server with that id.")
 
-    def store_for(self, record: Dict[str, Any]) -> McpStore:
+    def store_for(self, record: Dict[str, Any]):
+        if record.get("scope") == "bot":
+            return self.bot_store(str(record.get("bot_id") or ""))
         return self.user_store if record.get("scope") == "user" else self.store
 
-    def connection(self, server_id: str) -> McpConnection:
-        record = self.find(server_id)
+    def connection(self, server_id: str, bot_id: Optional[str] = None) -> McpConnection:
+        record = self.find(server_id, bot_id)
         current = self._connections.get(server_id)
         if current is None or current.record != record:
             if current is not None:
@@ -548,17 +691,21 @@ class McpManager:
             }
         return out
 
-    def cached_tools(self) -> List[Any]:
+    def cached_tools(self, bot_id: Optional[str] = None) -> List[Any]:
         """(record, tools) for every enabled server the current account may use
-        (system plus its own) that is connected; nothing blocks here."""
+        (system, its own, and the bot's) that is connected; nothing blocks here."""
         found = []
-        for record in self.records():
+        for record in self.records(bot_id):
             if not record.get("enabled", True):
                 continue
             connection = self._connections.get(record["id"])
-            if connection is None or connection.record != record:
+            if connection is None or connection.record != record or (
+                record.get("transport") == "computer" and connection.status in ("error", "stopped") and _computer_running(record)
+            ):
+                # A bot's server that died with its computer comes back once
+                # the computer runs again.
                 try:
-                    connection = self.connection(record["id"])
+                    connection = self.connection(record["id"], bot_id)
                     connection.start()
                 except Exception as exc:  # No running loop, or a bad record.
                     logger.debug("MCP server %s not started: %s", record.get("name"), exc)

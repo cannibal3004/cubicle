@@ -363,7 +363,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         # catalog cannot be fetched, fall back to the two built-in GitHub tools.
         connector_specs = await connector_tool_specs(composio_service)
         # MCP servers the user runs join the same family as connected apps.
-        connector_specs = connector_specs + mcp_tool_specs()
+        connector_specs = connector_specs + mcp_tool_specs(bot_id=thread_id)
         tool_specs = available_tools(
             computer=settings.COMPUTER_PROVIDER == "docker",
             github=bool(composio_service.get_api_key()) and not connector_specs,
