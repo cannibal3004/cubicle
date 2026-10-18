@@ -128,7 +128,8 @@ class Settings:
     DECIDER_URL: str = os.getenv("DECIDER_URL", "").strip().rstrip("/")
     DECIDER_THRESHOLD: float = min(0.99, max(0.01, float(os.getenv("DECIDER_THRESHOLD", "0.2"))))
     DECIDER_TIMEOUT_SECONDS: float = float(os.getenv("DECIDER_TIMEOUT_SECONDS", "15"))
-    AUTH_SESSION_MAX_AGE: int = int(os.getenv("AUTH_SESSION_MAX_AGE", "86400"))
+    # Browser sessions are server-side records; this is their lifetime.
+    AUTH_SESSION_MAX_AGE: int = int(os.getenv("AUTH_SESSION_MAX_AGE", str(30 * 86400)))
     AUTH_COOKIE_SECURE: bool = os.getenv("AUTH_COOKIE_SECURE", "0").lower() in {"1", "true", "yes"}
     COMPUTER_PROVIDER: str = os.getenv("COMPUTER_PROVIDER", "fake").strip().lower()
     COMPUTER_DOCKER_IMAGE: str = os.getenv(

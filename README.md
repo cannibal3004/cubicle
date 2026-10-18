@@ -110,7 +110,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 You can also enter the provider key from **App Settings → Connections** after the UI loads. The environment variable is the server-side fallback.
 
-The local server creates a mode-0600 session token in `DATA_DIR` and the browser establishes an HttpOnly session automatically when connecting from loopback. For a deployment accessed from other machines, set `APP_AUTH_TOKEN` on the server; the client then shows a sign-in screen that exchanges the token for an HttpOnly session cookie. The token is never embedded in the client bundle. See [Run the whole stack with Docker Compose](#run-the-whole-stack-with-docker-compose).
+On first start the UI shows a setup page that creates the owner's account (username and password); after that it shows a sign-in page. Sessions are server-side records behind an HttpOnly cookie, so signing out, changing the password, or "sign out other devices" revokes them. Each account can switch on two-factor authentication (TOTP with any authenticator app, with recovery codes) in App Settings → Account, and can create API tokens there for scripts, sent as `Authorization: Bearer <token>`. Repeated failed sign-ins lock the username for a few minutes. If you are locked out of the account itself, `python -m app.cli` on the server (inside the api container: `docker compose exec -T api python -m app.cli ...`) can set a password, switch off two-factor, or mint a token. See [Run the whole stack with Docker Compose](#run-the-whole-stack-with-docker-compose).
 
 ### Optional Docker computer runtime
 
@@ -142,7 +142,7 @@ The compose file runs the API, the client, and a Caddy reverse proxy so the whol
 
 ```bash
 cp .env.example .env
-# edit .env: set APP_AUTH_TOKEN (openssl rand -hex 32) and SITE_ADDRESS
+# edit .env: set SITE_ADDRESS
 docker compose up --build -d
 ```
 
@@ -221,7 +221,7 @@ The server reads these variables from the environment:
 | `DEFAULT_MODEL` | `x-ai/grok-4.5` (`grok-4-5` for MUAPI) | Initial model used for new settings and bots |
 | `DATA_DIR` | per-user hidden app directory | SQLite database, migration copies, and local key location |
 | `APP_ENCRYPTION_KEY` | generated mode-0600 key in `DATA_DIR` | Optional Fernet key for encrypted provider credentials |
-| `APP_AUTH_TOKEN` | generated mode-0600 token in `DATA_DIR` | Access token for the sign-in screen and bearer auth; disables automatic loopback sessions when set |
+| `AUTH_SESSION_MAX_AGE` | `2592000` | Lifetime of a browser session in seconds (30 days) |
 | `AUTH_SESSION_MAX_AGE` | `86400` | Session-cookie lifetime in seconds |
 | `AUTH_COOKIE_SECURE` | `0` | Set to `1` when serving over HTTPS |
 | `CORS_ORIGINS` | localhost and loopback client origins | Comma-separated browser origins allowed by the API |
@@ -412,7 +412,11 @@ All routes are prefixed with `/api/v1`.
 | GET | `/health` | Check server status and default model |
 | GET | `/auth/status` | Report authentication state without exposing credentials |
 | GET | `/auth/session` | Establish a local or bearer-backed browser session |
-| POST | `/auth/login` | Exchange a configured bearer token for an HttpOnly session |
+| POST | `/auth/setup` | First run only: create the owner's account and sign in |
+| POST | `/auth/login` | Username, password and (when enabled) an authenticator or recovery code; sets the session cookie |
+| GET | `/auth/me` | The signed-in account: two-factor state, sessions, API tokens |
+| POST | `/auth/password`, `/auth/totp/start`, `/auth/totp/confirm`, `/auth/totp/disable`, `/auth/sessions/sign-out-others` | Account self-service |
+| GET, POST, DELETE | `/auth/tokens`, `/auth/tokens/{id}` | API tokens for scripts (shown once) |
 | POST | `/auth/logout` | Clear the current browser session |
 | GET, POST | `/bots` | List or create bot personas |
 | PUT, DELETE | `/bots/{bot_id}` | Update a bot (including `archived`), or delete it with its messages, running turn, and computer |
@@ -460,8 +464,7 @@ On first start, the server creates a SQLite database under the per-user data dir
 
 For local development:
 
-- API routes require authentication. Loopback browser clients receive a session automatically; direct API clients can read `.auth-token` from `DATA_DIR` and send `Authorization: Bearer <token>`.
-- For non-loopback access, set `APP_AUTH_TOKEN` explicitly and sign in through the UI (or call `/auth/login`) to obtain the session cookie. Do not expose the token through logs or source control.
+- API routes require a signed-in session or an API token (`Authorization: Bearer <token>`, created in App Settings → Account or with `python -m app.cli create-token`). Passwords are stored as argon2 hashes; TOTP secrets and recovery codes are encrypted with the app's secret key.
 - Provider credentials are encrypted at rest with a mode-0600 Fernet key in `DATA_DIR`. Set `APP_ENCRYPTION_KEY` when the key must be supplied by deployment secrets or shared across restarts and hosts.
 - Settings responses never return provider credentials. Enter a new value to replace a stored key, or leave it blank to keep the current one.
 - Back up the SQLite database and encryption key together. If the key is lost, encrypted credentials must be entered again.
@@ -516,7 +519,7 @@ curl http://127.0.0.1:8000/api/v1/health
 
 If the server runs on another host or port, set `NEXT_PUBLIC_API_URL` before starting the client.
 
-If protected API calls return `401`, confirm the browser origin is listed in `CORS_ORIGINS`. For non-loopback deployments the UI shows the sign-in screen; enter the `APP_AUTH_TOKEN` value. Behind the compose proxy both the page and the API share one origin, so CORS does not apply.
+If protected API calls return `401`, confirm the browser origin is listed in `CORS_ORIGINS`. The UI shows the sign-in page (or the setup page on a fresh install). Behind the compose proxy both the page and the API share one origin, so CORS does not apply.
 
 ### The Docker computer stays unavailable
 

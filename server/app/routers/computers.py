@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import websockets
 
-from app.services.auth_service import SESSION_COOKIE, auth_service
+from app.services.auth_service import auth_service
 
 from app.services.action_gateway import (
     ActionGatewayError,
@@ -195,11 +195,7 @@ async def set_computer_control(bot_id: str, request: ControlRequest):
 
 def websocket_is_authenticated(websocket: WebSocket) -> bool:
     """The HTTP auth middleware does not see WebSocket upgrades, so check here."""
-    authorization = websocket.headers.get("authorization", "")
-    scheme, _, bearer = authorization.partition(" ")
-    if scheme.lower() == "bearer" and auth_service.authenticate_token(bearer.strip()):
-        return True
-    return auth_service.authenticate_token(websocket.cookies.get(SESSION_COOKIE))
+    return auth_service.authenticate_websocket(websocket.headers, websocket.cookies) is not None
 
 
 @router.websocket("/{bot_id}/vnc")

@@ -18,7 +18,7 @@ import {
   updateBot,
   deleteBot,
 } from '../lib/api';
-import { establishSession, setAuthFailureHandler, fetchTurnsOverview } from '../lib/api';
+import { establishSession, fetchAuthStatus, setAuthFailureHandler, fetchTurnsOverview } from '../lib/api';
 import LoginScreen from './LoginScreen';
 
 export default function Dashboard() {
@@ -49,13 +49,18 @@ export default function Dashboard() {
     return 'You';
   });
 
-  // Session check. On loopback this succeeds silently; elsewhere the login
-  // screen collects the access token.
+  // Session check: a valid cookie goes straight in; otherwise the sign-in
+  // page, or the setup page when no account exists yet.
+  const toSignIn = () => {
+    fetchAuthStatus()
+      .then((status) => setAuthState(status.setup_required ? 'setup' : 'login'))
+      .catch(() => setAuthState('login'));
+  };
   useEffect(() => {
-    setAuthFailureHandler(() => setAuthState('login'));
+    setAuthFailureHandler(toSignIn);
     establishSession()
       .then(() => setAuthState('ready'))
-      .catch(() => setAuthState('login'));
+      .catch(toSignIn);
     return () => setAuthFailureHandler(null);
   }, []);
 
@@ -213,8 +218,8 @@ export default function Dashboard() {
     setBotEditor(null);
   };
 
-  if (authState === 'login') {
-    return <LoginScreen onAuthenticated={() => setAuthState('ready')} />;
+  if (authState === 'login' || authState === 'setup') {
+    return <LoginScreen setupRequired={authState === 'setup'} onAuthenticated={() => setAuthState('ready')} />;
   }
 
   if (authState === 'checking') {

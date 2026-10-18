@@ -1,81 +1,73 @@
-"""Authentication primitives for the single-owner local deployment."""
+"""Who is making a request: a session cookie or a bearer API token.
 
-import ipaddress
-import os
-import secrets
-from pathlib import Path
-from typing import Dict, Optional
+Accounts, sessions and tokens live in the account store; this layer turns a
+request (or a WebSocket's headers and cookies) into a user and manages the
+session cookie.
+"""
+
+from typing import Any, Dict, Mapping, Optional
 
 from fastapi import Request, Response
 
 from app.config import settings
-
-
-LOCAL_USER_ID = "local-user"
-LOCAL_USERNAME = "local"
-SESSION_COOKIE = "cubicle_session"
+from app.services.accounts import AccountError, AccountStore
+from app.services.identity import LOCAL_USER_ID, SESSION_COOKIE  # noqa: F401 - re-exported
+from app.services.storage_service import storage_service
 
 
 class AuthService:
-    """Validate a configured bearer token or a mode-0600 local token file.
+    def __init__(self, accounts: Optional[AccountStore] = None):
+        self.accounts = accounts or AccountStore(storage_service.database, storage_service.secret_store)
 
-    When no environment token is supplied, a local token is generated once and
-    loopback requests may exchange it for an HttpOnly session cookie. A
-    deployment exposed beyond the local machine should set APP_AUTH_TOKEN and
-    provide that token through a secure deployment or client integration.
-    """
+    @staticmethod
+    def _public(user: Dict[str, Any]) -> Dict[str, Any]:
+        return {"id": user["id"], "username": user["username"], "role": user["role"]}
 
-    def __init__(self, data_dir: Optional[Path] = None):
-        self.data_dir = (data_dir or settings.DATA_DIR).expanduser().resolve()
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.token_path = self.data_dir / ".auth-token"
-        self.configured_token = os.getenv("APP_AUTH_TOKEN", "").strip()
-        self.token = self.configured_token or self._load_or_create_token()
+    def authenticate_credentials(self, authorization: str, session_cookie: Optional[str]) -> Optional[Dict[str, Any]]:
+        """The user behind a bearer API token or a session cookie, as the
+        request carries it; None when neither is valid."""
+        scheme, _, bearer = (authorization or "").partition(" ")
+        if scheme.lower() == "bearer" and bearer.strip():
+            user = self.accounts.token_user(bearer.strip())
+            if user:
+                return self._public(user)
+        user = self.accounts.session_user(session_cookie)
+        return self._public(user) if user else None
 
-    @property
-    def user(self) -> Dict[str, str]:
-        return {"id": LOCAL_USER_ID, "username": LOCAL_USERNAME, "role": "owner"}
+    def authenticate_request(self, request: Request) -> Optional[Dict[str, Any]]:
+        return self.authenticate_credentials(request.headers.get("authorization", ""), request.cookies.get(SESSION_COOKIE))
 
-    def _load_or_create_token(self) -> str:
-        if self.token_path.exists():
-            existing = self.token_path.read_text(encoding="utf-8").strip()
-            if existing:
-                os.chmod(self.token_path, 0o600)
-                return existing
+    def authenticate_websocket(self, headers: Mapping[str, str], cookies: Mapping[str, str]) -> Optional[Dict[str, Any]]:
+        return self.authenticate_credentials(headers.get("authorization", ""), cookies.get(SESSION_COOKIE))
 
-        token = secrets.token_urlsafe(32)
-        self.token_path.write_text(token + "\n", encoding="utf-8")
-        os.chmod(self.token_path, 0o600)
-        return token
+    def setup_required(self) -> bool:
+        return self.accounts.setup_required()
 
-    def authenticate_token(self, token: Optional[str]) -> bool:
-        return bool(token) and secrets.compare_digest(token, self.token)
+    def login(self, username: str, password: str, code: Optional[str], request: Request) -> Dict[str, Any]:
+        """Check the credentials and open a session; raises AccountError with
+        a code (invalid, locked, totp_required, totp_invalid, disabled)."""
+        user = self.accounts.verify_login(username, password, code)
+        return self._open_session(user, request)
 
-    def authenticate_request(self, request: Request) -> Optional[Dict[str, str]]:
-        authorization = request.headers.get("authorization", "")
-        scheme, _, bearer = authorization.partition(" ")
-        if scheme.lower() == "bearer" and self.authenticate_token(bearer.strip()):
-            return self.user
+    def complete_setup(self, username: str, password: str, request: Request) -> Dict[str, Any]:
+        user = self.accounts.complete_setup(username, password)
+        return self._open_session(user, request)
 
-        if self.authenticate_token(request.cookies.get(SESSION_COOKIE)):
-            return self.user
-        return None
+    def _open_session(self, user: Dict[str, Any], request: Request) -> Dict[str, Any]:
+        session_id = self.accounts.create_session(
+            user["id"],
+            user_agent=request.headers.get("user-agent", ""),
+            address=request.client.host if request.client else "",
+        )
+        return {"user": self._public(user), "session_id": session_id}
 
-    def can_bootstrap(self, request: Request) -> bool:
-        if self.configured_token:
-            return False
-        host = request.client.host if request.client else ""
-        if host in {"localhost", "localhost.localdomain"}:
-            return True
-        try:
-            return ipaddress.ip_address(host).is_loopback
-        except ValueError:
-            return False
+    def logout(self, request: Request) -> None:
+        self.accounts.delete_session(request.cookies.get(SESSION_COOKIE))
 
-    def set_session_cookie(self, response: Response) -> None:
+    def set_session_cookie(self, response: Response, session_id: str) -> None:
         response.set_cookie(
             SESSION_COOKIE,
-            self.token,
+            session_id,
             max_age=settings.AUTH_SESSION_MAX_AGE,
             httponly=True,
             secure=settings.AUTH_COOKIE_SECURE,
@@ -88,3 +80,5 @@ class AuthService:
 
 
 auth_service = AuthService()
+
+__all__ = ["AccountError", "AuthService", "auth_service", "LOCAL_USER_ID", "SESSION_COOKIE"]

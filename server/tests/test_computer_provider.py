@@ -226,13 +226,48 @@ class ComputerGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.provider.get_or_create("bot-pkg").to_dict()["packages"], ["ffmpeg", "jq"])
 
 
+import contextlib
+import tempfile
+from pathlib import Path
+from unittest import mock
+
+from app.services.accounts import AccountStore
+from app.services.auth_service import AuthService
+from app.services.database import Database
+from app.services.secret_store import SecretStore
+from app.routers import auth as auth_router
+try:
+    from app import main as app_main
+except ModuleNotFoundError:  # pragma: no cover
+    app_main = None
+
+
+@contextlib.contextmanager
+def _test_accounts():
+    """A throwaway account store behind the app's auth, so the route tests
+    can create an owner and sign in without touching real data."""
+    temp = tempfile.TemporaryDirectory()
+    root = Path(temp.name)
+    service = AuthService(AccountStore(Database(root / "auth.sqlite3"), SecretStore(root)))
+    with mock.patch.object(app_main, "auth_service", service), mock.patch.object(auth_router, "auth_service", service):
+        yield service
+    try:
+        temp.cleanup()
+    except PermissionError:
+        pass
+
+
+SETUP = {"username": "tester", "password": "correct horse battery"}
+
+
 class ComputerRouterTests(unittest.IsolatedAsyncioTestCase):
     @unittest.skipIf(app is None, "FastAPI dependencies are not installed")
     async def test_authenticated_lifecycle_screen_and_approval_routes(self):
         bot_id = storage_service.get_bots()[0]["id"]
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 43124))
-        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
-            session = await client.get("/api/v1/auth/session")
+        with _test_accounts():
+          async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+            session = await client.post("/api/v1/auth/setup", json=SETUP)
             self.assertEqual(session.status_code, 200)
 
             initial = await client.get(f"/api/v1/computers/{bot_id}")
@@ -276,8 +311,9 @@ class ComputerRouterTests(unittest.IsolatedAsyncioTestCase):
     async def test_bad_package_names_are_refused_before_an_approval_is_opened(self):
         bot_id = storage_service.get_bots()[0]["id"]
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 43125))
-        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
-            await client.get("/api/v1/auth/session")
+        with _test_accounts():
+          async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+            await client.post("/api/v1/auth/setup", json=SETUP)
             before = len(action_gateway._pending)
             for bad in ({"packages": ["ffmpeg; rm -rf /"]}, {"packages": ["--reinstall"]}, {"packages": []}, {}):
                 refused = await client.post(

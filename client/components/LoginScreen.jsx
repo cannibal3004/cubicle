@@ -1,33 +1,82 @@
 'use client';
 
 import React, { useState } from 'react';
-import { FiLock, FiEye, FiEyeOff, FiArrowRight } from 'react-icons/fi';
-import { loginWithToken } from '../lib/api';
+import { FiLock, FiEye, FiEyeOff, FiArrowRight, FiUserPlus, FiShield } from 'react-icons/fi';
+import { loginWithPassword, setupAccount } from '../lib/api';
 
-// Shown when the API requires a token and no session cookie is present. This
-// is the case for any deployment reached from another machine; on loopback
-// without APP_AUTH_TOKEN the session is established automatically instead.
-export default function LoginScreen({ onAuthenticated }) {
-  const [token, setToken] = useState('');
-  const [showToken, setShowToken] = useState(false);
+const inputClass =
+  'w-full bg-[#222226] border border-[#2e2e34] rounded-xl px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-400 transition';
+
+function PasswordField({ value, onChange, placeholder, autoComplete, autoFocus }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="relative">
+      <input
+        suppressHydrationWarning={true}
+        type={show ? 'text' : 'password'}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        autoFocus={autoFocus}
+        autoComplete={autoComplete}
+        placeholder={placeholder}
+        className={`${inputClass} pr-9`}
+      />
+      <button
+        suppressHydrationWarning={true}
+        type="button"
+        onClick={() => setShow(!show)}
+        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white transition text-xs"
+        title={show ? 'Hide' : 'Show'}
+      >
+        {show ? <FiEyeOff /> : <FiEye />}
+      </button>
+    </div>
+  );
+}
+
+// The sign-in page, or on a fresh install the setup page that creates the
+// owner's account. With two-factor on, the code is asked for after the
+// password is accepted.
+export default function LoginScreen({ setupRequired = false, onAuthenticated }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [code, setCode] = useState('');
+  const [needsCode, setNeedsCode] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!token.trim() || busy) return;
-    setBusy(true);
+    if (busy) return;
     setError('');
+    if (setupRequired && password !== confirm) {
+      setError('The passwords do not match.');
+      return;
+    }
+    setBusy(true);
     try {
-      await loginWithToken(token.trim());
-      setToken('');
+      if (setupRequired) {
+        await setupAccount(username.trim(), password);
+      } else {
+        await loginWithPassword(username.trim(), password, needsCode ? code.trim() : null);
+      }
+      setPassword('');
+      setConfirm('');
+      setCode('');
       if (onAuthenticated) onAuthenticated();
     } catch (err) {
-      setError(err?.message || 'Sign in failed.');
+      if (err?.reason === 'totp_required') {
+        setNeedsCode(true);
+      } else {
+        setError(err?.message || 'Sign in failed.');
+      }
     } finally {
       setBusy(false);
     }
   };
+
+  const canSubmit = username.trim() && password && (!setupRequired || confirm) && (!needsCode || code.trim());
 
   return (
     <div className="h-screen w-screen flex items-center justify-center bg-[#09090b] text-zinc-100 font-sans select-none p-4">
@@ -37,42 +86,72 @@ export default function LoginScreen({ onAuthenticated }) {
       >
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-[#18181b] border border-[#27272a] text-amber-400 flex items-center justify-center text-lg">
-            <FiLock />
+            {setupRequired ? <FiUserPlus /> : needsCode ? <FiShield /> : <FiLock />}
           </div>
           <div>
             <h1 className="text-sm font-bold tracking-wide">Cubicle</h1>
-            <p className="text-xs text-zinc-400 mt-0.5">Enter the access token for this server.</p>
+            <p className="text-xs text-zinc-400 mt-0.5">
+              {setupRequired
+                ? 'Create the owner account for this server.'
+                : needsCode
+                  ? 'Enter the code from your authenticator app.'
+                  : 'Sign in to continue.'}
+            </p>
           </div>
         </div>
 
-        <div className="space-y-1.5">
-          <label className="text-xs font-semibold text-zinc-300">Access token</label>
-          <div className="relative">
+        {!needsCode && (
+          <>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-zinc-300">Username</label>
+              <input
+                suppressHydrationWarning={true}
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoFocus
+                autoComplete="username"
+                placeholder={setupRequired ? 'Pick a username' : 'Username'}
+                className={inputClass}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-zinc-300">Password</label>
+              <PasswordField
+                value={password}
+                onChange={setPassword}
+                autoComplete={setupRequired ? 'new-password' : 'current-password'}
+                placeholder={setupRequired ? 'At least 12 characters' : 'Password'}
+              />
+            </div>
+            {setupRequired && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-zinc-300">Confirm password</label>
+                <PasswordField value={confirm} onChange={setConfirm} autoComplete="new-password" placeholder="Type it again" />
+              </div>
+            )}
+          </>
+        )}
+
+        {needsCode && (
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-zinc-300">Authenticator code</label>
             <input
               suppressHydrationWarning={true}
-              type={showToken ? 'text' : 'password'}
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
               autoFocus
-              autoComplete="current-password"
-              placeholder="Paste the APP_AUTH_TOKEN value"
-              className="w-full bg-[#222226] border border-[#2e2e34] rounded-xl pl-3.5 pr-9 py-2.5 text-xs text-zinc-100 font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-400 transition"
+              placeholder="123456, or a recovery code"
+              className={`${inputClass} font-mono tracking-widest`}
             />
-            <button
-              suppressHydrationWarning={true}
-              type="button"
-              onClick={() => setShowToken(!showToken)}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white transition text-xs"
-              title={showToken ? 'Hide token' : 'Show token'}
-            >
-              {showToken ? <FiEyeOff /> : <FiEye />}
+            <button type="button" onClick={() => { setNeedsCode(false); setCode(''); }} className="text-[10px] text-zinc-500 hover:text-zinc-300 underline-offset-2 hover:underline">
+              Back
             </button>
           </div>
-          <p className="text-[10px] leading-relaxed text-zinc-500">
-            The token is set on the server as <span className="font-mono">APP_AUTH_TOKEN</span>. It is exchanged for an
-            HttpOnly session cookie and never stored in the page.
-          </p>
-        </div>
+        )}
 
         {error && (
           <p className="text-[11px] text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">{error}</p>
@@ -81,12 +160,18 @@ export default function LoginScreen({ onAuthenticated }) {
         <button
           suppressHydrationWarning={true}
           type="submit"
-          disabled={busy || !token.trim()}
+          disabled={busy || !canSubmit}
           className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-zinc-100 text-zinc-900 text-xs font-semibold hover:bg-white transition disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <span>{busy ? 'Signing in…' : 'Sign in'}</span>
+          <span>{busy ? 'Working…' : setupRequired ? 'Create account' : needsCode ? 'Verify' : 'Sign in'}</span>
           <FiArrowRight className="text-sm" />
         </button>
+
+        {setupRequired && (
+          <p className="text-[10px] leading-relaxed text-zinc-500">
+            Everything this server already holds belongs to this account. You can switch on two-factor authentication and create API tokens afterwards in App Settings → Account.
+          </p>
+        )}
       </form>
     </div>
   );

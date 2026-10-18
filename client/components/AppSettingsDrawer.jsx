@@ -21,6 +21,7 @@ import {
 import ModelPicker from "./ModelPicker";
 import SecretsSection from "./SecretsSection";
 import McpServersSection from "./McpServersSection";
+import AccountSection from "./AccountSection";
 
 const PROVIDERS = [
   {
@@ -288,14 +289,6 @@ export default function AppSettingsDrawer({
             />
           </div>
 
-          <button
-            suppressHydrationWarning={true}
-            type="button"
-            onClick={handleSignOut}
-            className="text-[11px] text-zinc-500 hover:text-zinc-200 transition underline-offset-2 hover:underline"
-          >
-            Sign out of this browser
-          </button>
         </div>
 
         {/* LLM Connection Card */}
@@ -600,6 +593,17 @@ export default function AppSettingsDrawer({
               Enables live connector catalog and OAuth links in Marketplace. Leave blank to keep the stored key.
             </p>
           </div>
+        </div>
+
+        {/* The signed-in account */}
+        <div className="bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm">
+          <div>
+            <h3 className="text-sm font-bold text-zinc-100">Account</h3>
+            <p className="text-[11px] text-zinc-500 mt-1">
+              Your password, two-factor authentication, API tokens for scripts, and the devices signed in as you.
+            </p>
+          </div>
+          <AccountSection onSignOut={handleSignOut} />
         </div>
 
         {/* Secrets for bot computers */}
