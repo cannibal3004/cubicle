@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from app.services import secrets_service
 from app.services.secrets_service import MAX_VALUE_CHARS, SecretError
-from app.services.storage_service import storage_service
+from app.services.storage_service import current_storage
 
 router = APIRouter(prefix="/api/v1", tags=["secrets"])
 
@@ -15,7 +15,7 @@ class SecretValue(BaseModel):
 
 
 def _ensure_bot(bot_id: str) -> None:
-    if not any(bot.get("id") == bot_id for bot in storage_service.get_bots()):
+    if not any(bot.get("id") == bot_id for bot in current_storage().get_bots()):
         raise HTTPException(status_code=404, detail="Bot not found")
 
 

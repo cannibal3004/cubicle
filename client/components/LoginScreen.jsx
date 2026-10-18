@@ -56,15 +56,16 @@ export default function LoginScreen({ setupRequired = false, onAuthenticated }) 
     }
     setBusy(true);
     try {
+      let session;
       if (setupRequired) {
-        await setupAccount(username.trim(), password);
+        session = await setupAccount(username.trim(), password);
       } else {
-        await loginWithPassword(username.trim(), password, needsCode ? code.trim() : null);
+        session = await loginWithPassword(username.trim(), password, needsCode ? code.trim() : null);
       }
       setPassword('');
       setConfirm('');
       setCode('');
-      if (onAuthenticated) onAuthenticated();
+      if (onAuthenticated) onAuthenticated(session);
     } catch (err) {
       if (err?.reason === 'totp_required') {
         setNeedsCode(true);

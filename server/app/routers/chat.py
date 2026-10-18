@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 import uuid
@@ -11,7 +12,8 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.schemas.contracts import TurnRequest, Message
-from app.services.storage_service import storage_service
+from app.services.identity import owner_context
+from app.services.storage_service import current_storage
 from app.services import llm_service
 from app.services.action_gateway import (
     ActionGatewayError,
@@ -126,11 +128,18 @@ def _model_accepts_images(model: str, llm_config) -> bool:
     return not (info is not None and info.supports_vision is False)
 
 
+def _ensure_thread(thread_id: str) -> None:
+    """Threads are bots; a bot that is not the caller's does not exist for them."""
+    if not any(bot.get("id") == thread_id for bot in current_storage().get_bots()):
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+
 @router.get("/history/{thread_id}", response_model=List[Message])
 async def get_history(thread_id: str):
+    _ensure_thread(thread_id)
     # Attachment text is for the model; the chat gets the card fields.
     messages = []
-    for message in storage_service.get_messages(thread_id=thread_id):
+    for message in current_storage().get_messages(thread_id=thread_id):
         if message.get("attachments"):
             message = {**message, "attachments": attachment_service.without_text(message["attachments"])}
         messages.append(message)
@@ -147,7 +156,7 @@ async def compact_now(thread_id: str):
     try:
         stored = await compact_thread(
             thread_id, reason="manual", model=setup["selected_model"], system_prompt=setup["compaction_prompt"],
-            config=setup["llm_config"], storage=storage_service, replay_tools=setup["llm_config"].provider != "muapi",
+            config=setup["llm_config"], storage=current_storage(), replay_tools=setup["llm_config"].provider != "muapi",
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Compaction failed: {exc}") from exc
@@ -162,12 +171,13 @@ async def clear_history(thread_id: str):
     current = turn_manager.current(thread_id)
     if current is not None and not current.finished:
         raise HTTPException(status_code=409, detail="A reply is still in progress; stop it first.")
-    deleted = storage_service.delete_messages(thread_id)
+    deleted = current_storage().delete_messages(thread_id)
     return {"status": "ok", "deleted": deleted}
 
 
 @router.post("/send")
 async def send_message(req: TurnRequest):
+    _ensure_thread(req.thread_id)
     # Store user message
     user_msg = {
         "id": f"msg-{uuid.uuid4().hex[:6]}",
@@ -192,7 +202,7 @@ async def send_message(req: TurnRequest):
             attached.append(await attachment_service.attach(shared, req.bot_id))
         user_msg["attachments"] = attached
 
-    storage_service.add_message(user_msg)
+    current_storage().add_message(user_msg)
     if user_msg.get("attachments"):
         user_msg = {**user_msg, "attachments": attachment_service.without_text(user_msg["attachments"])}
     return {"status": "ok", "message": user_msg}
@@ -323,9 +333,11 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
     turn only while the prefix does not change, so the date goes at the end
     and at day resolution, and nothing per-turn goes in here.
     """
-    history = storage_service.get_messages(thread_id=thread_id)
-    bots = storage_service.get_bots()
+    bots = current_storage().get_bots()
     current_bot = next((b for b in bots if b["id"] == thread_id), None)
+    if current_bot is None:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    history = current_storage().get_messages(thread_id=thread_id)
 
     raw_prompt = current_bot["system_prompt"] if current_bot else "You are a helpful AI assistant."
     today = datetime.now().strftime("%A, %B %d, %Y")
@@ -362,7 +374,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         tool_specs = filter_tools(
             tool_specs,
             current_bot.get("tool_settings") if current_bot else None,
-            storage_service.get_settings().get("disabled_toolkits") or [],
+            current_storage().get_settings().get("disabled_toolkits") or [],
         )
         # A bot whose computer has the shared folder at /shared uses it there.
         tool_specs = without_duplicate_routes(tool_specs)
@@ -449,7 +461,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             try:
                 stored = await compact_thread(
                     thread_id, reason="auto", model=selected_model, system_prompt=setup["compaction_prompt"],
-                    config=llm_config, storage=storage_service, replay_tools=replay_tools,
+                    config=llm_config, storage=current_storage(), replay_tools=replay_tools,
                 )
             except Exception as exc:  # the turn goes on with the full context; it may still fit
                 logger.warning("Compaction of %s failed: %s", thread_id, exc)
@@ -458,7 +470,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             if stored is None:
                 return False
             turn.emit({"type": "context.compacted", "botMsgId": bot_msg_id, "message": stored})
-            history = storage_service.get_messages(thread_id=thread_id)
+            history = current_storage().get_messages(thread_id=thread_id)
             formatted_history = build_history_messages(history, replay_tools=replay_tools)
             return True
 
@@ -746,7 +758,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             "item_type": "assistant_text",
             "raw_payload": raw_payload or None,
         }
-        storage_service.add_message(bot_msg)
+        current_storage().add_message(bot_msg)
         if stopped:
             turn.emit({"type": "turn.cancelled", "botMsgId": bot_msg_id})
             raise asyncio.CancelledError()
@@ -756,7 +768,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
 
 
 def _bot_id_for(thread_id: str) -> str:
-    bots = storage_service.get_bots()
+    bots = current_storage().get_bots()
     bot = next((b for b in bots if b["id"] == thread_id), None)
     return bot["id"] if bot else thread_id
 
@@ -766,28 +778,31 @@ def _bot_id_for(thread_id: str) -> str:
 
 @router.get("/turns")
 async def list_turns():
-    """Running turns and pending approvals across all bots (sidebar badges)."""
-    return {"turns": turn_manager.overview()}
+    """Running turns and pending approvals across the caller's bots (sidebar badges)."""
+    mine = {bot.get("id") for bot in current_storage().get_bots()}
+    return {"turns": [turn for turn in turn_manager.overview() if turn.get("thread_id") in mine]}
 
 
 @router.get("/turns/{thread_id}")
 async def turn_status(thread_id: str):
+    _ensure_thread(thread_id)
     turn = turn_manager.current(thread_id)
     return {"turn": turn.to_dict() if turn else None}
 
 
-async def start_scheduled_turn(bot_id: str, message: Dict[str, Any]) -> Turn:
-    """A schedule's run: store its prompt as the user's message and start the turn.
+async def start_scheduled_turn(bot_id: str, message: Dict[str, Any], owner_id: Optional[str] = None) -> Turn:
+    """A schedule's run: store its prompt as the user's message and start the turn, as its owner.
 
     Raises TurnBusyError while a reply is in progress, so the scheduler
     records a skip instead of posting a message nobody answers.
     """
-    current = turn_manager.current(bot_id)
-    if current is not None and not current.finished:
-        raise TurnBusyError(current)
-    storage_service.add_message(message)
-    runner, selected_model = await _build_turn_runner(bot_id, None)
-    return turn_manager.start(bot_id, _bot_id_for(bot_id), selected_model, runner)
+    with owner_context(owner_id) if owner_id else contextlib.nullcontext():
+        current = turn_manager.current(bot_id)
+        if current is not None and not current.finished:
+            raise TurnBusyError(current)
+        current_storage().add_message(message)
+        runner, selected_model = await _build_turn_runner(bot_id, None)
+        return turn_manager.start(bot_id, _bot_id_for(bot_id), selected_model, runner)
 
 
 @router.post("/turns/{thread_id}")
@@ -807,6 +822,7 @@ async def start_turn(thread_id: str, body: Optional[StartTurnRequest] = None):
 
 @router.post("/turns/{thread_id}/cancel")
 async def cancel_turn(thread_id: str):
+    _ensure_thread(thread_id)
     turn = turn_manager.cancel(thread_id)
     if turn is None:
         raise HTTPException(status_code=404, detail="No running turn for this thread")
@@ -826,6 +842,7 @@ async def stream_turn(
     on an automatic reconnect), then streams live until the turn finishes.
     Never starts a turn; a reconnecting client must not trigger a new reply.
     """
+    _ensure_thread(thread_id)
     record = turn_manager.get(turn) if turn else turn_manager.current(thread_id)
     last_event_id = request.headers.get("last-event-id") if request is not None and request.headers else None
     if last_event_id and str(last_event_id).isdigit():

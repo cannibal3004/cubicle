@@ -15,7 +15,8 @@ import httpx
 import time
 
 from app.config import settings
-from app.services.storage_service import StorageService, storage_service
+from app.services.identity import LOCAL_USER_ID, get_current_owner
+from app.services.storage_service import StorageService, current_storage
 
 
 BACKEND_URL = "https://backend.composio.dev/api/v3"
@@ -67,19 +68,43 @@ def extract_error_message(payload: Any, default: str) -> str:
 class ComposioService:
     def __init__(
         self,
-        storage: StorageService = storage_service,
+        storage: Optional[StorageService] = None,
         client_factory: Optional[ClientFactory] = None,
         user_id: Optional[str] = None,
         base_url: str = BACKEND_URL,
     ):
-        self.storage = storage
+        self._storage = storage
         self._client_factory = client_factory or _default_client_factory
-        self.user_id = user_id or DEFAULT_USER_ID
+        self._user_id = user_id
         self.base_url = base_url.rstrip("/")
         # Tool catalogs change rarely; connections change when the user acts.
         self._tools_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
-        self._connected_cache: Optional[Tuple[float, List[str]]] = None
+        self._connected_caches: Dict[str, Tuple[float, List[str]]] = {}
         self._allowed_cache: Dict[str, Tuple[float, Optional[List[str]]]] = {}
+
+    @property
+    def storage(self) -> StorageService:
+        return self._storage or current_storage()
+
+    @property
+    def user_id(self) -> str:
+        """The Composio user (entity) the current account's connections live under.
+        The first account keeps the id it has always had; others get their own."""
+        if self._user_id:
+            return self._user_id
+        owner = get_current_owner()
+        return DEFAULT_USER_ID if owner == LOCAL_USER_ID else f"cubicle-{owner}"
+
+    @property
+    def _connected_cache(self) -> Optional[Tuple[float, List[str]]]:
+        return self._connected_caches.get(self.user_id)
+
+    @_connected_cache.setter
+    def _connected_cache(self, value: Optional[Tuple[float, List[str]]]) -> None:
+        if value is None:
+            self._connected_caches.pop(self.user_id, None)
+        else:
+            self._connected_caches[self.user_id] = value
 
     def get_api_key(self) -> str:
         config = self.storage.get_settings()

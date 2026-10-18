@@ -115,6 +115,12 @@ export const createApiToken = (name) => accountJson('/auth/tokens', jsonBody({ n
 export const deleteApiToken = (id) => accountJson(`/auth/tokens/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const signOutOtherSessions = () => accountJson('/auth/sessions/sign-out-others', { method: 'POST' });
 
+// Admin: the accounts on this server.
+export const fetchAdminUsers = () => accountJson('/admin/users');
+export const createAdminUser = (username, password, role = 'member') => accountJson('/admin/users', jsonBody({ username, password, role }));
+export const updateAdminUser = (id, changes) =>
+  accountJson(`/admin/users/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+
 export async function logout() {
   try {
     await fetch(`${API_BASE_URL}/auth/logout`, { method: 'POST', credentials: 'include' });

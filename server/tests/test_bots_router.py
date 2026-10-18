@@ -11,6 +11,7 @@ from app.services.computer_provider import ComputerProviderError
 from app.services.llm_config import LLMConfig
 from app.services.storage_service import StorageService
 from app.services.turn_manager import TurnManager
+from app.services import storage_service as storage_module
 
 
 class FakeComputers:
@@ -33,7 +34,7 @@ class BotsRouterTests(unittest.TestCase):
         self.turns = TurnManager()
         config = LLMConfig(provider="openai_compatible", api_key="", base_url="http://x/v1", reasoning_effort="", default_model="local-default")
         self.patches = [
-            mock.patch.object(bots_router, "storage_service", self.storage),
+            mock.patch.object(storage_module, "storage_service", self.storage),
             mock.patch.object(bots_router, "computer_provider", self.computers),
             mock.patch.object(bots_router, "turn_manager", self.turns),
             mock.patch.object(bots_router.llm_service, "current_llm_config", return_value=config),

@@ -10,9 +10,11 @@ from app.services.muapi_service import MUAPI_MODELS, muapi_service
 from app.services.openai_compatible_service import openai_compatible_service
 from app.services.storage_service import storage_service
 
+# Model settings are app-wide; any owner's view carries them.
+
 
 def current_llm_config() -> LLMConfig:
-    return resolve_llm_config(storage_service.get_settings())
+    return resolve_llm_config(storage_service.get_app_settings())
 
 
 async def stream_chat_completion(

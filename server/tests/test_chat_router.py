@@ -1,3 +1,4 @@
+from fastapi import HTTPException
 import asyncio
 import json
 import tempfile
@@ -13,6 +14,7 @@ from app.services.action_gateway import ActionGateway
 from app.services.llm_config import LLMConfig
 from app.services.storage_service import StorageService
 from app.services.workspace_service import WorkspaceService
+from app.services import storage_service as storage_module
 
 
 class NoComposio:
@@ -127,7 +129,7 @@ class ChatStreamRouteTests(unittest.TestCase):
 
     def _patches(self, recorder, stream=None, gateway=None, config=None, manager=None):
         patches = [
-            mock.patch.object(chat_router, "storage_service", self.storage),
+            mock.patch.object(storage_module, "storage_service", self.storage),
             mock.patch.object(chat_router.llm_service, "current_llm_config", return_value=config or self.config),
             mock.patch.object(chat_router.llm_service, "stream_chat_completion", stream or _fake_stream(recorder)),
             mock.patch.object(chat_router, "composio_service", NoComposio()),
@@ -188,15 +190,17 @@ class ChatStreamRouteTests(unittest.TestCase):
         self.assertEqual(saved[-1]["raw_payload"], {"reasoning": "Considering the question."})
         self.assertNotIn("Considering", saved[-1]["text"])
 
-    def test_model_falls_back_to_bot_then_configured_default(self):
-        self.storage.add_message(
-            {"id": "m1", "thread_id": "no-such-bot", "bot_id": "no-such-bot", "sender": "user", "text": "hi"}
-        )
-        recorder, events = self._run_turn("no-such-bot")
-        self.assertEqual(recorder["model"], "default-model")
-        self.assertEqual(events[0]["model"], "default-model")
+    def test_unknown_threads_are_not_found_and_a_request_model_overrides_the_bots(self):
+        # A thread is one of the caller's bots; anything else does not exist for them.
+        with self.assertRaises(HTTPException) as ctx:
+            self._run_turn("no-such-bot")
+        self.assertEqual(ctx.exception.status_code, 404)
 
-        recorder, _ = self._run_turn("no-such-bot", model="override-model")
+        bot = self.storage.get_bots()[0]
+        self.storage.add_message({"id": "m1", "thread_id": bot["id"], "bot_id": bot["id"], "sender": "user", "text": "hi"})
+        recorder, events = self._run_turn(bot["id"])
+        self.assertEqual(recorder["model"], bot["model"])
+        recorder, _ = self._run_turn(bot["id"], model="override-model")
         self.assertEqual(recorder["model"], "override-model")
 
     def test_model_tool_call_runs_through_the_gateway_and_feeds_back(self):
@@ -446,7 +450,7 @@ class ChatStreamRouteTests(unittest.TestCase):
                  {"type": "turn.completed", "ok": True}],
             ],
         )
-        with mock.patch("app.services.bot_todo.storage_service", self.storage):
+        with mock.patch("app.services.storage_service.storage_service", self.storage):
             _, events = self._run_turn(bot["id"], stream=stream, gateway=gateway)
         self.assertEqual(next(e for e in events if e["type"] == "turn.limit")["reason"], "context")
         self.assertIn("still has 2 unfinished item(s)", recorder["rounds"][1]["system_prompt"])
@@ -520,7 +524,7 @@ class ChatStreamRouteTests(unittest.TestCase):
                 [{"type": "content.delta", "delta": "Noted the repo."}, {"type": "turn.completed", "ok": True}],
             ],
         )
-        with mock.patch("app.services.bot_memory.storage_service", self.storage):
+        with mock.patch("app.services.storage_service.storage_service", self.storage):
             _, events = self._run_turn(bot["id"], stream=stream, gateway=gateway)
         self.assertEqual(next(b for b in self.storage.get_bots() if b["id"] == bot["id"])["memory"], "Repo: ~/proj")
         # No approval was needed, and the result echoed the notes.
@@ -920,11 +924,15 @@ class ChatStreamRouteTests(unittest.TestCase):
         self.assertEqual(second[-1]["tool_call_id"], "c1")
         self.assertFalse(any(m.get("item_type") == "compaction" for m in self.storage.get_messages(thread)))
 
-    def test_streaming_an_unknown_thread_reports_no_turn(self):
-        with mock.patch.object(chat_router, "turn_manager", TurnManager()):
-            response = asyncio.run(chat_router.stream_turn("nope", _fake_request(), turn=None, after=0))
+    def test_streaming_reports_no_turn_for_an_idle_bot_and_404_for_a_stranger(self):
+        bot = self.storage.get_bots()[0]
+        with mock.patch.object(chat_router, "turn_manager", TurnManager()), mock.patch.object(storage_module, "storage_service", self.storage):
+            response = asyncio.run(chat_router.stream_turn(bot["id"], _fake_request(), turn=None, after=0))
             events = asyncio.run(_collect_sse(response))
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(chat_router.stream_turn("nope", _fake_request(), turn=None, after=0))
         self.assertEqual(events, [{"type": "turn.none"}])
+        self.assertEqual(ctx.exception.status_code, 404)
 
     def test_pending_approval_is_visible_in_turn_status(self):
         bot = self.storage.get_bots()[0]

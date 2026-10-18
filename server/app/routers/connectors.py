@@ -6,7 +6,7 @@ from typing import List, Optional
 from datetime import datetime, timezone
 from app.config import settings
 from app.services.composio_service import ConnectorServiceError, composio_service
-from app.services.storage_service import storage_service
+from app.services.storage_service import current_storage
 
 router = APIRouter(prefix="/api/v1/connectors", tags=["connectors"])
 
@@ -90,7 +90,7 @@ async def catalog(refresh: bool = False):
     import time
     global _toolkit_cache, _toolkit_cache_at
 
-    cfg = storage_service.get_settings()
+    cfg = current_storage().get_settings()
     composio_key = cfg.get("composio_api_key") or cfg.get("composio_key") or settings.COMPOSIO_API_KEY
 
     # Serve cache if fresh
@@ -150,7 +150,7 @@ async def catalog(refresh: bool = False):
 @router.get("")
 async def connection_status(services: str = ""):
     """Check connection status for a comma-separated list of slugs."""
-    cfg = storage_service.get_settings()
+    cfg = current_storage().get_settings()
     composio_key = cfg.get("composio_api_key") or cfg.get("composio_key") or settings.COMPOSIO_API_KEY
     slugs = [s.strip() for s in services.split(",") if s.strip()]
 
@@ -167,7 +167,7 @@ async def connection_status(services: str = ""):
 @router.post("/{slug}/authorize")
 async def authorize(slug: str):
     """Get OAuth URL to connect a service."""
-    cfg = storage_service.get_settings()
+    cfg = current_storage().get_settings()
     composio_key = cfg.get("composio_api_key") or cfg.get("composio_key") or settings.COMPOSIO_API_KEY
     if not composio_key:
         return JSONResponse({"error": "No Composio key configured"}, status_code=400)
@@ -176,14 +176,14 @@ async def authorize(slug: str):
         # The new connection shows up as tools once the OAuth dance finishes.
         composio_service.forget_connections()
         if link.get("connected"):
-            storage_service.add_audit_event({
+            current_storage().add_audit_event({
                 "event": "connector.connected",
                 "connector": slug,
                 "no_auth": True,
                 "created_at": _now(),
             })
             return {"url": None, "connected": True, "no_auth": True}
-        storage_service.add_audit_event({
+        current_storage().add_audit_event({
             "event": "connector.authorization_requested",
             "connector": slug,
             "connected_account_id": link.get("connected_account_id"),
@@ -199,14 +199,14 @@ async def authorize(slug: str):
 @router.delete("/{slug}")
 async def disconnect(slug: str):
     """Disconnect a service by removing all connected accounts."""
-    cfg = storage_service.get_settings()
+    cfg = current_storage().get_settings()
     composio_key = cfg.get("composio_api_key") or cfg.get("composio_key") or settings.COMPOSIO_API_KEY
     if not composio_key:
         return JSONResponse({"error": "No Composio key configured"}, status_code=400)
     try:
         removed = await composio_service.disconnect(slug, api_key=composio_key)
         composio_service.forget_connections()
-        storage_service.add_audit_event({
+        current_storage().add_audit_event({
             "event": "connector.disconnected",
             "connector": slug,
             "removed": removed,

@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.config import settings
 from app.services import llm_service
 from app.services.context_builder import COMPACTION_ITEM_TYPE, build_history_messages, is_compaction, live_messages
-from app.services.storage_service import StorageService, storage_service
+from app.services.storage_service import StorageService, current_storage
 
 logger = logging.getLogger(__name__)
 
@@ -155,11 +155,12 @@ async def compact_thread(
     model: str,
     system_prompt: str,
     config: Any = None,
-    storage: StorageService = storage_service,
+    storage: Optional[StorageService] = None,
     keep_recent_tokens: Optional[int] = None,
     replay_tools: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """Summarise the older part of a thread and store the summary. Returns the stored message, or None when there was nothing to compact."""
+    storage = storage or current_storage()
     history = storage.get_messages(thread_id=thread_id)
     older, recent = split_for_compaction(history, keep_recent_tokens, replay_tools=replay_tools)
     if not older:

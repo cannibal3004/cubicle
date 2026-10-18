@@ -27,6 +27,8 @@ export default function Dashboard() {
   const [catalogError, setCatalogError] = useState(null);
   // 'checking' -> 'ready' | 'login'. Any later 401 flips back to 'login'.
   const [authState, setAuthState] = useState('checking');
+  // The signed-in account (id, username, role), from the session check.
+  const [currentUser, setCurrentUser] = useState(null);
   const [activeBotId, setActiveBotId] = useState('');
   const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'computer' | 'marketplace' | 'audit'
   // Transcripts are cached per bot so a reply that is still streaming for
@@ -59,7 +61,10 @@ export default function Dashboard() {
   useEffect(() => {
     setAuthFailureHandler(toSignIn);
     establishSession()
-      .then(() => setAuthState('ready'))
+      .then((session) => {
+        setCurrentUser(session?.user || null);
+        setAuthState('ready');
+      })
       .catch(toSignIn);
     return () => setAuthFailureHandler(null);
   }, []);
@@ -219,7 +224,15 @@ export default function Dashboard() {
   };
 
   if (authState === 'login' || authState === 'setup') {
-    return <LoginScreen setupRequired={authState === 'setup'} onAuthenticated={() => setAuthState('ready')} />;
+    return (
+      <LoginScreen
+        setupRequired={authState === 'setup'}
+        onAuthenticated={(session) => {
+          setCurrentUser(session?.user || null);
+          setAuthState('ready');
+        }}
+      />
+    );
   }
 
   if (authState === 'checking') {
@@ -325,6 +338,7 @@ export default function Dashboard() {
 
       {/* Right Side App Settings Drawer Panel */}
       <AppSettingsDrawer
+        user={currentUser}
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         currentModel={defaultModel}

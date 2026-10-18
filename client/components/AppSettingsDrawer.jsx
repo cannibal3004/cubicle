@@ -22,6 +22,7 @@ import ModelPicker from "./ModelPicker";
 import SecretsSection from "./SecretsSection";
 import McpServersSection from "./McpServersSection";
 import AccountSection from "./AccountSection";
+import AdminUsersSection from "./AdminUsersSection";
 
 const PROVIDERS = [
   {
@@ -63,6 +64,7 @@ const REASONING_OPTIONS = [
 ];
 
 export default function AppSettingsDrawer({
+  user,
   isOpen,
   onClose,
   currentModel,
@@ -76,6 +78,9 @@ export default function AppSettingsDrawer({
 }) {
   const [userName, setUserName] = useState("");
   const [userEmail, setUserEmail] = useState("");
+  // Admins manage what is shared by everyone: the model server, the
+  // connector key, the decision server, system MCP servers, accounts.
+  const admin = ['owner', 'admin'].includes(user?.role);
 
   // LLM connection
   const [provider, setProvider] = useState("openai_compatible");
@@ -152,15 +157,19 @@ export default function AppSettingsDrawer({
   const persist = async (field) => {
     setSaveError("");
     try {
-      const saved = await saveSettings({
-        llm_provider: provider,
-        llm_base_url: baseUrl.trim(),
-        llm_api_key: apiKey,
-        llm_reasoning_effort: reasoningEffort,
-        composio_api_key: composioApiKey,
-        default_model: defaultModel,
-        theme: "dark",
-      });
+      const saved = await saveSettings(
+        admin
+          ? {
+              llm_provider: provider,
+              llm_base_url: baseUrl.trim(),
+              llm_api_key: apiKey,
+              llm_reasoning_effort: reasoningEffort,
+              composio_api_key: composioApiKey,
+              default_model: defaultModel,
+              theme: "dark",
+            }
+          : { theme: "dark" }
+      );
       setApiKey("");
       setComposioApiKey("");
       setApiKeyConfigured(Boolean(saved?.llm_api_key_configured));
@@ -188,7 +197,7 @@ export default function AppSettingsDrawer({
     try {
       await saveSettings({
         auto_approval: autoApproval,
-        decider_url: deciderUrl.trim(),
+        ...(admin ? { decider_url: deciderUrl.trim() } : {}),
         decider_threshold: Number(deciderThreshold),
       });
       triggerSavedNotice("gate");
@@ -291,8 +300,8 @@ export default function AppSettingsDrawer({
 
         </div>
 
-        {/* LLM Connection Card */}
-        <div className="bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm">
+        {/* LLM Connection Card (admins) */}
+        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm ${admin ? "" : "hidden"}`}>
           <div>
             <h3 className="text-sm font-bold text-zinc-100">Model server</h3>
             <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
@@ -403,8 +412,8 @@ export default function AppSettingsDrawer({
           )}
         </div>
 
-        {/* Model defaults */}
-        <div className="bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm">
+        {/* Model defaults (admins) */}
+        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm ${admin ? "" : "hidden"}`}>
           <div>
             <h3 className="text-sm font-bold text-zinc-100">Model defaults</h3>
             <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
@@ -492,7 +501,7 @@ export default function AppSettingsDrawer({
             </p>
           </div>
 
-          <div className="space-y-1.5">
+          <div className={`space-y-1.5 ${admin ? "" : "hidden"}`}>
             <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
               <span className="text-emerald-400">•</span> Decision server
             </label>
@@ -563,7 +572,7 @@ export default function AppSettingsDrawer({
             <h3 className="text-sm font-bold text-zinc-100">Connectors</h3>
           </div>
 
-          <div className="space-y-1.5">
+          <div className={`space-y-1.5 ${admin ? "" : "hidden"}`}>
             <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
               <span className="text-cyan-400">•</span> Composio API Key
             </label>
@@ -606,6 +615,18 @@ export default function AppSettingsDrawer({
           <AccountSection onSignOut={handleSignOut} />
         </div>
 
+        {admin && (
+          <div className="bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm">
+            <div>
+              <h3 className="text-sm font-bold text-zinc-100">Users</h3>
+              <p className="text-[11px] text-zinc-500 mt-1">
+                Accounts on this server. Each person gets their own bots, chats and settings; admins also manage what is shared.
+              </p>
+            </div>
+            <AdminUsersSection currentUser={user} />
+          </div>
+        )}
+
         {/* Secrets for bot computers */}
         <div className="bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm">
           <div>
@@ -622,10 +643,11 @@ export default function AppSettingsDrawer({
           <div>
             <h3 className="text-sm font-bold text-zinc-100">MCP servers</h3>
             <p className="text-[11px] text-zinc-500 mt-1">
-              Tool servers that speak the Model Context Protocol: a command run here over stdio, or a URL. Their tools are offered to every bot like a connected app&apos;s. A bot can add one for you if you ask it to.
+              Tool servers that speak the Model Context Protocol: a command run here over stdio, or a URL. Your own servers are offered to your bots; system servers, which admins manage, to everyone&apos;s. A bot can add one of yours if you ask it to.
             </p>
           </div>
           <McpServersSection
+            admin={admin}
             load={fetchMcpServers}
             create={createMcpServer}
             update={updateMcpServer}

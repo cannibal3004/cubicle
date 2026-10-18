@@ -5,6 +5,7 @@ from unittest import mock
 import httpx
 
 from app.routers import connectors
+from app.services import storage_service as storage_module
 
 
 class KeyedStorage:
@@ -77,7 +78,7 @@ class ConnectorCatalogTests(unittest.TestCase):
             calls.append(request)
             return httpx.Response(200, json=pages[request.url.params.get("cursor")])
 
-        with mock.patch.object(connectors, "storage_service", KeyedStorage()), mock.patch.object(
+        with mock.patch.object(storage_module, "storage_service", KeyedStorage()), mock.patch.object(
             connectors.httpx, "AsyncClient", _client_factory(handler)
         ):
             first = asyncio.run(connectors.catalog())
@@ -105,7 +106,7 @@ class ConnectorCatalogTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
 
         # refresh=1 bypasses the cache.
-        with mock.patch.object(connectors, "storage_service", KeyedStorage()), mock.patch.object(
+        with mock.patch.object(storage_module, "storage_service", KeyedStorage()), mock.patch.object(
             connectors.httpx, "AsyncClient", _client_factory(handler)
         ):
             asyncio.run(connectors.catalog(refresh=True))
@@ -115,7 +116,7 @@ class ConnectorCatalogTests(unittest.TestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(401, json={"error": {"message": "nope"}})
 
-        with mock.patch.object(connectors, "storage_service", KeyedStorage()), mock.patch.object(
+        with mock.patch.object(storage_module, "storage_service", KeyedStorage()), mock.patch.object(
             connectors.httpx, "AsyncClient", _client_factory(handler)
         ):
             result = asyncio.run(connectors.catalog())
@@ -129,7 +130,7 @@ class ConnectorCatalogTests(unittest.TestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             raise AssertionError("Composio must not be called without a key")
 
-        with mock.patch.object(connectors, "storage_service", EmptyStorage()), mock.patch.object(
+        with mock.patch.object(storage_module, "storage_service", EmptyStorage()), mock.patch.object(
             connectors.httpx, "AsyncClient", _client_factory(handler)
         ):
             result = asyncio.run(connectors.catalog())

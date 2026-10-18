@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from app.services import schedule_service
 from app.services.schedule_service import MAX_NAME_CHARS, MAX_PROMPT_CHARS, ScheduleError
 from app.services.scheduler import scheduler
-from app.services.storage_service import storage_service
+from app.services.storage_service import current_storage
 
 router = APIRouter(prefix="/api/v1/bots", tags=["schedules"])
 
@@ -27,7 +27,7 @@ class ScheduleUpdate(BaseModel):
 
 
 def _ensure_bot(bot_id: str) -> None:
-    if not any(bot.get("id") == bot_id for bot in storage_service.get_bots()):
+    if not any(bot.get("id") == bot_id for bot in current_storage().get_bots()):
         raise HTTPException(status_code=404, detail="Bot not found")
 
 

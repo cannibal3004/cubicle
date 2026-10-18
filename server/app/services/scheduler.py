@@ -17,16 +17,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Any, Awaitable, Callable, Dict, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, Optional, Set, List
 
 from app.config import settings
 from app.services import schedule_service
+from app.services import storage_service as storage_module
+from app.services.identity import get_current_owner, owner_context
 from app.services.turn_manager import TurnBusyError, turn_manager
 
 logger = logging.getLogger(__name__)
 
 # (bot_id, message) -> the started Turn, or raises TurnBusyError.
-RunTurn = Callable[[str, Dict[str, Any]], Awaitable[Any]]
+RunTurn = Callable[[str, Dict[str, Any], Optional[str]], Awaitable[Any]]
 
 
 class Scheduler:
@@ -65,7 +67,7 @@ class Scheduler:
         if self._run_turn is None:
             return 0
         started = 0
-        for record in schedule_service.due_schedules(now):
+        for record in self._due(now):
             if record["id"] in self._running_ids:
                 continue  # Its previous run has not finished yet.
             started += 1
@@ -79,6 +81,16 @@ class Scheduler:
             task.add_done_callback(self._runs.discard)
         return started
 
+    @staticmethod
+    def _due(now=None) -> List[Dict[str, Any]]:
+        """Due schedules of every account, each tagged with its owner."""
+        due: List[Dict[str, Any]] = []
+        for owner_id in storage_module.storage_service.list_owner_ids():
+            with owner_context(owner_id):
+                for record in schedule_service.due_schedules(now):
+                    due.append({**record, "owner_id": owner_id})
+        return due
+
     async def run_now(self, record: Dict[str, Any]) -> bool:
         """Start a schedule's run immediately (the editor's Run now). False when the bot is busy."""
         if self._run_turn is None or record["id"] in self._running_ids:
@@ -86,7 +98,7 @@ class Scheduler:
         current = turn_manager.current(record["bot_id"])
         if current is not None and not current.finished:
             return False
-        task = asyncio.get_running_loop().create_task(self._run(record))
+        task = asyncio.get_running_loop().create_task(self._run({**record, "owner_id": get_current_owner()}))
         self._runs.add(task)
         task.add_done_callback(self._runs.discard)
         return True
@@ -94,10 +106,16 @@ class Scheduler:
     async def _run(self, record: Dict[str, Any], now=None) -> None:
         schedule_id = record["id"]
         self._running_ids.add(schedule_id)
+        # The run acts as the schedule's owner: its bots, settings and secrets.
+        with owner_context(record.get("owner_id")):
+            await self._run_owned(record, now)
+
+    async def _run_owned(self, record: Dict[str, Any], now=None) -> None:
+        schedule_id = record["id"]
         try:
             message = schedule_service.scheduled_message(record, message_id=f"msg-{uuid.uuid4().hex[:6]}", now=now)
             try:
-                turn = await self._run_turn(record["bot_id"], message)
+                turn = await self._run_turn(record["bot_id"], message, record.get("owner_id"))
             except TurnBusyError:
                 schedule_service.record_run(schedule_id, "skipped", "a reply was still in progress", now=now)
                 return

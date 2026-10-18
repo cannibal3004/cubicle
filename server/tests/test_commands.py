@@ -9,6 +9,7 @@ from app.routers.commands import get_commands
 from app.services.commands import COMMANDS, CommandError, command_name, get_command, list_commands, parse_action_command
 from app.services.storage_service import StorageService
 from app.services.turn_manager import TurnManager
+from app.services import storage_service as storage_module
 
 
 class CommandRegistryTests(unittest.TestCase):
@@ -78,7 +79,7 @@ class ClearHistoryRouteTests(unittest.TestCase):
         self.storage = StorageService(Path(self.temp_dir.name))
         self.turns = TurnManager()
         self.patches = [
-            mock.patch.object(chat_router, "storage_service", self.storage),
+            mock.patch.object(storage_module, "storage_service", self.storage),
             mock.patch.object(chat_router, "turn_manager", self.turns),
         ]
         for patch in self.patches:

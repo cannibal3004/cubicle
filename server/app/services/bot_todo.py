@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.services.action_gateway import ActionDefinition, ActionGateway, ActionInvocation, action_gateway
-from app.services.storage_service import StorageService, storage_service
+from app.services.storage_service import StorageService, current_storage
 
 TODO_MAX_ITEMS = settings.BOT_TODO_MAX_ITEMS
 TODO_ITEM_MAX_CHARS = 300
@@ -95,7 +95,7 @@ def render_todo(items: List[Dict[str, Any]]) -> str:
 
 
 def get_todo(bot_id: str, storage: Optional[StorageService] = None) -> List[Dict[str, Any]]:
-    for bot in (storage or storage_service).get_bots():
+    for bot in (storage or current_storage()).get_bots():
         if bot.get("id") == bot_id:
             try:
                 return clean_todo(bot.get("todo") or [])
@@ -126,12 +126,12 @@ def summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def set_todo(bot_id: str, items: Any, storage: Optional[StorageService] = None) -> Dict[str, Any]:
     """Replace the list (the user's edits from the chat). Returns the stored list."""
-    return _save_todo(bot_id, clean_todo(items), storage or storage_service)
+    return _save_todo(bot_id, clean_todo(items), storage or current_storage())
 
 
 def add_todo(bot_id: str, texts: Any, storage: Optional[StorageService] = None) -> Dict[str, Any]:
     """Append one or more open items. Returns the whole list and the new ids."""
-    storage = storage or storage_service
+    storage = storage or current_storage()
     if isinstance(texts, str):
         texts = [texts]
     if not isinstance(texts, (list, tuple)) or not texts:
@@ -153,7 +153,7 @@ def update_todo(
     bot_id: str, item_id: Any, *, state: Any = None, text: Any = None, remove: bool = False, storage: Optional[StorageService] = None
 ) -> Dict[str, Any]:
     """Change one item's state or text, or remove it. Returns the whole list."""
-    storage = storage or storage_service
+    storage = storage or current_storage()
     current = get_todo(bot_id, storage)
     key = str(item_id or "").strip()
     index = next((i for i, item in enumerate(current) if item["id"] == key), None)

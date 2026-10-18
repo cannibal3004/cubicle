@@ -21,7 +21,7 @@ from typing import Any, Dict, List
 from app.services.action_gateway import ActionDefinition, ActionInvocation, action_gateway
 from app.services.connector_tools import sanitize_schema
 from app.services.llm_tools import ToolSpec
-from app.services.mcp_service import McpError, mcp_manager, mcp_store, public
+from app.services.mcp_service import McpError, mcp_manager, mcp_store, public  # noqa: F401 - mcp_store kept for tests
 
 logger = logging.getLogger(__name__)
 
@@ -110,16 +110,16 @@ def _server_summary(record: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def list_servers(call: ActionInvocation) -> Dict[str, Any]:
-    return {"servers": [_server_summary(r) for r in mcp_store.list()]}
+    return {"servers": [_server_summary(r) for r in mcp_manager.records()]}
 
 
 async def add_server(call: ActionInvocation) -> Dict[str, Any]:
     arguments = call.arguments if isinstance(call.arguments, dict) else {}
-    record = mcp_store.add(arguments.get("server"), created_by="bot")
+    record = mcp_manager.user_store.add(arguments.get("server"), created_by="bot")
     test = await mcp_manager.test(record)
     if not test.get("ok"):
         # Keep it, switched off, so the user can fix it in App Settings.
-        record = mcp_store.update(record["id"], {"enabled": False})
+        record = mcp_manager.user_store.update(record["id"], {"enabled": False})
         return {"server": _server_summary(record), "connected": False, "error": test.get("error"), "note": "Saved but switched off: it did not connect. Tell the user what failed."}
     mcp_manager.connection(record["id"]).start()
     return {"server": _server_summary(record), "connected": True, "tools": test.get("tools", []), "note": "Its tools are offered from your next turn."}
@@ -127,14 +127,14 @@ async def add_server(call: ActionInvocation) -> Dict[str, Any]:
 
 async def test_server(call: ActionInvocation) -> Dict[str, Any]:
     arguments = call.arguments if isinstance(call.arguments, dict) else {}
-    record = mcp_store.get(str(arguments.get("id") or ""))
+    record = mcp_manager.find(str(arguments.get("id") or ""))
     return {"server": _server_summary(record), **(await mcp_manager.test(record))}
 
 
 async def remove_server(call: ActionInvocation) -> Dict[str, Any]:
     arguments = call.arguments if isinstance(call.arguments, dict) else {}
     server_id = str(arguments.get("id") or "")
-    record = mcp_store.remove(server_id)
+    record = mcp_manager.user_store.remove(server_id)
     await mcp_manager.forget(server_id)
     return {"removed": public(record)}
 

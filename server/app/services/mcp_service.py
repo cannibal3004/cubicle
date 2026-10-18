@@ -28,7 +28,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
-from app.services.storage_service import StorageService, storage_service
+from app.services.identity import LOCAL_USER_ID, get_current_owner, owner_context
+from app.services.storage_service import StorageService, current_storage, storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -193,22 +194,32 @@ def public(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-class McpStore:
-    """The configured servers, kept in app settings under `mcp_servers`."""
+SCOPES = ("system", "user")
+SCOPE_KEYS = {"system": "mcp_servers", "user": "user_mcp_servers"}
 
-    def __init__(self, storage: Optional[StorageService] = None):
+
+class McpStore:
+    """The configured servers of one scope: `system` servers live in the
+    app-wide settings (admins manage them, every bot gets them); `user`
+    servers in the current account's own settings."""
+
+    def __init__(self, storage: Optional[StorageService] = None, scope: str = "system"):
+        if scope not in SCOPES:
+            raise McpError("scope must be system or user.")
         self._storage = storage
+        self.scope = scope
+        self.key = SCOPE_KEYS[scope]
 
     @property
     def storage(self) -> StorageService:
-        return self._storage or storage_service
+        return self._storage or current_storage()
 
     def list(self) -> List[Dict[str, Any]]:
-        raw = self.storage.get_settings().get("mcp_servers") or []
+        raw = self.storage.get_settings().get(self.key) or []
         servers = []
         for item in raw if isinstance(raw, list) else []:
             if isinstance(item, dict) and _ID.fullmatch(str(item.get("id") or "")):
-                servers.append(item)
+                servers.append({**item, "scope": self.scope})
         return servers
 
     def get(self, server_id: str) -> Dict[str, Any]:
@@ -218,7 +229,7 @@ class McpStore:
         raise McpError("There is no MCP server with that id.")
 
     def _save(self, servers: List[Dict[str, Any]]) -> None:
-        self.storage.save_settings({"mcp_servers": servers})
+        self.storage.save_settings({self.key: [{k: v for k, v in s.items() if k != "scope"} for s in servers]})
 
     def add(self, data: Any, *, created_by: str = "user") -> Dict[str, Any]:
         servers = self.list()
@@ -229,16 +240,16 @@ class McpStore:
             raise McpError(f"A server named {record['name']} already exists.")
         servers.append(record)
         self._save(servers)
-        return record
+        return {**record, "scope": self.scope}
 
     def update(self, server_id: str, changes: Any) -> Dict[str, Any]:
         servers = self.list()
         for index, item in enumerate(servers):
             if item["id"] == server_id:
-                record = clean_server(changes, existing=item)
+                record = clean_server(changes, existing={k: v for k, v in item.items() if k != "scope"})
                 servers[index] = record
                 self._save(servers)
-                return record
+                return {**record, "scope": self.scope}
         raise McpError("There is no MCP server with that id.")
 
     def remove(self, server_id: str) -> Dict[str, Any]:
@@ -452,38 +463,69 @@ def result_text(result: Any) -> Dict[str, Any]:
 class McpManager:
     """Connections for every configured server, by id."""
 
-    def __init__(self, store: Optional[McpStore] = None, secrets: Optional[Any] = None):
-        self.store = store or McpStore()
+    def __init__(self, store: Optional[McpStore] = None, secrets: Optional[Any] = None, user_store: Optional[McpStore] = None):
+        # `store` is the system scope (the name predates user scopes).
+        self.store = store or McpStore(scope="system")
+        self.user_store = user_store or McpStore(storage=store._storage if store is not None else None, scope="user")
         # Callable returning the app secrets, resolved at connect time.
         self._secrets = secrets
         self._connections: Dict[str, McpConnection] = {}
 
-    def _app_secrets(self) -> Dict[str, str]:
+    def _secrets_for(self, record: Dict[str, Any]) -> Dict[str, str]:
+        """$NAME references: a system server reads the first account's app
+        secrets, a user server the secrets of the account that owns it."""
         if self._secrets is not None:
             return dict(self._secrets())
         try:
-            return dict(self.store.storage.secret_values(""))
+            if record.get("scope") == "user":
+                return dict(current_storage().secret_values(""))
+            return dict(storage_service.for_owner(LOCAL_USER_ID).secret_values(""))
         except Exception:
             return {}
 
+    def records(self) -> List[Dict[str, Any]]:
+        """System servers plus the current account's own."""
+        return self.store.list() + self.user_store.list()
+
+    def find(self, server_id: str) -> Dict[str, Any]:
+        for record in self.records():
+            if record["id"] == server_id:
+                return record
+        raise McpError("There is no MCP server with that id.")
+
+    def store_for(self, record: Dict[str, Any]) -> McpStore:
+        return self.user_store if record.get("scope") == "user" else self.store
+
     def connection(self, server_id: str) -> McpConnection:
-        record = self.store.get(server_id)
+        record = self.find(server_id)
         current = self._connections.get(server_id)
         if current is None or current.record != record:
             if current is not None:
                 asyncio.get_running_loop().create_task(current.stop())
-            current = McpConnection(record=record, secrets=self._app_secrets())
+            current = McpConnection(record=record, secrets=self._secrets_for(record))
             self._connections[server_id] = current
         return current
 
     def start_all(self) -> None:
-        """Connect every enabled server in the background (app startup)."""
+        """Connect every enabled server of every account in the background (app startup)."""
         for record in self.store.list():
-            if record.get("enabled", True):
-                try:
-                    self.connection(record["id"]).start()
-                except Exception as exc:
-                    logger.warning("MCP server %s could not start: %s", record.get("name"), exc)
+            self._start_record(record)
+        try:
+            owners = storage_service.list_owner_ids()
+        except Exception:
+            owners = [LOCAL_USER_ID]
+        for owner_id in owners:
+            with owner_context(owner_id):
+                for record in self.user_store.list():
+                    self._start_record(record)
+
+    def _start_record(self, record: Dict[str, Any]) -> None:
+        if not record.get("enabled", True):
+            return
+        try:
+            self.connection(record["id"]).start()
+        except Exception as exc:
+            logger.warning("MCP server %s could not start: %s", record.get("name"), exc)
 
     async def stop_all(self) -> None:
         for connection in list(self._connections.values()):
@@ -507,9 +549,10 @@ class McpManager:
         return out
 
     def cached_tools(self) -> List[Any]:
-        """(record, tools) for every enabled server that is connected; nothing blocks here."""
+        """(record, tools) for every enabled server the current account may use
+        (system plus its own) that is connected; nothing blocks here."""
         found = []
-        for record in self.store.list():
+        for record in self.records():
             if not record.get("enabled", True):
                 continue
             connection = self._connections.get(record["id"])
@@ -533,7 +576,7 @@ class McpManager:
 
     async def test(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Connect once, list the tools, and disconnect."""
-        probe = McpConnection(record=record, secrets=self._app_secrets())
+        probe = McpConnection(record=record, secrets=self._secrets_for(record))
         probe.start()
         try:
             await probe.wait_ready()
@@ -549,4 +592,6 @@ class McpManager:
 
 
 mcp_store = McpStore()
-mcp_manager = McpManager(mcp_store)
+user_mcp_store = McpStore(scope="user")
+
+mcp_manager = McpManager(mcp_store, user_store=user_mcp_store)
