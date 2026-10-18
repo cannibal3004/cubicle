@@ -26,7 +26,7 @@ import httpx
 from app.config import settings
 from app.schemas.contracts import ActionRequest
 from app.services.action_gateway import redact_sensitive
-from app.services.storage_service import StorageService, storage_service
+from app.services.storage_service import StorageService, current_storage
 from app.services.workspace_service import WorkspaceService, WorkspaceToolError, workspace_service
 
 logger = logging.getLogger(__name__)
@@ -152,13 +152,18 @@ def _clip(value: Any, limit: int = MAX_FIELD_CHARS) -> Any:
 class ApprovalGate:
     def __init__(
         self,
-        storage: StorageService = storage_service,
+        storage: Optional[StorageService] = None,
         workspace: WorkspaceService = workspace_service,
         client_factory=DeciderClient,
     ):
-        self.storage = storage
+        self._storage = storage
         self.workspace = workspace
         self.client_factory = client_factory
+
+    @property
+    def storage(self) -> StorageService:
+        # The caller's own settings and decisions unless a store was pinned.
+        return self._storage or current_storage()
 
     # ---- configuration ------------------------------------------------------
 

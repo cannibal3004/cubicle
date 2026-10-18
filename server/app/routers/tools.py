@@ -11,7 +11,7 @@ from app.services.mcp_tools import mcp_tool_specs
 from app.services.mcp_tools import mcp_tool_specs
 from app.services.connector_tools import connector_tool_specs
 from app.services.llm_tools import ToolSpec, available_tools
-from app.services.storage_service import storage_service
+from app.services.storage_service import current_storage
 
 router = APIRouter(prefix="/api/v1/tools", tags=["tools"])
 
@@ -70,7 +70,7 @@ async def tool_catalog():
             toolkits.append(toolkit)
         toolkit["tools"].append(_tool_entry(spec))
 
-    disabled = storage_service.get_settings().get("disabled_toolkits") or []
+    disabled = current_storage().get_settings().get("disabled_toolkits") or []
     return {
         "tools_enabled": bool(settings.LLM_TOOLS_ENABLED),
         "groups": groups,

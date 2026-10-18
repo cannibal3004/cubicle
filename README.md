@@ -25,6 +25,7 @@ This is an independent open-source project and is not affiliated with xAI.
 - **Tool control:** A Tools menu in the chat header switches tool groups and connected apps on or off for that bot, the bot editor picks individual tools, and Plugins can withhold an app's tools from every bot without disconnecting it.
 - **Model picker:** Search the live model list reported by your server, or type any model ID. Models that advertise reasoning or vision support are tagged. The default model is `x-ai/grok-4.5` on OpenRouter.
 - **Server-side turns:** A reply runs as a server task, not inside the browser connection. Close the tab, reload, or open the same bot on another machine and the chat reattaches to the turn in progress and replays it. Approvals keep waiting until you answer, and the sidebar marks bots that are working or need you.
+- **Accounts:** Several people can use one server. Each account has its own bots, chats, notes, to-do lists, schedules, secrets, app connections and MCP servers, and can only reach its own. Admins (the first account, and anyone they promote) manage what is shared: the model server and default model, the connector key, the decision server, system MCP servers, and the accounts themselves, from App Settings → Users. Scheduled runs act as the account that owns them.
 - **Questions to you:** A bot can ask you a question with the `ask_user` tool and wait for the answer: a card with the choices (and a box for an answer of your own) appears in the chat, the sidebar shows the bot is waiting, and the reply continues once you answer. The answer is recorded with the reply like any tool result.
 - **Attachments:** Attach images and files to a message with the + button, by dropping them on the composer, or by pasting. Images go to vision-capable models inline as data URLs. Other files (PDF, Word, Excel, PowerPoint, CSV, text, code) are saved where the bot can reach them, in its computer's `/workspace/uploads` or else the shared folder, shown as a download card, and their text is extracted with MarkItDown and placed in the message up to a cap; above it the model is told where the whole file is and works on it with its tools. Nothing leaves your machine except as part of the model request.
 - **Markdown messages:** Render assistant replies as Markdown in the chat transcript.
@@ -110,7 +111,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 You can also enter the provider key from **App Settings → Connections** after the UI loads. The environment variable is the server-side fallback.
 
-On first start the UI shows a setup page that creates the owner's account (username and password); after that it shows a sign-in page. Sessions are server-side records behind an HttpOnly cookie, so signing out, changing the password, or "sign out other devices" revokes them. Each account can switch on two-factor authentication (TOTP with any authenticator app, with recovery codes) in App Settings → Account, and can create API tokens there for scripts, sent as `Authorization: Bearer <token>`. Repeated failed sign-ins lock the username for a few minutes. If you are locked out of the account itself, `python -m app.cli` on the server (inside the api container: `docker compose exec -T api python -m app.cli ...`) can set a password, switch off two-factor, or mint a token. See [Run the whole stack with Docker Compose](#run-the-whole-stack-with-docker-compose).
+On first start the UI shows a setup page that creates the owner's account (username and password); after that it shows a sign-in page. Admins create further accounts in App Settings → Users (or with `python -m app.cli create-user`); members cannot see or change each other's data, and app-wide settings are refused to them. Sessions are server-side records behind an HttpOnly cookie, so signing out, changing the password, or "sign out other devices" revokes them. Each account can switch on two-factor authentication (TOTP with any authenticator app, with recovery codes) in App Settings → Account, and can create API tokens there for scripts, sent as `Authorization: Bearer <token>`. Repeated failed sign-ins lock the username for a few minutes. If you are locked out of the account itself, `python -m app.cli` on the server (inside the api container: `docker compose exec -T api python -m app.cli ...`) can set a password, switch off two-factor, or mint a token. See [Run the whole stack with Docker Compose](#run-the-whole-stack-with-docker-compose).
 
 ### Optional Docker computer runtime
 
@@ -413,6 +414,7 @@ All routes are prefixed with `/api/v1`.
 | GET | `/auth/status` | Report authentication state without exposing credentials |
 | GET | `/auth/session` | Establish a local or bearer-backed browser session |
 | POST | `/auth/setup` | First run only: create the owner's account and sign in |
+| GET, POST, PATCH | `/admin/users`, `/admin/users/{id}` | Admins: list, create, promote, disable, or reset the password of accounts |
 | POST | `/auth/login` | Username, password and (when enabled) an authenticator or recovery code; sets the session cookie |
 | GET | `/auth/me` | The signed-in account: two-factor state, sessions, API tokens |
 | POST | `/auth/password`, `/auth/totp/start`, `/auth/totp/confirm`, `/auth/totp/disable`, `/auth/sessions/sign-out-others` | Account self-service |
@@ -464,6 +466,7 @@ On first start, the server creates a SQLite database under the per-user data dir
 
 For local development:
 
+- Every route works on the signed-in account's own data: bot, thread, computer, schedule, approval and question ids that belong to someone else are not found. App-wide settings (`llm_*`, `composio_api_key`, `default_model`, `decider_url`, system `mcp_servers`) are stored once, under a system owner, and only admins may change them.
 - API routes require a signed-in session or an API token (`Authorization: Bearer <token>`, created in App Settings → Account or with `python -m app.cli create-token`). Passwords are stored as argon2 hashes; TOTP secrets and recovery codes are encrypted with the app's secret key.
 - Provider credentials are encrypted at rest with a mode-0600 Fernet key in `DATA_DIR`. Set `APP_ENCRYPTION_KEY` when the key must be supplied by deployment secrets or shared across restarts and hosts.
 - Settings responses never return provider credentials. Enter a new value to replace a stored key, or leave it blank to keep the current one.

@@ -21,7 +21,8 @@ from app.services.action_gateway import (
 )
 from app.services.computer_provider import ComputerProviderError, check_package_names, computer_provider
 from app.services.secrets_service import redactor_for
-from app.services.storage_service import storage_service
+from app.services.identity import owner_context
+from app.services.storage_service import current_storage
 from app.services import computer_actions as _computer_actions  # noqa: F401 - registers actions
 
 
@@ -49,7 +50,7 @@ class ControlRequest(BaseModel):
 
 
 def _ensure_bot(bot_id: str) -> None:
-    if not any(bot.get("id") == bot_id for bot in storage_service.get_bots()):
+    if not any(bot.get("id") == bot_id for bot in current_storage().get_bots()):
         raise HTTPException(status_code=404, detail="Bot not found")
 
 
@@ -207,10 +208,13 @@ async def computer_vnc(websocket: WebSocket, bot_id: str):
     user's session is checked first, so the desktop is reachable only by a
     signed-in user through this route.
     """
-    if not websocket_is_authenticated(websocket):
+    user = auth_service.authenticate_websocket(websocket.headers, websocket.cookies)
+    if not user:
         await websocket.close(code=4401)
         return
-    if not any(bot.get("id") == bot_id for bot in storage_service.get_bots()):
+    with owner_context(user["id"]):
+        owned = any(bot.get("id") == bot_id for bot in current_storage().get_bots())
+    if not owned:
         await websocket.close(code=4404)
         return
     status = computer_provider.describe(bot_id)

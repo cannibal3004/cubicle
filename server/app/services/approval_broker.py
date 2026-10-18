@@ -5,7 +5,8 @@ from typing import Any, Dict, Optional
 import uuid
 
 from app.config import settings
-from app.services.storage_service import storage_service
+from app.services.identity import get_current_owner
+from app.services.storage_service import current_storage
 
 
 def _now() -> str:
@@ -16,6 +17,7 @@ def _now() -> str:
 class PendingApproval:
     request_id: str
     future: asyncio.Future
+    owner_id: str = ""
 
 
 class ApprovalBroker:
@@ -34,7 +36,7 @@ class ApprovalBroker:
         request_id = request_id or f"req-{uuid.uuid4().hex[:10]}"
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        self.pending[request_id] = PendingApproval(request_id, future)
+        self.pending[request_id] = PendingApproval(request_id, future, get_current_owner())
 
         approval = {
             "request_id": request_id,
@@ -46,8 +48,8 @@ class ApprovalBroker:
             "status": "pending",
             "created_at": _now(),
         }
-        storage_service.add_approval(approval)
-        storage_service.add_audit_event({
+        current_storage().add_approval(approval)
+        current_storage().add_audit_event({
             "event": "approval.opened",
             "request_id": request_id,
             "thread_id": thread_id,
@@ -69,11 +71,11 @@ class ApprovalBroker:
         except asyncio.TimeoutError:
             if not pending.future.done():
                 pending.future.set_result("expired")
-            storage_service.update_approval(request_id, {
+            current_storage().update_approval(request_id, {
                 "status": "expired",
                 "resolved_at": _now(),
             })
-            storage_service.add_audit_event({
+            current_storage().add_audit_event({
                 "event": "approval.expired",
                 "request_id": request_id,
                 "created_at": _now(),
@@ -87,14 +89,18 @@ class ApprovalBroker:
         pending = self.pending.get(request_id)
         if not pending or pending.future.done():
             return False
+        # A card is answered by the account whose bot opened it (the gate
+        # decides inside the same request, so it matches too).
+        if pending.owner_id and pending.owner_id != get_current_owner():
+            return False
 
         pending.future.set_result(action)
-        storage_service.update_approval(request_id, {
+        current_storage().update_approval(request_id, {
             "status": action,
             "resolved_at": _now(),
             "decided_by": decided_by,
         })
-        storage_service.add_audit_event({
+        current_storage().add_audit_event({
             "event": f"approval.{action}",
             "request_id": request_id,
             "decided_by": decided_by,

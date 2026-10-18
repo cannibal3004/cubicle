@@ -21,6 +21,7 @@ from app.services.secrets_service import (
     validate_value,
 )
 from app.services.storage_service import StorageService
+from app.services import storage_service as storage_module
 
 
 class SecretsTests(unittest.TestCase):
@@ -128,8 +129,8 @@ class SecretsTests(unittest.TestCase):
         self.assertNotIn("Secrets:", describe_tools(available_tools(computer=False), secret_names=["X"]))
 
     def test_router_sets_lists_and_deletes_without_returning_values(self):
-        with mock.patch.object(secrets_router, "storage_service", self.storage), mock.patch.object(
-            secrets_service, "storage_service", self.storage
+        with mock.patch.object(storage_module, "storage_service", self.storage), mock.patch.object(
+            storage_module, "storage_service", self.storage
         ):
             created = asyncio.run(secrets_router.set_app_secret("github_token", secrets_router.SecretValue(value="ghp_x")))
             self.assertEqual((created["name"], created["source"]), ("GITHUB_TOKEN", "app"))

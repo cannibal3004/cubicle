@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
-from app.services.identity import LOCAL_USER_ID
+from app.services.identity import LOCAL_USER_ID, SYSTEM_OWNER, get_current_owner
 from app.services.database import Database
 from app.services.secret_store import SecretStore, SecretStoreError
 
@@ -33,9 +33,25 @@ SETTING_KEYS = {
     "no_auth_toolkits",
     "no_auth_toolkits_off",
     "mcp_servers",
+    "user_mcp_servers",
     "auto_approval",
     "decider_url",
     "decider_threshold",
+}
+# App-wide keys live under the system owner and only admins change them;
+# every other key is personal to the account that saved it.
+APP_SETTING_KEYS = {
+    "llm_provider",
+    "llm_api_key",
+    "llm_base_url",
+    "llm_reasoning_effort",
+    "muapi_api_key",
+    "muapi_base_url",
+    "composio_api_key",
+    "composio_key",
+    "default_model",
+    "decider_url",
+    "mcp_servers",
 }
 
 
@@ -46,13 +62,24 @@ def _now() -> str:
 class StorageService:
     """SQLite-backed storage with a one-time import from the legacy JSON files."""
 
-    def __init__(self, data_dir: Optional[Path] = None):
-        self.data_dir = (data_dir or settings.DATA_DIR).expanduser().resolve()
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.owner_id = LOCAL_USER_ID
-
+    def __init__(self, data_dir: Optional[Path] = None, owner_id: str = LOCAL_USER_ID, *, root: Optional["StorageService"] = None):
+        self.owner_id = owner_id
         # Keep these paths for the one-time migration and as human-readable
         # recovery copies. Normal reads and writes use SQLite below.
+        if root is not None:
+            # A sibling for another owner: same files, database and key.
+            self.root = root
+            self.data_dir = root.data_dir
+            self.db_path = root.db_path
+            self.database = root.database
+            self.secret_store = root.secret_store
+            self._owners = root._owners
+            self._ensure_defaults()
+            return
+        self.root = self
+        self._owners: Dict[str, "StorageService"] = {}
+        self.data_dir = (data_dir or settings.DATA_DIR).expanduser().resolve()
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         self.bots_file = self.data_dir / "bots.json"
         self.messages_file = self.data_dir / "messages.json"
         self.settings_file = self.data_dir / "settings.json"
@@ -66,6 +93,27 @@ class StorageService:
         self._migrate_legacy_json()
         self._migrate_legacy_llm_settings()
         self._ensure_defaults()
+        self._owners[self.owner_id] = self
+
+    def for_owner(self, owner_id: str) -> "StorageService":
+        """The same store seen as another account (bots, chats, settings of theirs)."""
+        owner_id = owner_id or LOCAL_USER_ID
+        if owner_id == self.owner_id:
+            return self
+        existing = self._owners.get(owner_id)
+        if existing is None:
+            existing = StorageService(owner_id=owner_id, root=self.root)
+            self._owners[owner_id] = existing
+        return existing
+
+    def list_owner_ids(self) -> List[str]:
+        """Every account that may own data: the users table plus the first account."""
+        with self.database.connect() as connection:
+            rows = connection.execute("SELECT id FROM users ORDER BY created_at").fetchall()
+        ids = [str(row[0]) for row in rows]
+        if LOCAL_USER_ID not in ids:
+            ids.insert(0, LOCAL_USER_ID)
+        return ids
 
     @staticmethod
     def _default_settings() -> Dict[str, Any]:
@@ -85,7 +133,7 @@ class StorageService:
     def _stored_setting_keys(self) -> set:
         with self.database.connect() as connection:
             rows = connection.execute(
-                "SELECT key FROM settings WHERE owner_id = ?", (self.owner_id,)
+                "SELECT key FROM settings WHERE owner_id IN (?, ?)", (self.owner_id, SYSTEM_OWNER)
             ).fetchall()
         return {row[0] for row in rows}
 
@@ -216,6 +264,11 @@ class StorageService:
         self.database.set_meta("legacy_json_imported", "1")
 
     def _ensure_defaults(self) -> None:
+        # Bot ids are global (they key the table, threads and computers): the
+        # first account keeps the familiar seed ids, later accounts get fresh ones.
+        ids = {"grok": "bot-grok-1", "claude": "bot-claude-1", "codex": "bot-codex-1", "supa": "bot-supa-1", "welcome": "msg-welcome-1"}
+        if self.owner_id != LOCAL_USER_ID:
+            ids = {key: f"{value.split('-')[0]}-{uuid.uuid4().hex[:6]}" for key, value in ids.items()}
         # MUAPI has its own slugs for these personas. Any other provider seeds
         # every bot with the configured default so the first chat works.
         if settings.LLM_PROVIDER == "muapi":
@@ -227,7 +280,7 @@ class StorageService:
             self.save_bots(
                 [
                     {
-                        "id": "bot-grok-1",
+                        "id": ids["grok"],
                         "name": "Grok 4.5 Analyst",
                         "role": "Real-time Reasoning & Intelligence",
                         "description": f"Powered by the {settings.DEFAULT_MODEL} model. Deep analysis, real-time web intelligence, & precise technical problem solving.",
@@ -241,7 +294,7 @@ class StorageService:
                         "created_at": datetime.now().isoformat(),
                     },
                     {
-                        "id": "bot-claude-1",
+                        "id": ids["claude"],
                         "name": "Claude Architect",
                         "role": "Full-Stack Code & Refactoring",
                         "description": "Specialized in software design, clean architectural patterns, and elegant React/Next.js code.",
@@ -255,7 +308,7 @@ class StorageService:
                         "created_at": datetime.now().isoformat(),
                     },
                     {
-                        "id": "bot-codex-1",
+                        "id": ids["codex"],
                         "name": "Codex Builder",
                         "role": "Automated Execution & Workflows",
                         "description": "Executes shell tasks, runs automated builds, and manages local computer environment.",
@@ -269,7 +322,7 @@ class StorageService:
                         "created_at": datetime.now().isoformat(),
                     },
                     {
-                        "id": "bot-supa-1",
+                        "id": ids["supa"],
                         "name": "Grok Connector Assistant",
                         "role": "General Assistant & App Connector",
                         "description": "Friendly assistant connected to the app marketplace (Slack, Gmail, GitHub).",
@@ -289,9 +342,9 @@ class StorageService:
             self.save_messages(
                 [
                     {
-                        "id": "msg-welcome-1",
-                        "thread_id": "bot-grok-1",
-                        "bot_id": "bot-grok-1",
+                        "id": ids["welcome"],
+                        "thread_id": ids["grok"],
+                        "bot_id": ids["grok"],
                         "sender": "bot",
                         "text": "Hello! I am **Grok 4.5 Analyst**. Ask me anything, or give me a task to analyze!",
                         "created_at": datetime.now().isoformat(),
@@ -301,7 +354,9 @@ class StorageService:
                 ]
             )
 
-        if self._count("settings") == 0:
+        # App defaults are written once, by the first account; later accounts
+        # must not reset what an admin has configured.
+        if self.owner_id == LOCAL_USER_ID and not self._stored_setting_keys():
             self.save_settings(self._default_settings())
 
     def _adopt_legacy_database(self) -> None:
@@ -473,9 +528,13 @@ class StorageService:
                 )
 
     def get_settings(self) -> Dict[str, Any]:
+        """App-wide settings overlaid with this owner's personal ones."""
         values = self._default_settings()
         with self.database.connect() as connection:
             rows = connection.execute(
+                "SELECT key, value, is_secret FROM settings WHERE owner_id = ? ORDER BY key",
+                (SYSTEM_OWNER,),
+            ).fetchall() + connection.execute(
                 "SELECT key, value, is_secret FROM settings WHERE owner_id = ? ORDER BY key",
                 (self.owner_id,),
             ).fetchall()
@@ -501,11 +560,19 @@ class StorageService:
             values[key] = ""
         return values
 
+    def get_app_settings(self) -> Dict[str, Any]:
+        """Only the app-wide keys (what an admin edits)."""
+        merged = self.get_settings()
+        return {key: merged.get(key) for key in APP_SETTING_KEYS if key in merged}
+
     def save_settings(self, data: Dict[str, Any]):
+        """Store the known keys: app-wide ones under the system owner, the
+        rest under this owner. Callers decide who may write app keys."""
         if not isinstance(data, dict):
             return
         with self.database.connect() as connection:
             for key in SETTING_KEYS.intersection(data):
+                owner = SYSTEM_OWNER if key in APP_SETTING_KEYS else self.owner_id
                 value = data[key]
                 if key in SECRET_KEYS:
                     # An empty write is the UI's "keep existing value" signal.
@@ -518,9 +585,8 @@ class StorageService:
                     is_secret = 0
                 connection.execute(
                     "INSERT INTO settings(key, owner_id, value, is_secret) VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT(key) DO UPDATE SET owner_id = excluded.owner_id, "
-                    "value = excluded.value, is_secret = excluded.is_secret",
-                    (key, self.owner_id, stored_value, is_secret),
+                    "ON CONFLICT(owner_id, key) DO UPDATE SET value = excluded.value, is_secret = excluded.is_secret",
+                    (key, owner, stored_value, is_secret),
                 )
 
     def get_approvals(self, thread_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -645,3 +711,16 @@ class StorageService:
 
 
 storage_service = StorageService()
+
+
+
+def current_storage() -> StorageService:
+    """The store for the account the current request or run acts for.
+
+    Reads the module global at call time, so tests can swap in a store
+    (a real one or a stand-in without owners) by patching
+    `app.services.storage_service.storage_service`.
+    """
+    root = storage_service
+    for_owner = getattr(root, "for_owner", None)
+    return for_owner(get_current_owner()) if callable(for_owner) else root

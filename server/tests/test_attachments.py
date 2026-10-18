@@ -15,6 +15,7 @@ from app.schemas.contracts import TurnRequest
 from app.services import attachments, context_builder
 from app.services.computer_provider import computer_id_for_bot
 from app.services.context_builder import build_history_messages
+from app.services import storage_service as storage_module
 
 CONTENT_TYPES = (
     '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
@@ -193,7 +194,7 @@ class AttachmentTests(unittest.TestCase):
         attachments.save_upload("bot-1", "memo.txt", b"The quarterly memo.")
         stored = []
         request = TurnRequest(thread_id="bot-1", bot_id="bot-1", user_text="Summarise this", attachments=[{"source": "computer", "path": "uploads/memo.txt"}])
-        with mock.patch.object(chat_router.storage_service, "add_message", side_effect=stored.append), mock.patch.object(
+        with mock.patch.object(storage_module.storage_service, "add_message", side_effect=stored.append), mock.patch.object(chat_router, "_ensure_thread", lambda thread_id: None), mock.patch.object(
             chat_router.llm_service, "current_llm_config", return_value=mock.Mock(default_model="m")
         ):
             response = asyncio.run(chat_router.send_message(request))
@@ -204,18 +205,18 @@ class AttachmentTests(unittest.TestCase):
         # The response and the history endpoint carry the card, not the text.
         self.assertNotIn("extract", response["message"]["attachments"][0])
         self.assertEqual(response["message"]["attachments"][0]["text_chars"], 19)
-        with mock.patch.object(chat_router.storage_service, "get_messages", return_value=stored):
+        with mock.patch.object(storage_module.storage_service, "get_messages", return_value=stored), mock.patch.object(chat_router, "_ensure_thread", lambda thread_id: None):
             history = asyncio.run(chat_router.get_history("bot-1"))
         self.assertNotIn("extract", history[0]["attachments"][0])
         self.assertIn("extract", stored[0]["attachments"][0])  # the stored copy is untouched
 
     def test_send_rejects_paths_outside_the_roots_and_too_many_files(self):
         request = TurnRequest(thread_id="bot-1", bot_id="bot-1", user_text="x", attachments=[{"source": "computer", "path": "../../etc/passwd"}])
-        with self.assertRaises(HTTPException) as ctx:
+        with mock.patch.object(chat_router, "_ensure_thread", lambda thread_id: None), self.assertRaises(HTTPException) as ctx:
             asyncio.run(chat_router.send_message(request))
         self.assertEqual(ctx.exception.status_code, 400)
         many = [{"source": "computer", "path": f"uploads/{i}.txt"} for i in range(attachments.MAX_PER_MESSAGE + 1)]
-        with self.assertRaises(HTTPException) as ctx:
+        with mock.patch.object(chat_router, "_ensure_thread", lambda thread_id: None), self.assertRaises(HTTPException) as ctx:
             asyncio.run(chat_router.send_message(TurnRequest(thread_id="bot-1", bot_id="bot-1", user_text="x", attachments=many)))
         self.assertIn("At most", ctx.exception.detail)
 

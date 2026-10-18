@@ -2,9 +2,10 @@
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.services.identity import is_admin
 from app.services.mcp_service import McpError, mcp_manager, mcp_store, public
 
 router = APIRouter(prefix="/api/v1/mcp", tags=["mcp"])
@@ -20,6 +21,8 @@ class ServerInput(BaseModel):
     headers: Optional[Dict[str, str]] = None
     enabled: Optional[bool] = None
     trust_read_only: Optional[bool] = None
+    # system: every bot of every account (admins only); user: the caller's bots.
+    scope: str = "user"
 
 
 class ServerUpdate(BaseModel):
@@ -41,9 +44,25 @@ def _guard(action):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _store(request: Request, scope: str):
+    if scope == "system":
+        if not is_admin(getattr(request.state, "user", None)):
+            raise HTTPException(status_code=403, detail="Only an admin can change system MCP servers.")
+        return mcp_manager.store
+    return mcp_manager.user_store
+
+
+def _record(request: Request, server_id: str) -> Dict[str, Any]:
+    """A server the caller may manage: their own, or a system one if admin."""
+    record = _guard(lambda: mcp_manager.find(server_id))
+    _store(request, record.get("scope", "system"))
+    return record
+
+
 def _entry(record: Dict[str, Any]) -> Dict[str, Any]:
     status = mcp_manager.statuses().get(record["id"], {})
     entry = public(record)
+    entry["scope"] = record.get("scope", "system")
     entry.update(
         {
             "status": status.get("status") or ("stopped" if entry["enabled"] else "disabled"),
@@ -57,20 +76,23 @@ def _entry(record: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.get("/servers")
 async def mcp_list_servers():
-    return {"servers": [_entry(r) for r in mcp_store.list()]}
+    """System servers and the caller's own, each with its scope."""
+    return {"servers": [_entry(r) for r in mcp_manager.records()]}
 
 
 @router.post("/servers")
-async def mcp_add_server(body: ServerInput):
-    record = _guard(lambda: mcp_store.add(body.model_dump(exclude_none=True), created_by="user"))
+async def mcp_add_server(body: ServerInput, request: Request):
+    store = _store(request, body.scope)
+    record = _guard(lambda: store.add(body.model_dump(exclude_none=True, exclude={"scope"}), created_by="user"))
     if record.get("enabled", True):
         mcp_manager.connection(record["id"]).start()
     return {"server": _entry(record)}
 
 
 @router.put("/servers/{server_id}")
-async def mcp_update_server(server_id: str, body: ServerUpdate):
-    record = _guard(lambda: mcp_store.update(server_id, body.model_dump(exclude_none=True)))
+async def mcp_update_server(server_id: str, body: ServerUpdate, request: Request):
+    store = mcp_manager.store_for(_record(request, server_id))
+    record = _guard(lambda: store.update(server_id, body.model_dump(exclude_none=True)))
     await mcp_manager.forget(server_id)
     if record.get("enabled", True):
         mcp_manager.connection(server_id).start()
@@ -78,21 +100,22 @@ async def mcp_update_server(server_id: str, body: ServerUpdate):
 
 
 @router.delete("/servers/{server_id}")
-async def mcp_remove_server(server_id: str):
-    record = _guard(lambda: mcp_store.remove(server_id))
+async def mcp_remove_server(server_id: str, request: Request):
+    store = mcp_manager.store_for(_record(request, server_id))
+    record = _guard(lambda: store.remove(server_id))
     await mcp_manager.forget(server_id)
     return {"status": "ok", "removed": public(record)}
 
 
 @router.post("/servers/{server_id}/test")
-async def mcp_test_server(server_id: str):
-    record = _guard(lambda: mcp_store.get(server_id))
+async def mcp_test_server(server_id: str, request: Request):
+    record = _record(request, server_id)
     return await mcp_manager.test(record)
 
 
 @router.post("/servers/{server_id}/reconnect")
-async def mcp_reconnect_server(server_id: str):
-    record = _guard(lambda: mcp_store.get(server_id))
+async def mcp_reconnect_server(server_id: str, request: Request):
+    record = _record(request, server_id)
     await mcp_manager.forget(server_id)
     connection = mcp_manager.connection(server_id)
     try:
@@ -107,5 +130,5 @@ async def mcp_test_definition(body: ServerInput):
     """Try a definition before saving it."""
     from app.services.mcp_service import clean_server
 
-    record = _guard(lambda: clean_server(body.model_dump(exclude_none=True)))
+    record = _guard(lambda: clean_server(body.model_dump(exclude_none=True, exclude={"scope"})))
     return await mcp_manager.test(record)

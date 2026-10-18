@@ -7,11 +7,12 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.services import user_questions as _user_questions  # noqa: F401 - registers user.ask
-from app.routers import questions, attachments, auth, bots, models, chat, approvals, upload, settings as settings_router, connectors, audit, computers, tools, files, gate, commands, secrets, schedules, mcp
+from app.routers import admin, questions, attachments, auth, bots, models, chat, approvals, upload, settings as settings_router, connectors, audit, computers, tools, files, gate, commands, secrets, schedules, mcp
 from app.services.mcp_service import mcp_manager
 from app.services.scheduler import scheduler
 from app.services.computer_provider import computer_provider
 from app.services.auth_service import auth_service
+from app.services.identity import reset_current_owner, set_current_owner
 from app.services.llm_service import current_llm_config
 
 
@@ -81,7 +82,12 @@ async def require_authentication(request: Request, call_next):
             headers={"WWW-Authenticate": "Bearer"},
         )
     request.state.user = user
-    return await call_next(request)
+    # Everything this request reads or writes belongs to this account.
+    token = set_current_owner(user["id"])
+    try:
+        return await call_next(request)
+    finally:
+        reset_current_owner(token)
 
 app.include_router(auth.router)
 app.include_router(bots.router)
@@ -91,6 +97,7 @@ app.include_router(upload.router)
 app.include_router(attachments.router)
 app.include_router(approvals.router)
 app.include_router(questions.router)
+app.include_router(admin.router)
 app.include_router(settings_router.router)
 app.include_router(connectors.router)
 app.include_router(audit.router)

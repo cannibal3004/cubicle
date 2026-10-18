@@ -4,6 +4,7 @@ from unittest import mock
 
 from app.routers import tools as tools_router
 from app.services.llm_tools import ToolSpec
+from app.services import storage_service as storage_module
 
 
 class Storage:
@@ -42,7 +43,7 @@ class ToolCatalogTests(unittest.TestCase):
             return specs
 
         with mock.patch.object(tools_router, "connector_tool_specs", fake_specs), mock.patch.object(
-            tools_router, "storage_service", Storage(["exa", 7])
+            storage_module, "storage_service", Storage(["exa", 7])
         ), mock.patch.object(tools_router, "composio_service", Composio()), mock.patch.object(
             tools_router.settings, "COMPUTER_PROVIDER", "docker"
         ):

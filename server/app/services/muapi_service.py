@@ -83,7 +83,7 @@ class MuapiService:
         for interface parity and ignored: MUAPI takes a single prompt.
         Uses exact user-selected model slug without any model remapping or fallback.
         """
-        config = config or resolve_llm_config(storage_service.get_settings())
+        config = config or resolve_llm_config(storage_service.get_app_settings())
         api_key = config.api_key
         base_url = config.base_url
 

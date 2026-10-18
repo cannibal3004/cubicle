@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.services.action_gateway import ActionDefinition, ActionGateway, ActionInvocation, action_gateway
-from app.services.storage_service import StorageService, storage_service
+from app.services.storage_service import StorageService, current_storage
 
 logger = logging.getLogger(__name__)
 
@@ -273,7 +273,7 @@ def public(record: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _storage(storage: Optional[StorageService]) -> StorageService:
-    return storage or storage_service
+    return storage or current_storage()
 
 
 def list_for_bot(bot_id: str, storage: Optional[StorageService] = None) -> List[Dict[str, Any]]:

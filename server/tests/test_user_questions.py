@@ -18,6 +18,7 @@ from app.services.storage_service import StorageService
 from app.services.turn_manager import Turn, TurnManager
 from app.services.user_questions import QuestionBroker, QuestionError, execute_ask, register_question_actions
 from app.services.workspace_service import WorkspaceService
+from app.services import storage_service as storage_module
 
 from tests.test_chat_router import NoComposio, _fake_context_window, _scripted_stream
 
@@ -175,7 +176,7 @@ class AskUserTurnTests(unittest.TestCase):
             ],
         )
         patches = [
-            mock.patch.object(chat_router, "storage_service", self.storage),
+            mock.patch.object(storage_module, "storage_service", self.storage),
             mock.patch.object(chat_router.llm_service, "current_llm_config", return_value=self.config),
             mock.patch.object(chat_router.llm_service, "stream_chat_completion", stream),
             mock.patch.object(chat_router, "composio_service", NoComposio()),

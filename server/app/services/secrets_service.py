@@ -16,7 +16,7 @@ import re
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 from urllib.parse import quote
 
-from app.services.storage_service import StorageService, storage_service
+from app.services.storage_service import StorageService, current_storage
 
 NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 MAX_VALUE_CHARS = 8192
@@ -60,7 +60,7 @@ def validate_value(value: Any) -> str:
 
 
 def _storage(storage: Optional[StorageService]) -> StorageService:
-    return storage or storage_service
+    return storage or current_storage()
 
 
 def list_app_secrets(storage: Optional[StorageService] = None) -> List[Dict[str, Any]]:

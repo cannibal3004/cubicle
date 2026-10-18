@@ -28,6 +28,7 @@ from app.services.scheduler import Scheduler
 from app.services.storage_service import StorageService
 from app.services.turn_manager import TurnBusyError, TurnManager
 from app.services.workspace_service import WorkspaceService
+from app.services import storage_service as storage_module
 
 # A fixed zone keeps the maths the same on any host; Monday 2026-10-12 09:00.
 TZ = timezone(timedelta(hours=-5))
@@ -229,7 +230,7 @@ class ScheduleToolTests(unittest.TestCase):
     def test_gateway_actions(self):
         gateway = ActionGateway(workspace=WorkspaceService(Path(self.temp_dir.name)), approvals=_Broker(), audit=_Audit())
         register_schedule_actions(gateway)
-        with mock.patch.object(schedule_service, "storage_service", self.storage), mock.patch.object(
+        with mock.patch.object(storage_module, "storage_service", self.storage), mock.patch.object(
             schedule_service, "app_timezone", lambda: TZ
         ), mock.patch.object(schedule_service, "now_local", lambda tz=None: NOW):
             create = build_invocation("schedule_create", {"name": "Digest", "prompt": "Summarise.", "kind": "daily", "time": "08:00"}, self.bot)
@@ -265,8 +266,8 @@ class ScheduleToolTests(unittest.TestCase):
             self.assertEqual(self.storage.list_schedules(self.bot), [])
 
     def test_router_crud_and_ownership(self):
-        with mock.patch.object(schedules_router, "storage_service", self.storage), mock.patch.object(
-            schedule_service, "storage_service", self.storage
+        with mock.patch.object(storage_module, "storage_service", self.storage), mock.patch.object(
+            storage_module, "storage_service", self.storage
         ), mock.patch.object(schedule_service, "app_timezone", lambda: TZ), mock.patch.object(schedule_service, "now_local", lambda tz=None: NOW):
             created = asyncio.run(
                 schedules_router.create_schedule(self.bot, schedules_router.ScheduleInput(name="Digest", prompt="Go.", cadence={"kind": "daily", "time": "08:00"}))
@@ -319,13 +320,13 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         except PermissionError:
             pass
 
-    async def _run_turn(self, bot_id, message):
+    async def _run_turn(self, bot_id, message, owner_id=None):
         self.started.append((bot_id, message))
         self.storage.add_message(message)
         return _FakeTurn()
 
     async def test_due_schedules_run_and_a_busy_bot_is_skipped(self):
-        with mock.patch.object(schedule_service, "storage_service", self.storage), mock.patch.object(
+        with mock.patch.object(storage_module, "storage_service", self.storage), mock.patch.object(
             schedule_service, "app_timezone", lambda: TZ
         ), mock.patch.object(schedule_service, "now_local", lambda tz=None: NOW), mock.patch.object(scheduler_module, "turn_manager", self.manager):
             daily = create_schedule(self.bot, "Digest", "Summarise.", {"kind": "daily", "time": "09:30"}, storage=self.storage, tz=TZ, now=NOW)
@@ -357,10 +358,10 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
             self.manager.cancel(self.bot)
 
     async def test_a_turn_that_cannot_start_is_recorded(self):
-        async def busy(bot_id, message):
+        async def busy(bot_id, message, owner_id=None):
             raise TurnBusyError(mock.Mock())
 
-        with mock.patch.object(schedule_service, "storage_service", self.storage), mock.patch.object(
+        with mock.patch.object(storage_module, "storage_service", self.storage), mock.patch.object(
             schedule_service, "app_timezone", lambda: TZ
         ), mock.patch.object(schedule_service, "now_local", lambda tz=None: NOW), mock.patch.object(scheduler_module, "turn_manager", self.manager):
             created = create_schedule(self.bot, "Ping", "Ping.", {"kind": "every", "minutes": 5}, storage=self.storage, tz=TZ, now=NOW)

@@ -144,6 +144,24 @@ SCHEMA_MIGRATIONS = {
         );
         CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
     """,
+    # Settings per owner: app-wide keys belong to the pseudo-owner 'system',
+    # personal keys to each account. The old table had one row per key.
+    7: """
+        CREATE TABLE settings_v2 (
+            owner_id TEXT NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            is_secret INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (owner_id, key)
+        );
+        INSERT INTO settings_v2(owner_id, key, value, is_secret)
+            SELECT CASE WHEN key IN ('llm_provider', 'llm_api_key', 'llm_base_url', 'llm_reasoning_effort', 'muapi_api_key',
+                                     'muapi_base_url', 'composio_api_key', 'composio_key', 'default_model', 'decider_url', 'mcp_servers')
+                        THEN 'system' ELSE owner_id END,
+                   key, value, is_secret FROM settings;
+        DROP TABLE settings;
+        ALTER TABLE settings_v2 RENAME TO settings;
+    """,
 }
 
 OWNER_TABLES = (

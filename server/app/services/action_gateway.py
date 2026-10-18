@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, Literal, Mapping, Optional, Tuple
 
 from app.schemas.contracts import ActionRequest, ActionResult
 from app.services.approval_broker import ApprovalBroker, approval_broker
-from app.services.storage_service import StorageService, storage_service
+from app.services.storage_service import StorageService, current_storage
 from app.services.workspace_service import (
     WorkspaceService,
     WorkspaceToolCall,
@@ -140,11 +140,11 @@ class ActionGateway:
         self,
         workspace: WorkspaceService = workspace_service,
         approvals: ApprovalBroker = approval_broker,
-        audit: StorageService = storage_service,
+        audit: Optional[StorageService] = None,
     ):
         self.workspace = workspace
         self.approvals = approvals
-        self.audit = audit
+        self._audit = audit
         self.definitions: Dict[str, ActionDefinition] = {
             "workspace.list": ActionDefinition(
                 name="workspace.list",
@@ -183,6 +183,11 @@ class ActionGateway:
         }
         self._pending: Dict[str, Tuple[ActionRequest, Any]] = {}
         self._decisions: Dict[str, str] = {}
+
+    @property
+    def audit(self) -> StorageService:
+        # Audit rows belong to whoever is acting unless a store was pinned.
+        return self._audit or current_storage()
 
     def register_action(
         self,

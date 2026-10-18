@@ -29,7 +29,7 @@ function mapText(map) {
 // MCP servers: a command run over stdio or a streamable-HTTP URL, whose tools
 // the bots get like a connected app's. Secrets never go in here: write $NAME
 // to use an app secret.
-export default function McpServersSection({ load, create, update, remove, test, testDraft, reconnect }) {
+export default function McpServersSection({ admin = false, load, create, update, remove, test, testDraft, reconnect }) {
   const [items, setItems] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
@@ -39,6 +39,7 @@ export default function McpServersSection({ load, create, update, remove, test, 
   const [url, setUrl] = useState('');
   const [vars, setVars] = useState('');
   const [trust, setTrust] = useState(false);
+  const [scope, setScope] = useState('user');
   const [draftResult, setDraftResult] = useState(null);
   const [results, setResults] = useState({});
   const [error, setError] = useState('');
@@ -83,6 +84,7 @@ export default function McpServersSection({ load, create, update, remove, test, 
     url: transport === 'http' ? url.trim() : undefined,
     headers: transport === 'http' ? parseMap(vars) : undefined,
     trust_read_only: trust,
+    scope: admin ? scope : 'user',
   });
 
   const canSubmit = name.trim() && (transport === 'stdio' ? command.trim() : url.trim());
@@ -138,6 +140,7 @@ export default function McpServersSection({ load, create, update, remove, test, 
                   <span className={STATUS_STYLES[item.status] || 'text-zinc-400'}>{item.status}</span>
                   {item.status === 'connected' && <span>{item.tool_count} tools{item.server_name ? ` · ${item.server_name}` : ''}</span>}
                   {item.error && <span className="text-rose-300 truncate" title={item.error}>{item.error}</span>}
+                  <span>{item.scope === 'system' ? 'system · everyone' : 'yours'}</span>
                   {item.trust_read_only && <span>trusted read-only</span>}
                   {item.secret_references?.length > 0 && <span>secrets: {item.secret_references.join(', ')}</span>}
                   {item.created_by === 'bot' && <span>added by a bot</span>}
@@ -183,6 +186,14 @@ export default function McpServersSection({ load, create, update, remove, test, 
             rows={2}
             className={`${inputClass} w-full resize-y`}
           />
+          {admin && (
+            <label className="flex items-center gap-2 text-[11px] text-zinc-400">
+              <select value={scope} onChange={(e) => setScope(e.target.value)} className={inputClass}>
+                <option value="user">Only my bots</option>
+                <option value="system">Every bot of every account (system)</option>
+              </select>
+            </label>
+          )}
           <label className="flex items-center gap-2 text-[11px] text-zinc-400">
             <input type="checkbox" checked={trust} onChange={(e) => setTrust(e.target.checked)} className="accent-cyan-400" />
             Treat all its tools as read-only (no approval); only for servers that cannot change anything, such as documentation or search.

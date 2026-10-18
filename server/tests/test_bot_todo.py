@@ -10,6 +10,7 @@ from app.services.bot_todo import TODO_MAX_ITEMS, TodoError, add_todo, clean_tod
 from app.services.llm_tools import TODO_TOOLS, ToolCallError, available_tools, build_invocation, describe_tools
 from app.services.storage_service import StorageService
 from app.services.workspace_service import WorkspaceService
+from app.services import storage_service as storage_module
 
 
 class _Audit:
@@ -101,7 +102,7 @@ class BotTodoTests(unittest.TestCase):
     def test_gateway_actions_run_without_approval_and_return_the_whole_list(self):
         gateway = ActionGateway(workspace=WorkspaceService(Path(self.temp_dir.name)), approvals=_Broker(), audit=_Audit())
         register_todo_actions(gateway)
-        with mock.patch.object(bot_todo, "storage_service", self.storage):
+        with mock.patch.object(storage_module, "storage_service", self.storage):
             add = build_invocation("todo_add", {"items": ["a", " b "]}, self.bot)
             self.assertEqual(add.name, "todo.add")
             self.assertEqual(add.arguments, {"bot_id": self.bot, "items": ["a", "b"]})

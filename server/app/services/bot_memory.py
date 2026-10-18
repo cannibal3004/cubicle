@@ -24,7 +24,7 @@ from typing import Any, Dict, Optional
 
 from app.config import settings
 from app.services.action_gateway import ActionDefinition, ActionGateway, ActionInvocation, action_gateway
-from app.services.storage_service import StorageService, storage_service
+from app.services.storage_service import StorageService, current_storage
 
 MEMORY_MAX_CHARS = settings.BOT_MEMORY_MAX_CHARS
 MEMORY_ITEM_TYPE = "memory"
@@ -51,7 +51,7 @@ def clean_memory(text: Any) -> str:
 
 
 def get_memory(bot_id: str, storage: Optional[StorageService] = None) -> str:
-    for bot in (storage or storage_service).get_bots():
+    for bot in (storage or current_storage()).get_bots():
         if bot.get("id") == bot_id:
             return str(bot.get("memory") or "")
     return ""
@@ -59,7 +59,7 @@ def get_memory(bot_id: str, storage: Optional[StorageService] = None) -> str:
 
 def set_memory(bot_id: str, text: Any, storage: Optional[StorageService] = None) -> Dict[str, Any]:
     """Replace the bot's notes. Returns the stored notes and when."""
-    storage = storage or storage_service
+    storage = storage or current_storage()
     cleaned = clean_memory(text)
     return {"memory": cleaned, **_save_memory(bot_id, cleaned, storage)}
 
@@ -96,7 +96,7 @@ def _excerpt(text: str, start: int, end: int) -> str:
 
 def edit_memory(bot_id: str, old_text: Any, new_text: Any, storage: Optional[StorageService] = None) -> Dict[str, Any]:
     """Replace one unique passage of the bot's notes. Returns the new size and the changed passage in context."""
-    storage = storage or storage_service
+    storage = storage or current_storage()
     if not isinstance(old_text, str) or not old_text.strip():
         raise MemoryError("'old_text' must be the exact passage to replace.")
     if new_text is None:

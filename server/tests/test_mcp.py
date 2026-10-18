@@ -82,6 +82,13 @@ class ServerDefinitionTests(unittest.TestCase):
                 store.get(record["id"])
 
 
+def _admin_request():
+    """What the auth middleware leaves on a request from the first (admin) account."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(state=SimpleNamespace(user={"id": "local-user", "username": "owner", "role": "owner"}), headers={}, cookies={})
+
+
 class LiveProbeServerTests(unittest.IsolatedAsyncioTestCase):
     """Runs the fixture server as a real subprocess over stdio."""
 
@@ -175,16 +182,16 @@ class LiveProbeServerTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(mcp_router, "mcp_store", self.store), mock.patch.object(mcp_router, "mcp_manager", self.manager), mock.patch.object(
             mcp_tools, "mcp_store", self.store
         ), mock.patch.object(mcp_tools, "mcp_manager", self.manager):
-            created = (await mcp_router.mcp_add_server(mcp_router.ServerInput(**probe_definition())))["server"]
+            created = (await mcp_router.mcp_add_server(mcp_router.ServerInput(**probe_definition()), _admin_request()))["server"]
             self.assertEqual(created["name"], "Probe")
-            tested = await mcp_router.mcp_test_server(created["id"])
+            tested = await mcp_router.mcp_test_server(created["id"], _admin_request())
             self.assertTrue(tested["ok"])
             self.assertEqual(sorted(t["name"] for t in tested["tools"]), ["add", "secret_name", "shout"])
             listed = (await mcp_router.mcp_list_servers())["servers"]
             self.assertEqual(listed[0]["status"], "connected")
             self.assertEqual(listed[0]["tool_count"], 3)
             with self.assertRaises(HTTPException) as caught:
-                await mcp_router.mcp_add_server(mcp_router.ServerInput(name="Probe", command="x"))
+                await mcp_router.mcp_add_server(mcp_router.ServerInput(name="Probe", command="x"), _admin_request())
             self.assertEqual(caught.exception.status_code, 422)
 
             # The bot's tools: list is free, add and remove ask.
@@ -211,7 +218,7 @@ class LiveProbeServerTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(outcome["server"]["enabled"])
             removed = await mcp_tools.remove_server(build_invocation("mcp_remove_server", {"id": outcome["server"]["id"]}, "bot-1"))
             self.assertEqual(removed["removed"]["name"], "Broken")
-            self.assertEqual(len(self.store.list()), 2)
+            self.assertEqual(len(self.manager.records()), 2)
 
 
 if __name__ == "__main__":

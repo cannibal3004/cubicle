@@ -13,7 +13,7 @@ from app.services import llm_service
 from app.services.bot_memory import MEMORY_MAX_CHARS, MemoryError, clean_memory, memory_note_message
 from app.services.bot_todo import TODO_MAX_ITEMS, TodoError, clean_todo, todo_note_message
 from app.services.computer_provider import ComputerProviderError, computer_id_for_bot, computer_provider
-from app.services.storage_service import storage_service
+from app.services.storage_service import current_storage
 from app.services.turn_manager import turn_manager
 
 logger = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ def _find(bots: List[Dict[str, Any]], bot_id: str) -> int:
 
 @router.get("", response_model=List[Bot])
 async def get_bots():
-    return storage_service.get_bots()
+    return current_storage().get_bots()
 
 
 @router.post("", response_model=Bot)
@@ -122,15 +122,15 @@ async def create_bot(bot_data: BotInput):
         "unread_count": 0,
         "created_at": datetime.now().isoformat(),
     }
-    bots = storage_service.get_bots()
+    bots = current_storage().get_bots()
     bots.append(bot)
-    storage_service.save_bots(bots)
+    current_storage().save_bots(bots)
     return bot
 
 
 @router.put("/{bot_id}", response_model=Bot)
 async def update_bot(bot_id: str, updates: BotUpdate):
-    bots = storage_service.get_bots()
+    bots = current_storage().get_bots()
     index = _find(bots, bot_id)
     changes = updates.model_dump(exclude_none=True)
     if "name" in changes:
@@ -183,18 +183,18 @@ async def update_bot(bot_id: str, updates: BotUpdate):
         if archived:
             # An archived bot should not keep working in the background.
             turn_manager.cancel(bot_id)
-    storage_service.save_bots(bots)
+    current_storage().save_bots(bots)
     if memory_note is not None:
-        storage_service.add_message(memory_note)
+        current_storage().add_message(memory_note)
     if todo_note is not None:
-        storage_service.add_message(todo_note)
+        current_storage().add_message(todo_note)
     return bots[index]
 
 
 @router.delete("/{bot_id}")
 async def delete_bot(bot_id: str):
     """Remove a bot together with its transcript, running turn, and computer."""
-    bots = storage_service.get_bots()
+    bots = current_storage().get_bots()
     index = _find(bots, bot_id)
     turn_manager.cancel(bot_id)
     try:
@@ -203,9 +203,9 @@ async def delete_bot(bot_id: str):
         pass  # No computer, or none running: nothing to stop.
     except Exception as exc:  # The deletion must not fail because a container misbehaves.
         logger.warning("Could not stop the computer for %s during deletion: %s", bot_id, exc)
-    deleted_messages = storage_service.delete_messages(bot_id)
-    storage_service.delete_bot_secrets(bot_id)
-    storage_service.delete_bot_schedules(bot_id)
+    deleted_messages = current_storage().delete_messages(bot_id)
+    current_storage().delete_bot_secrets(bot_id)
+    current_storage().delete_bot_schedules(bot_id)
     bots.pop(index)
-    storage_service.save_bots(bots)
+    current_storage().save_bots(bots)
     return {"status": "ok", "deleted_id": bot_id, "deleted_messages": deleted_messages}

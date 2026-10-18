@@ -10,6 +10,7 @@ from app.services.bot_memory import MEMORY_MAX_CHARS, MemoryError, clean_memory,
 from app.services.llm_tools import MEMORY_TOOLS, ToolCallError, available_tools, build_invocation, describe_tools
 from app.services.storage_service import StorageService
 from app.services.workspace_service import WorkspaceService
+from app.services import storage_service as storage_module
 
 
 class _Audit:
@@ -99,7 +100,7 @@ class BotMemoryTests(unittest.TestCase):
     def test_gateway_actions_read_and_write_without_approval(self):
         gateway = ActionGateway(workspace=WorkspaceService(Path(self.temp_dir.name)), approvals=_Broker(), audit=_Audit())
         register_memory_actions(gateway)
-        with mock.patch.object(bot_memory, "storage_service", self.storage):
+        with mock.patch.object(storage_module, "storage_service", self.storage):
             write = build_invocation("memory_write", {"text": "Decisions: use sqlite."}, self.bot["id"])
             self.assertEqual(write.name, "memory.write")
             request, approval = gateway.open("t", self.bot["id"], write)
