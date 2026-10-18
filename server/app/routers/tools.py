@@ -25,8 +25,7 @@ GROUP_LABELS = {
     "github": "GitHub (built-in)",
     "connectors": "App connections",
     "mcp": "MCP servers",
-    "mcp": "MCP servers",
-    "mcp": "MCP servers",
+    "questions": "Questions to you",
 }
 
 

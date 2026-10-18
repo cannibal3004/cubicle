@@ -370,6 +370,20 @@ export function subscribeToChatStream(threadId, options, onEvent, onError) {
   };
 }
 
+// Answer a question a bot asked mid-reply (an ask_user card).
+export async function answerQuestion(requestId, answer, optionIndex = null) {
+  const res = await apiFetch(`${API_BASE_URL}/questions/answer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ request_id: requestId, answer, option_index: optionIndex }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to send the answer' }));
+    throw new Error(err.detail || 'Failed to send the answer');
+  }
+  return res.json();
+}
+
 export async function respondApproval(requestId, action) {
   const res = await apiFetch(`${API_BASE_URL}/approvals/respond`, {
     method: 'POST',

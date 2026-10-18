@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import MessageItem from './MessageItem';
 import ApprovalCard from './ApprovalCard';
+import QuestionCard from './QuestionCard';
 import CommandPicker from './CommandPicker';
 import ModelPicker from './ModelPicker';
 import ToolsPopover from './ToolsPopover';
@@ -19,6 +20,7 @@ import {
   uploadImage,
   uploadAttachment,
   respondApproval,
+  answerQuestion,
   fetchCommands,
   clearChatHistory,
   compactThread,
@@ -212,6 +214,10 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     await respondApproval(requestId, action);
   };
 
+  const handleQuestionAnswer = async (requestId, answer, optionIndex) => {
+    await answerQuestion(requestId, answer, optionIndex);
+  };
+
   // Attaching: the first image goes to the model as a picture; every other
   // file is uploaded to where the bot can reach it and arrives as a card.
   const attachImage = async (file) => {
@@ -352,6 +358,9 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             ...prev.filter((approval) => approval.requestId !== event.requestId),
             { ...event, botId },
           ]);
+        } else if (event.type === 'request.answered' || event.type === 'request.expired') {
+          // A question card is done with (answered, or the bot stopped waiting).
+          setPendingApprovals((prev) => prev.filter((approval) => approval.requestId !== event.requestId));
         } else if (event.type === 'gate.scored') {
           // The auto-approval gate's verdict on a pending card. If it approved
           // the action, the card is about to be replaced by tool.started.
@@ -836,13 +845,13 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
           ))}
 
           {/* Approval and takeover cards sit where the conversation currently is, not at the top. */}
-          {botApprovals.map((approval) => (
-            <ApprovalCard
-              key={approval.requestId}
-              approval={approval}
-              onRespond={handleApprovalResponse}
-            />
-          ))}
+          {botApprovals.map((approval) =>
+            approval.requestType === 'question' ? (
+              <QuestionCard key={approval.requestId} question={approval} onAnswer={handleQuestionAnswer} />
+            ) : (
+              <ApprovalCard key={approval.requestId} approval={approval} onRespond={handleApprovalResponse} />
+            )
+          )}
 
           {botTakeovers.map((request) => (
             <div
