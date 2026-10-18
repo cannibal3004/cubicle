@@ -48,24 +48,72 @@ export async function fetchAuthStatus() {
   return res.json();
 }
 
-export async function loginWithToken(token) {
+// Sign in or set up: the server answers 401 with a reason (invalid,
+// totp_required, totp_invalid), 429 when the username is locked, 409 when
+// setup state does not match. The thrown error carries `reason`.
+async function authPost(path, body) {
   let res;
   try {
-    res = await fetch(`${API_BASE_URL}/auth/login`, {
+    res = await fetch(`${API_BASE_URL}${path}`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
+      body: JSON.stringify(body),
     });
   } catch (err) {
     throw new Error('The API server is unreachable.');
   }
-  if (res.status === 401) throw new Error('That token was not accepted.');
-  if (!res.ok) throw new Error(`Sign in failed (HTTP ${res.status}).`);
+  if (!res.ok) {
+    let detail = null;
+    try {
+      detail = (await res.json()).detail;
+    } catch (err) {
+      /* no body */
+    }
+    const message = typeof detail === 'string' ? detail : detail?.message || `Sign in failed (HTTP ${res.status}).`;
+    const error = new Error(message);
+    error.reason = typeof detail === 'object' && detail ? detail.reason : null;
+    error.status = res.status;
+    throw error;
+  }
   const data = await res.json();
   sessionPromise = Promise.resolve(data);
   return data;
 }
+
+export async function loginWithPassword(username, password, code = null) {
+  return authPost('/auth/login', { username, password, code: code || null });
+}
+
+export async function setupAccount(username, password) {
+  return authPost('/auth/setup', { username, password });
+}
+
+async function accountJson(path, options = {}) {
+  const res = await apiFetch(`${API_BASE_URL}${path}`, options);
+  if (!res.ok) {
+    let detail = null;
+    try {
+      detail = (await res.json()).detail;
+    } catch (err) {
+      /* no body */
+    }
+    throw new Error(typeof detail === 'string' ? detail : detail?.message || `Request failed (HTTP ${res.status})`);
+  }
+  return res.json();
+}
+
+const jsonBody = (body) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+export const fetchAccount = () => accountJson('/auth/me');
+export const changePassword = (currentPassword, newPassword) =>
+  accountJson('/auth/password', jsonBody({ current_password: currentPassword, new_password: newPassword }));
+export const startTotp = () => accountJson('/auth/totp/start', { method: 'POST' });
+export const confirmTotp = (code) => accountJson('/auth/totp/confirm', jsonBody({ code }));
+export const disableTotp = (password) => accountJson('/auth/totp/disable', jsonBody({ password }));
+export const createApiToken = (name) => accountJson('/auth/tokens', jsonBody({ name }));
+export const deleteApiToken = (id) => accountJson(`/auth/tokens/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export const signOutOtherSessions = () => accountJson('/auth/sessions/sign-out-others', { method: 'POST' });
 
 export async function logout() {
   try {

@@ -12,3 +12,7 @@ tzdata>=2024.1
 mcp>=2.3.0
 # Text from PDF, Word, Excel and PowerPoint attachments.
 markitdown[docx,pdf,pptx,xls,xlsx]>=0.1.8
+# Password login: argon2 hashes, TOTP two-factor, and the enrolment QR code.
+argon2-cffi>=23.1.0
+pyotp>=2.9.0
+segno>=1.6.0

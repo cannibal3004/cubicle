@@ -112,6 +112,38 @@ SCHEMA_MIGRATIONS = {
         );
         CREATE INDEX IF NOT EXISTS idx_schedules_bot ON schedules(owner_id, bot_id);
     """,
+    # Password login: credentials and two-factor state on the user row,
+    # server-side sessions behind the cookie, and API tokens for scripts.
+    6: """
+        ALTER TABLE users ADD COLUMN password_hash TEXT;
+        ALTER TABLE users ADD COLUMN totp_secret TEXT;
+        ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE users ADD COLUMN totp_pending TEXT;
+        ALTER TABLE users ADD COLUMN recovery_codes TEXT;
+        ALTER TABLE users ADD COLUMN totp_last_step INTEGER;
+        ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE users ADD COLUMN updated_at TEXT;
+        ALTER TABLE users ADD COLUMN last_login_at TEXT;
+        CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            user_agent TEXT,
+            address TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+        CREATE TABLE IF NOT EXISTS api_tokens (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            last_used_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
+    """,
 }
 
 OWNER_TABLES = (

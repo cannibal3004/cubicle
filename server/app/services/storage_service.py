@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
-from app.services.auth_service import LOCAL_USER_ID
+from app.services.identity import LOCAL_USER_ID
 from app.services.database import Database
 from app.services.secret_store import SecretStore, SecretStoreError
 

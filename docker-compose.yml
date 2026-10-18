@@ -1,7 +1,7 @@
 # Full stack: Caddy (TLS + single origin) -> Next.js client + FastAPI server,
 # with the optional Docker/Playwright computer runtime behind a socket proxy.
 #
-#   cp .env.example .env     # set APP_AUTH_TOKEN and SITE_ADDRESS
+#   cp .env.example .env     # set SITE_ADDRESS
 #   docker compose up --build -d
 #
 # To enable the computer runtime add to .env:
@@ -44,7 +44,6 @@ services:
     restart: unless-stopped
     environment:
       # Required. Pasted into the login screen by anyone using the app.
-      APP_AUTH_TOKEN: ${APP_AUTH_TOKEN:?Set APP_AUTH_TOKEN in .env, for example from `openssl rand -hex 32`}
       # 1 when SITE_ADDRESS is https://, 0 for a plain http:// address.
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-1}
       CORS_ORIGINS: ${SITE_ADDRESS:-https://localhost}
