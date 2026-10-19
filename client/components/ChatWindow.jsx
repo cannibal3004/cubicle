@@ -385,6 +385,13 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             ...prev,
             { id: `local-${Date.now()}`, sender: 'system', text: `Context compaction failed: ${event.error}. Continuing with the full context.`, isError: true, local: true, created_at: new Date().toISOString() },
           ]);
+        } else if (event.type === 'model.queued') {
+          // In line for a slot at the model server; shown until the request starts.
+          updateMessages((prev) =>
+            prev.map((msg) => (msg.id === streamingMsgId ? { ...msg, waiting: { ahead: event.ahead, limit: event.limit } } : msg))
+          );
+        } else if (event.type === 'model.started') {
+          updateMessages((prev) => prev.map((msg) => (msg.id === streamingMsgId && msg.waiting ? { ...msg, waiting: null } : msg)));
         } else if (event.type === 'turn.usage' && event.usage) {
           updateMessages((prev) =>
             prev.map((msg) => (msg.id === streamingMsgId ? { ...msg, usage: event.usage } : msg))

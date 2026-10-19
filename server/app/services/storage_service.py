@@ -37,6 +37,7 @@ SETTING_KEYS = {
     "auto_approval",
     "decider_url",
     "decider_threshold",
+    "llm_max_concurrent",
 }
 # App-wide keys live under the system owner and only admins change them;
 # every other key is personal to the account that saved it.
@@ -51,6 +52,7 @@ APP_SETTING_KEYS = {
     "composio_key",
     "default_model",
     "decider_url",
+    "llm_max_concurrent",
     "mcp_servers",
 }
 
@@ -128,6 +130,7 @@ class StorageService:
             "auto_approval": settings.AUTO_APPROVAL if settings.AUTO_APPROVAL in {"off", "shadow", "on"} else "off",
             "decider_url": settings.DECIDER_URL,
             "decider_threshold": settings.DECIDER_THRESHOLD,
+            "llm_max_concurrent": settings.LLM_MAX_CONCURRENT_REQUESTS,
         }
 
     def _stored_setting_keys(self) -> set:

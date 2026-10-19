@@ -7,6 +7,7 @@ import {
   saveSettings,
   fetchAccount,
   updateProfile,
+  fetchModelSlots,
   logout,
   checkDecider,
   fetchSecrets,
@@ -120,6 +121,8 @@ export default function SettingsPage({
   const [apiKey, setApiKey] = useState("");
   const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState("");
+  const [maxConcurrent, setMaxConcurrent] = useState(4);
+  const [slots, setSlots] = useState(null); // {limit, active, waiting}
   const [showApiKey, setShowApiKey] = useState(false);
 
   // Composio
@@ -150,6 +153,8 @@ export default function SettingsPage({
         })
         .catch(console.error);
 
+      fetchModelSlots().then(setSlots).catch(() => setSlots(null));
+
       fetchSettings()
         .then((data) => {
           if (data) {
@@ -158,6 +163,7 @@ export default function SettingsPage({
             setApiKey("");
             setApiKeyConfigured(Boolean(data.llm_api_key_configured));
             setReasoningEffort(data.llm_reasoning_effort || "");
+            setMaxConcurrent(Number.isFinite(Number(data.llm_max_concurrent)) ? Number(data.llm_max_concurrent) : 4);
             setComposioApiKey("");
             setComposioConfigured(Boolean(data.composio_api_key_configured));
             setDefaultModel(data.default_model || "");
@@ -201,6 +207,7 @@ export default function SettingsPage({
               llm_base_url: baseUrl.trim(),
               llm_api_key: apiKey,
               llm_reasoning_effort: reasoningEffort,
+              llm_max_concurrent: Math.max(0, Math.min(64, Math.round(Number(maxConcurrent) || 0))),
               composio_api_key: composioApiKey,
               default_model: defaultModel,
               theme: "dark",
@@ -552,6 +559,37 @@ export default function SettingsPage({
               servers that support it. Not every server accepts every level (xhigh and max are llama.cpp /
               halogen-flash-server levels). A server that rejects the value returns an error in chat, so switch
               back to “Not sent” if that happens. Saved with the default model.
+            </p>
+          </div>
+
+          {/* Concurrent requests */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+              <span className="text-sky-400">•</span> Requests at a time
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                suppressHydrationWarning={true}
+                type="number"
+                min="0"
+                max="64"
+                step="1"
+                value={maxConcurrent}
+                disabled={!admin}
+                onChange={(e) => setMaxConcurrent(e.target.value)}
+                className={`${inputClass} w-28 font-mono`}
+              />
+              {admin && <SaveButton field="model" onClick={handleSaveModel} />}
+              {slots && (
+                <span className="text-[11px] text-zinc-400">
+                  Right now: {slots.active} running{slots.waiting ? `, ${slots.waiting} waiting` : ''}.
+                </span>
+              )}
+            </div>
+            <p className="text-[10px] leading-relaxed text-zinc-500">
+              How many requests the model server handles at once; everything beyond that waits its turn, shared fairly between
+              accounts, and the chat shows the place in line. Match it to the server (a halogen-flash-server runs 4). 0 means no limit.
+              Saved with the default model.
             </p>
           </div>
         </div>

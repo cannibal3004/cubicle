@@ -228,6 +228,14 @@ function MessageItem({ message, botId }) {
   return (
     <div className="flex justify-start my-2">
       <div className="dark-bubble-bot px-5 py-3 text-xs font-sans max-w-2xl w-full shadow-md text-zinc-100 leading-relaxed overflow-hidden">
+        {message.isStreaming && message.waiting && (
+          <div className="mb-2 flex items-center gap-2 text-[11px] text-zinc-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+            Waiting for a model slot
+            {message.waiting.ahead > 0 ? ` · ${message.waiting.ahead} ahead` : ' · next in line'}
+            {message.waiting.limit > 0 ? ` · ${message.waiting.limit} run at a time` : ''}
+          </div>
+        )}
         {reasoning && (
           <ThinkingBlock
             reasoning={reasoning}

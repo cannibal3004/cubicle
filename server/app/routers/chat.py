@@ -619,6 +619,11 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         usage_prompt = int(event.get("prompt_tokens") or 0)
                         usage_completion += int(event.get("completion_tokens") or 0)
                         turn.emit({"type": "turn.usage", "botMsgId": bot_msg_id, "usage": usage_payload()})
+                    elif event["type"] == "model.queued":
+                        # Waiting for a slot at the model server; the chat shows the place in line.
+                        turn.emit({"type": "model.queued", "botMsgId": bot_msg_id, "ahead": int(event.get("ahead") or 0), "limit": int(event.get("limit") or 0)})
+                    elif event["type"] == "model.started":
+                        turn.emit({"type": "model.started", "botMsgId": bot_msg_id, "waitedMs": int(event.get("waited_ms") or 0)})
                     elif event["type"] == "truncated":
                         round_cut = True
                         turn.emit({"type": "turn.truncated", "botMsgId": bot_msg_id, "reason": event.get("reason") or "length"})

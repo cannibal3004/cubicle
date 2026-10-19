@@ -164,3 +164,6 @@ class AppSettingsSchema(BaseModel):
     )
     # An action is auto-approved only when every risk score is below this.
     decider_threshold: float = Field(default_factory=lambda: settings.DECIDER_THRESHOLD, ge=0.01, le=0.99)
+    # Requests in flight at the model server at once, shared fairly between
+    # accounts; the rest wait in the chat with their place shown. 0 = no limit.
+    llm_max_concurrent: int = Field(default_factory=lambda: settings.LLM_MAX_CONCURRENT_REQUESTS, ge=0, le=64)
