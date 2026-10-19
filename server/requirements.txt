@@ -1,18 +1,22 @@
-fastapi>=0.110.0
-uvicorn[standard]>=0.28.0
-httpx>=0.27.0
-sse-starlette>=2.0.0
-pydantic>=2.6.0
-python-dotenv>=1.0.0
-python-multipart>=0.0.9
-cryptography>=42.0.0
+# Pinned to what the deployed images run (2026-10-19), so a rebuild does not
+# pick up a surprise major version. Bump deliberately: change the pins, run
+# the suite, redeploy.
+fastapi==0.146.0
+starlette==1.9.0
+uvicorn[standard]==0.54.0
+httpx==0.28.1
+sse-starlette==3.5.0
+pydantic==2.14.1
+python-dotenv==1.2.4
+python-multipart==0.0.32
+cryptography==50.0.2
 # IANA timezone database for scheduled tasks (slim images and Windows have none).
-tzdata>=2024.1
+tzdata==2026.5
 # MCP client: tool servers over stdio and streamable HTTP.
-mcp>=2.3.0
+mcp==2.3.0
 # Text from PDF, Word, Excel and PowerPoint attachments.
-markitdown[docx,pdf,pptx,xls,xlsx]>=0.1.8
+markitdown[docx,pdf,pptx,xls,xlsx]==0.1.8
 # Password login: argon2 hashes, TOTP two-factor, and the enrolment QR code.
-argon2-cffi>=23.1.0
-pyotp>=2.9.0
-segno>=1.6.0
+argon2-cffi==25.1.0
+pyotp==2.10.0
+segno==1.6.6
