@@ -19,6 +19,14 @@ from app.services.action_gateway import ActionDefinition, ActionInvocation, acti
 from app.services.computer_provider import computer_id_for_bot
 
 SOURCES = ("workspace", "computer")
+# "workspace" is the stored name of the shared folder (it predates the
+# computers, whose own directory is also called /workspace); the tool and
+# the prompt say "shared", so both spellings are accepted.
+SOURCE_ALIASES = {"shared": "workspace", "shared_folder": "workspace", "workspace": "workspace", "computer": "computer"}
+
+
+def normalize_source(source: Any) -> str:
+    return SOURCE_ALIASES.get(str(source or "").strip().lower(), str(source or ""))
 
 # Slim images ship a short MIME table; make sure the common document types
 # are named on cards rather than falling back to octet-stream.
@@ -69,31 +77,53 @@ def source_root(source: str, bot_id: Optional[str]) -> Path:
                 "copy the file to the shared folder instead."
             )
         return settings.COMPUTER_DOCKER_WORKSPACE_ROOT / computer_id_for_bot(bot_id)
-    raise FileShareError("source must be 'workspace' or 'computer'.")
+    raise FileShareError("source must be 'shared' or 'computer'.")
 
 
-def resolve_shared_file(source: str, path: str, bot_id: Optional[str]) -> SharedFile:
-    """Locate a file inside a shareable root, or raise FileShareError."""
-    if not isinstance(path, str) or not path.strip():
-        raise FileShareError("A file path is required.")
-    if len(path) > 1000:
-        raise FileShareError("The file path is too long.")
-    candidate = path.strip().replace("\\", "/")
-    # The computer sees its workspace as /workspace and the shared folder as
-    # /shared; accept those spellings, and treat /shared as what it is.
-    if source == "computer":
-        if candidate == "/shared" or candidate.startswith("/shared/"):
-            source, candidate = "workspace", candidate[len("/shared"):] or "."
-        elif candidate == "/workspace":
-            candidate = "."
-        elif candidate.startswith("/workspace/"):
-            candidate = candidate[len("/workspace/"):]
+def _locate(source: str, candidate: str, bot_id: Optional[str]) -> tuple:
     root = source_root(source, bot_id).resolve()
     absolute = (root / candidate.lstrip("/")).resolve()
     if absolute != root and root not in absolute.parents:
         raise FileShareError("The path is outside the shareable directory.")
+    return root, absolute
+
+
+def resolve_shared_file(source: str, path: str, bot_id: Optional[str]) -> SharedFile:
+    """Locate a file inside a shareable root, or raise FileShareError.
+
+    The two roots are easy to mix up (the shared folder is stored as
+    "workspace"; the computer's own directory is /workspace), so the path's
+    spelling wins over the source, and a file missing from the chosen root
+    is looked for in the other one before giving up.
+    """
+    if not isinstance(path, str) or not path.strip():
+        raise FileShareError("A file path is required.")
+    if len(path) > 1000:
+        raise FileShareError("The file path is too long.")
+    source = normalize_source(source)
+    candidate = path.strip().replace("\\", "/")
+    # The computer sees its workspace as /workspace and the shared folder as
+    # /shared; those spellings say where the file is whatever the source.
+    if candidate == "/shared" or candidate.startswith("/shared/"):
+        source, candidate = "workspace", candidate[len("/shared"):] or "."
+    elif candidate == "/workspace":
+        source, candidate = "computer", "."
+    elif candidate.startswith("/workspace/"):
+        source, candidate = "computer", candidate[len("/workspace/"):]
+    root, absolute = _locate(source, candidate, bot_id)
     if not absolute.exists():
-        raise FileShareError(f"No such file: {path}")
+        other = "computer" if source == "workspace" else "workspace"
+        try:
+            other_root, other_absolute = _locate(other, candidate, bot_id)
+        except FileShareError:
+            other_absolute = None
+        if other_absolute is not None and other_absolute.is_file():
+            source, root, absolute = other, other_root, other_absolute
+        else:
+            looked = "the shared folder and the computer's /workspace" if other_absolute is not None else (
+                "the shared folder" if source == "workspace" else "the computer's /workspace"
+            )
+            raise FileShareError(f"No such file: {path} (looked in {looked}).")
     if not absolute.is_file():
         raise FileShareError("Only files can be shared, not directories.")
     size = absolute.stat().st_size
