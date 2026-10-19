@@ -44,12 +44,7 @@ export default function Dashboard() {
   const [botEditor, setBotEditor] = useState(null);
   const [botToDelete, setBotToDelete] = useState(null);
   const [defaultModel, setDefaultModel] = useState('');
-  const [userName, setUserName] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('cubicle_user_name') || localStorage.getItem('open_grok_user_name') || 'You';
-    }
-    return 'You';
-  });
+  const [userName, setUserName] = useState('You');
 
   // Session check: a valid cookie goes straight in; otherwise the sign-in
   // page, or the setup page when no account exists yet.
@@ -63,6 +58,7 @@ export default function Dashboard() {
     establishSession()
       .then((session) => {
         setCurrentUser(session?.user || null);
+        setUserName(session?.user?.display_name || session?.user?.username || 'You');
         setAuthState('ready');
       })
       .catch(toSignIn);
@@ -229,6 +225,7 @@ export default function Dashboard() {
         setupRequired={authState === 'setup'}
         onAuthenticated={(session) => {
           setCurrentUser(session?.user || null);
+          setUserName(session?.user?.display_name || session?.user?.username || 'You');
           setAuthState('ready');
         }}
       />

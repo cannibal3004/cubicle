@@ -5,6 +5,8 @@ import { FiX, FiCheck, FiEye, FiEyeOff, FiUser, FiUsers, FiServer, FiShield, FiL
 import {
   fetchSettings,
   saveSettings,
+  fetchAccount,
+  updateProfile,
   logout,
   checkDecider,
   fetchSecrets,
@@ -91,6 +93,23 @@ export default function SettingsPage({
   const [userName, setUserName] = useState("");
   const [userEmail, setUserEmail] = useState("");
   const [section, setSection] = useState("account");
+  const [profileState, setProfileState] = useState(""); // "", "saving", "saved", or an error
+  const profileTimer = React.useRef(null);
+  const saveProfile = (name, email) => {
+    // Saved as you go, a moment after typing stops.
+    if (profileTimer.current) clearTimeout(profileTimer.current);
+    profileTimer.current = setTimeout(async () => {
+      setProfileState("saving");
+      try {
+        await updateProfile(name, email);
+        setProfileState("saved");
+        if (onProfileUpdate) onProfileUpdate(name);
+        setTimeout(() => setProfileState(""), 1500);
+      } catch (err) {
+        setProfileState(err?.message || "Could not save the profile.");
+      }
+    }, 600);
+  };
   // Admins manage what is shared by everyone: the model server, the
   // connector key, the decision server, system MCP servers, accounts.
   const admin = ['owner', 'admin'].includes(user?.role);
@@ -123,11 +142,13 @@ export default function SettingsPage({
     if (isOpen) {
       // Load saved user profile
       // Keys were renamed with the project; read the old ones as a fallback.
-      const localName = localStorage.getItem("cubicle_user_name") || localStorage.getItem("open_grok_user_name") || "";
-      const localEmail = localStorage.getItem("cubicle_user_email") || localStorage.getItem("open_grok_user_email") || "";
-
-      setUserName(localName);
-      setUserEmail(localEmail);
+      // The profile lives on the account; the bots are told it.
+      fetchAccount()
+        .then((me) => {
+          setUserName(me?.display_name || "");
+          setUserEmail(me?.email || "");
+        })
+        .catch(console.error);
 
       fetchSettings()
         .then((data) => {
@@ -311,7 +332,12 @@ export default function SettingsPage({
         <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm ${show("account") ? "" : "hidden"}`}>
           <div>
             <h3 className="text-sm font-bold text-zinc-100">Profile</h3>
-            <p className="text-xs text-zinc-400 mt-0.5">Shown in the sidebar. Saved as you go.</p>
+            <p className="text-xs text-zinc-400 mt-0.5">
+              How your bots address you, and the address they use when you ask to be copied or contacted. Saved as you go.
+              {profileState === "saving" && <span className="ml-2 text-zinc-500">Saving…</span>}
+              {profileState === "saved" && <span className="ml-2 text-emerald-400">Saved</span>}
+              {profileState && profileState !== "saving" && profileState !== "saved" && <span className="ml-2 text-rose-400">{profileState}</span>}
+            </p>
           </div>
 
           <div className="space-y-3">
@@ -321,8 +347,7 @@ export default function SettingsPage({
               value={userName}
               onChange={(e) => {
                 setUserName(e.target.value);
-                localStorage.setItem("cubicle_user_name", e.target.value);
-                if (onProfileUpdate) onProfileUpdate(e.target.value);
+                saveProfile(e.target.value, userEmail);
               }}
               placeholder="Your name"
               className={inputClass}
@@ -334,7 +359,7 @@ export default function SettingsPage({
               value={userEmail}
               onChange={(e) => {
                 setUserEmail(e.target.value);
-                localStorage.setItem("cubicle_user_email", e.target.value);
+                saveProfile(userName, e.target.value);
               }}
               placeholder="you@example.com"
               className={inputClass}

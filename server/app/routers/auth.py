@@ -39,6 +39,11 @@ class TokenCreate(BaseModel):
     name: str = ""
 
 
+class ProfileUpdate(BaseModel):
+    display_name: Optional[str] = Field(default=None, max_length=80)
+    email: Optional[str] = Field(default=None, max_length=200)
+
+
 def _account_error(exc: AccountError) -> HTTPException:
     status = {"locked": 429, "totp_required": 401, "totp_invalid": 401, "invalid": 401, "disabled": 403}.get(exc.code, 400)
     headers = {"WWW-Authenticate": "Bearer"} if status == 401 else None
@@ -117,6 +122,16 @@ async def me(request: Request):
         "sessions": auth_service.accounts.list_sessions(user["id"], request.cookies.get(SESSION_COOKIE)),
         "tokens": auth_service.accounts.list_tokens(user["id"]),
     }
+
+
+@router.post("/profile")
+async def update_profile(body: ProfileUpdate, request: Request):
+    """The name to be addressed by and the email to be reached at; both go to the bots."""
+    user = _current_user(request)
+    try:
+        return {"user": auth_service.accounts.update_profile(user["id"], body.display_name, body.email)}
+    except AccountError as exc:
+        raise _account_error(exc)
 
 
 @router.post("/password")
