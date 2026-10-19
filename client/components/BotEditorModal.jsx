@@ -113,6 +113,7 @@ export default function BotEditorModal({
   const [accent, setAccent] = useState(ACCENTS[0]);
   const [model, setModel] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
+  const [orchestrator, setOrchestrator] = useState(false);
   const [memory, setMemory] = useState('');
   const [toolSettings, setToolSettings] = useState({});
   const [showTools, setShowTools] = useState(false);
@@ -145,6 +146,7 @@ export default function BotEditorModal({
     setAccent(bot?.accent_color || ACCENTS[0]);
     setModel(bot?.model || defaultModel || '');
     setSystemPrompt(bot?.system_prompt || '');
+    setOrchestrator(Boolean(bot?.orchestrator));
     setMemory(bot?.memory || '');
     setToolSettings(bot?.tool_settings || {});
     setShowTools(false);
@@ -170,6 +172,7 @@ export default function BotEditorModal({
         accent_color: accent,
         model: model.trim(),
         system_prompt: systemPrompt.trim(),
+        orchestrator,
         tool_settings: toolSettings,
         // Only an existing bot has notes to edit; the server records a
         // change in the thread so the bot sees it.
@@ -344,6 +347,16 @@ export default function BotEditorModal({
               className={`${inputClass} font-mono text-xs leading-relaxed resize-y min-h-[120px]`}
             />
           </div>
+
+          <label className="flex items-start gap-2.5 text-xs text-zinc-300 cursor-pointer">
+            <input type="checkbox" checked={orchestrator} onChange={(e) => setOrchestrator(e.target.checked)} className="accent-cyan-400 mt-0.5" />
+            <span>
+              <span className="font-semibold">Orchestrator</span>
+              <span className="block text-[11px] text-zinc-500">
+                Can see what your other bots are doing, create new bots, and hand them work. Tasks it delegates show up in the other bot&apos;s chat as coming from it.
+              </span>
+            </span>
+          </label>
 
           {bot && (
             <div>

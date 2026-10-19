@@ -264,95 +264,14 @@ class StorageService:
         self.database.set_meta("legacy_json_imported", "1")
 
     def _ensure_defaults(self) -> None:
-        # Bot ids are global (they key the table, threads and computers): the
-        # first account keeps the familiar seed ids, later accounts get fresh ones.
-        ids = {"grok": "bot-grok-1", "claude": "bot-claude-1", "codex": "bot-codex-1", "supa": "bot-supa-1", "welcome": "msg-welcome-1"}
-        if self.owner_id != LOCAL_USER_ID:
-            ids = {key: f"{value.split('-')[0]}-{uuid.uuid4().hex[:6]}" for key, value in ids.items()}
-        # MUAPI has its own slugs for these personas. Any other provider seeds
-        # every bot with the configured default so the first chat works.
-        if settings.LLM_PROVIDER == "muapi":
-            seed_models = {"claude": "claude-sonnet-4-5", "codex": "gpt-5-mini"}
-        else:
-            seed_models = {"claude": settings.DEFAULT_MODEL, "codex": settings.DEFAULT_MODEL}
-
+        """A fresh account starts with one bot, the orchestrator, and its
+        greeting. Bot and message ids are global keys, so they are random."""
         if self._count("bots") == 0:
-            self.save_bots(
-                [
-                    {
-                        "id": ids["grok"],
-                        "name": "Grok 4.5 Analyst",
-                        "role": "Real-time Reasoning & Intelligence",
-                        "description": f"Powered by the {settings.DEFAULT_MODEL} model. Deep analysis, real-time web intelligence, & precise technical problem solving.",
-                        "avatar": "🚀",
-                        "model": settings.DEFAULT_MODEL,
-                        "accent_color": "#3b82f6",
-                        "system_prompt": "You are Grok 4.5, an advanced AI analyst. Provide direct, highly accurate, and helpful answers with real-time insight.",
-                        "tools": ["web_search", "code_interpreter", "computer_preview"],
-                        "pinned": True,
-                        "unread_count": 0,
-                        "created_at": datetime.now().isoformat(),
-                    },
-                    {
-                        "id": ids["claude"],
-                        "name": "Claude Architect",
-                        "role": "Full-Stack Code & Refactoring",
-                        "description": "Specialized in software design, clean architectural patterns, and elegant React/Next.js code.",
-                        "avatar": "⚡",
-                        "model": seed_models["claude"],
-                        "accent_color": "#d97757",
-                        "system_prompt": "You are Claude Architect, an expert software engineer. Write clean, modular, modern code.",
-                        "tools": ["file_editor", "terminal"],
-                        "pinned": True,
-                        "unread_count": 0,
-                        "created_at": datetime.now().isoformat(),
-                    },
-                    {
-                        "id": ids["codex"],
-                        "name": "Codex Builder",
-                        "role": "Automated Execution & Workflows",
-                        "description": "Executes shell tasks, runs automated builds, and manages local computer environment.",
-                        "avatar": "💻",
-                        "model": seed_models["codex"],
-                        "accent_color": "#10b981",
-                        "system_prompt": "You are Codex Builder, a devops and execution specialist. Help run commands safely.",
-                        "tools": ["terminal", "approval_broker"],
-                        "pinned": False,
-                        "unread_count": 0,
-                        "created_at": datetime.now().isoformat(),
-                    },
-                    {
-                        "id": ids["supa"],
-                        "name": "Grok Connector Assistant",
-                        "role": "General Assistant & App Connector",
-                        "description": "Friendly assistant connected to the app marketplace (Slack, Gmail, GitHub).",
-                        "avatar": "🐭",
-                        "model": settings.DEFAULT_MODEL,
-                        "accent_color": "#a855f7",
-                        "system_prompt": "You are a super-powered assistant. Be friendly, fast, and proactive.",
-                        "tools": ["composio_apps", "dictation"],
-                        "pinned": False,
-                        "unread_count": 0,
-                        "created_at": datetime.now().isoformat(),
-                    },
-                ]
-            )
+            from app.services.cubie import cubie_record, welcome_message
 
-        if self._count("messages") == 0:
-            self.save_messages(
-                [
-                    {
-                        "id": ids["welcome"],
-                        "thread_id": ids["grok"],
-                        "bot_id": ids["grok"],
-                        "sender": "bot",
-                        "text": "Hello! I am **Grok 4.5 Analyst**. Ask me anything, or give me a task to analyze!",
-                        "created_at": datetime.now().isoformat(),
-                        "model": settings.DEFAULT_MODEL,
-                        "item_type": "assistant_text",
-                    }
-                ]
-            )
+            cubie = cubie_record(settings.DEFAULT_MODEL)
+            self.save_bots([cubie])
+            self.save_messages([welcome_message(cubie)])
 
         # App defaults are written once, by the first account; later accounts
         # must not reset what an admin has configured.

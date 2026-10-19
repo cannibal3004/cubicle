@@ -13,6 +13,7 @@ from app.services import llm_service
 from app.services.bot_memory import MEMORY_MAX_CHARS, MemoryError, clean_memory, memory_note_message
 from app.services.bot_todo import TODO_MAX_ITEMS, TodoError, clean_todo, todo_note_message
 from app.services.computer_provider import ComputerProviderError, computer_id_for_bot, computer_provider
+from app.services.orchestrator import ensure_orchestrator
 from app.services.storage_service import current_storage
 from app.services.turn_manager import turn_manager
 
@@ -65,6 +66,7 @@ class BotInput(BaseModel):
     accent_color: str = Field(default="", max_length=32)
     system_prompt: str = Field(default="", max_length=MAX_PROMPT)
     tools: List[str] = Field(default_factory=list)
+    orchestrator: bool = False
 
 
 class BotUpdate(BaseModel):
@@ -82,6 +84,7 @@ class BotUpdate(BaseModel):
     auto_approval: Optional[Literal["inherit", "off", "shadow", "on"]] = None
     # A number from 0.01 to 0.99, or "inherit" to follow App Settings again.
     gate_threshold: Optional[Any] = None
+    orchestrator: Optional[bool] = None
     memory: Optional[str] = Field(default=None, max_length=MEMORY_MAX_CHARS)
     todo: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=TODO_MAX_ITEMS)
 
@@ -95,6 +98,8 @@ def _find(bots: List[Dict[str, Any]], bot_id: str) -> int:
 
 @router.get("", response_model=List[Bot])
 async def get_bots():
+    # Every account has an orchestrator; the first listing creates it.
+    ensure_orchestrator(current_storage())
     return current_storage().get_bots()
 
 
@@ -117,6 +122,7 @@ async def create_bot(bot_data: BotInput):
         "tool_settings": {},
         "auto_approval": "inherit",
         "gate_threshold": None,
+        "orchestrator": bool(bot_data.orchestrator),
         "pinned": False,
         "archived": False,
         "unread_count": 0,
