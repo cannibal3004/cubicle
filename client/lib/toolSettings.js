@@ -34,6 +34,16 @@ export const withGroup = (settings, groupId, on) => withFlag(settings, 'groups',
 export const withToolkit = (settings, slug, on) => withFlag(settings, 'toolkits', slug, on);
 export const withTool = (settings, name, on) => withFlag(settings, 'tools', name, on);
 
+// A bot's `trusted_tools`: names that run without an approval card.
+export function isTrusted(trusted, name) {
+  return Array.isArray(trusted) && trusted.includes(name);
+}
+
+export function withTrusted(trusted, name, on) {
+  const current = Array.isArray(trusted) ? trusted.filter((item) => item !== name) : [];
+  return on ? [...current, name] : current;
+}
+
 // Count what the model will actually be offered for this bot.
 export function countEnabled(catalog, settings) {
   if (!catalog) return { on: 0, total: 0 };

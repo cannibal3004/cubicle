@@ -24,6 +24,9 @@ class Bot(BaseModel):
     auto_approval: Literal["inherit", "off", "shadow", "on"] = "inherit"
     # The decider's risk threshold for this bot alone; None follows App Settings.
     gate_threshold: Optional[float] = None
+    # Tools (by name) this bot runs without an approval card, whatever the
+    # auto-approval mode: the user's standing "yes" for this bot alone.
+    trusted_tools: List[str] = Field(default_factory=list)
     # An orchestrator sees the user's other bots, creates new ones and hands them work.
     orchestrator: bool = False
     # The bot's own notes, kept across conversations and compactions. The

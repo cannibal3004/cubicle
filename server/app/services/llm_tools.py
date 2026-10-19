@@ -8,7 +8,7 @@ registry and approval rules exactly as before.
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Union
 
 from app.config import settings
@@ -40,6 +40,8 @@ class ToolSpec:
     needs_approval: bool
     # Set for tools discovered from a connected app (see connector_tools).
     connector: Optional[Dict[str, Any]] = None
+    # The user trusts this tool for the bot: it runs without an approval card.
+    trusted: bool = False
 
 
 _SENSITIVE_ARGUMENT = re.compile(r"(password|secret|token|api[_-]?key|authorization|credential)", re.IGNORECASE)
@@ -637,6 +639,18 @@ def filter_tools(
     return kept
 
 
+def trust_tools(specs: List[ToolSpec], trusted: Optional[List[str]]) -> List[ToolSpec]:
+    """Mark the bot's trusted tools: they no longer need approval.
+
+    Names that match nothing offered are ignored, so a tool that is switched
+    off or no longer exists cannot be reached through its trust entry.
+    """
+    names = {str(name) for name in (trusted or []) if isinstance(name, str)}
+    if not names:
+        return specs
+    return [replace(spec, needs_approval=False, trusted=True) if spec.name in names and spec.needs_approval else spec for spec in specs]
+
+
 def without_duplicate_routes(specs: List[ToolSpec], *, shared_in_computer: bool = SHARED_IN_COMPUTER) -> List[ToolSpec]:
     """Drop the host-side shared folder tools when the computer reaches the folder itself.
 
@@ -788,6 +802,12 @@ def describe_tools(
     approval = sorted(spec.name for spec in specs if spec.needs_approval)
     if approval:
         lines.append("Tools that need approval: " + ", ".join(approval) + ".")
+    trusted = sorted(spec.name for spec in specs if spec.trusted)
+    if trusted:
+        lines.append(
+            "Tools the user has trusted for you, which run without asking (use them with the same care as if they asked): "
+            + ", ".join(trusted) + "."
+        )
     return "\n".join(lines)
 
 
