@@ -53,7 +53,7 @@ const BASE_URL_PRESETS = [
 const SECTIONS = [
   { id: "account", label: "Account", icon: FiUser, blurb: "Your profile, password, two-factor and API tokens." },
   { id: "users", label: "Users", icon: FiUsers, admin: true, blurb: "Accounts on this server." },
-  { id: "model", label: "Model server", icon: FiCpu, admin: true, blurb: "The model server every bot uses, and the default model." },
+  { id: "model", label: "Model server", icon: FiCpu, adminEdits: true, blurb: "The model server every bot uses, and the default model." },
   { id: "approval", label: "Auto-approval", icon: FiShield, blurb: "Which actions ask you, and which a decision model may wave through." },
   { id: "connectors", label: "Connectors", icon: FiLink, blurb: "App connections for your bots." },
   { id: "secrets", label: "Secrets", icon: FiKey, blurb: "API keys and tokens your bots may use in their computers." },
@@ -282,7 +282,7 @@ export default function SettingsPage({
   );
 
   const inputClass =
-    "w-full bg-[#222226] border border-[#2e2e34] rounded-xl px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-400 transition font-sans";
+    "w-full bg-[#222226] border border-[#2e2e34] rounded-xl px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-400 transition font-sans disabled:opacity-70 disabled:cursor-default";
 
   return (
     <section className="absolute inset-0 z-30 bg-[#0d0d10] flex flex-col animate-fade-in font-sans text-zinc-100">
@@ -319,7 +319,11 @@ export default function SettingsPage({
               >
                 <Icon className="text-sm flex-shrink-0" />
                 <span className="truncate">{item.label}</span>
-                {item.admin && <span className="ml-auto text-[9px] uppercase tracking-wider text-amber-300/80">admin</span>}
+                {(item.admin || item.adminEdits) && (
+                  <span className={`ml-auto text-[9px] uppercase tracking-wider ${admin ? "text-amber-300/80" : "text-zinc-500"}`}>
+                    {admin ? "admin" : "view only"}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -369,11 +373,13 @@ export default function SettingsPage({
         </div>
 
         {/* LLM Connection Card (admins) */}
-        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm ${admin && show("model") ? "" : "hidden"}`}>
+        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm ${show("model") ? "" : "hidden"}`}>
           <div>
             <h3 className="text-sm font-bold text-zinc-100">Model server</h3>
             <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
-              Shared by all bots. Keys are write-only and encrypted locally. Leave a key blank to keep it.
+              {admin
+                ? "Shared by all bots. Keys are write-only and encrypted locally. Leave a key blank to keep it."
+                : "Shared by everyone's bots and set by an admin. Shown here so you know which server your bots talk to."}
             </p>
           </div>
 
@@ -390,8 +396,9 @@ export default function SettingsPage({
                     key={p.id}
                     suppressHydrationWarning={true}
                     type="button"
+                    disabled={!admin}
                     onClick={() => setProvider(p.id)}
-                    className={`flex-1 px-3 py-2 rounded-xl border text-xs font-medium transition ${
+                    className={`flex-1 px-3 py-2 rounded-xl border text-xs font-medium transition disabled:cursor-default ${
                       active
                         ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-300"
                         : "border-[#2e2e34] bg-[#222226] text-zinc-400 hover:text-white"
@@ -414,11 +421,12 @@ export default function SettingsPage({
               suppressHydrationWarning={true}
               type="text"
               value={baseUrl}
+              disabled={!admin}
               onChange={(e) => setBaseUrl(e.target.value)}
               placeholder={providerInfo.defaultBaseUrl}
               className={`${inputClass} font-mono text-cyan-300`}
             />
-            {provider === "openai_compatible" && (
+            {admin && provider === "openai_compatible" && (
               <div className="flex flex-wrap gap-1.5 pt-0.5">
                 {BASE_URL_PRESETS.map((preset) => (
                   <button
@@ -433,12 +441,20 @@ export default function SettingsPage({
                 ))}
               </div>
             )}
-            <p className="text-[10px] leading-relaxed text-zinc-500">
-              Leave blank to use the provider default. The server must expose <span className="font-mono">/chat/completions</span> under this path.
-            </p>
+            {admin && (
+              <p className="text-[10px] leading-relaxed text-zinc-500">
+                Leave blank to use the provider default. The server must expose <span className="font-mono">/chat/completions</span> under this path.
+              </p>
+            )}
           </div>
 
           {/* API Key */}
+          {!admin && (
+            <p className="text-xs text-zinc-400">
+              <span className="font-semibold text-zinc-300">API key:</span> {apiKeyConfigured ? "stored on the server." : "none set."}
+            </p>
+          )}
+          {admin && (
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
               <span className="text-amber-400">•</span> API Key
@@ -474,6 +490,7 @@ export default function SettingsPage({
               Saving reloads the model list from the server.
             </p>
           </div>
+          )}
 
           {saveError && (
             <p className="text-[11px] text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">{saveError}</p>
@@ -481,11 +498,11 @@ export default function SettingsPage({
         </div>
 
         {/* Model defaults (admins) */}
-        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm ${admin && show("model") ? "" : "hidden"}`}>
+        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-5 shadow-sm ${show("model") ? "" : "hidden"}`}>
           <div>
             <h3 className="text-sm font-bold text-zinc-100">Model defaults</h3>
             <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
-              Applied to new bots and to the active bot when saved.
+              {admin ? "Applied to new bots and to the active bot when saved." : "What a new bot starts with. You can pick another model for any bot from its chat header."}
             </p>
           </div>
 
@@ -494,7 +511,8 @@ export default function SettingsPage({
             <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
               <span className="text-purple-400">•</span> Default model
             </label>
-            <div className="flex items-center gap-2">
+            {!admin && <div className={`${inputClass} font-mono text-cyan-300`}>{defaultModel || "not set"}</div>}
+            <div className={`flex items-center gap-2 ${admin ? "" : "hidden"}`}>
               <div className="flex-1 min-w-0">
                 <ModelPicker
                   currentModel={defaultModel}
@@ -519,6 +537,7 @@ export default function SettingsPage({
             <select
               suppressHydrationWarning={true}
               value={reasoningEffort}
+              disabled={!admin}
               onChange={(e) => setReasoningEffort(e.target.value)}
               className={`${inputClass} cursor-pointer`}
             >
