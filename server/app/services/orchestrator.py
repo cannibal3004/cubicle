@@ -267,8 +267,10 @@ def _other(call: ActionInvocation, storage: StorageService, me: Dict[str, Any], 
 async def execute_list(call: ActionInvocation) -> Dict[str, Any]:
     storage = current_storage()
     me = _me(call, storage)
-    bots = [bot_overview(b, storage) for b in storage.get_bots() if b.get("id") != me["id"] and not b.get("archived")]
-    return {"bots": bots, "note": "bots_status gives one bot's summary, to-do list, notes and recent messages."}
+    # Archived bots are listed too, flagged, so the orchestrator can say one
+    # exists but is parked rather than guess or create a duplicate.
+    bots = [bot_overview(b, storage) for b in storage.get_bots() if b.get("id") != me["id"]]
+    return {"bots": bots, "note": "bots_status gives one bot's summary, to-do list, notes and recent messages. An archived bot is parked by the user: ask before sending it work or creating a replacement."}
 
 
 async def execute_status(call: ActionInvocation) -> Dict[str, Any]:
