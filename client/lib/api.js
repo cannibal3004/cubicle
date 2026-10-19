@@ -106,6 +106,7 @@ async function accountJson(path, options = {}) {
 const jsonBody = (body) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
 export const fetchAccount = () => accountJson('/auth/me');
+export const updateProfile = (displayName, email) => accountJson('/auth/profile', jsonBody({ display_name: displayName, email }));
 export const changePassword = (currentPassword, newPassword) =>
   accountJson('/auth/password', jsonBody({ current_password: currentPassword, new_password: newPassword }));
 export const startTotp = () => accountJson('/auth/totp/start', { method: 'POST' });

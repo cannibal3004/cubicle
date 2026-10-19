@@ -21,7 +21,7 @@ class AuthService:
 
     @staticmethod
     def _public(user: Dict[str, Any]) -> Dict[str, Any]:
-        return {"id": user["id"], "username": user["username"], "role": user["role"]}
+        return {"id": user["id"], "username": user["username"], "role": user["role"], "display_name": user.get("display_name") or "", "email": user.get("email") or ""}
 
     def authenticate_credentials(self, authorization: str, session_cookie: Optional[str]) -> Optional[Dict[str, Any]]:
         """The user behind a bearer API token or a session cookie, as the

@@ -162,6 +162,11 @@ SCHEMA_MIGRATIONS = {
         DROP TABLE settings;
         ALTER TABLE settings_v2 RENAME TO settings;
     """,
+    # The person behind the account, as the bots should address and reach them.
+    8: """
+        ALTER TABLE users ADD COLUMN display_name TEXT;
+        ALTER TABLE users ADD COLUMN email TEXT;
+    """,
 }
 
 OWNER_TABLES = (

@@ -11,6 +11,7 @@ import base64
 import hashlib
 import io
 import json
+import re
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -100,11 +101,12 @@ class AccountStore:
     @staticmethod
     def _row_to_user(row: Any) -> Dict[str, Any]:
         keys = ("id", "username", "role", "created_at", "password_hash", "totp_secret", "totp_enabled",
-                "totp_pending", "recovery_codes", "totp_last_step", "disabled", "updated_at", "last_login_at")
+                "totp_pending", "recovery_codes", "totp_last_step", "disabled", "updated_at", "last_login_at",
+                "display_name", "email")
         return dict(zip(keys, row))
 
     _USER_COLUMNS = ("id, username, role, created_at, password_hash, totp_secret, totp_enabled, totp_pending, "
-                     "recovery_codes, totp_last_step, disabled, updated_at, last_login_at")
+                     "recovery_codes, totp_last_step, disabled, updated_at, last_login_at, display_name, email")
 
     def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
         with self.database.connect() as connection:
@@ -133,6 +135,8 @@ class AccountStore:
             "disabled": bool(user.get("disabled")),
             "created_at": user.get("created_at"),
             "last_login_at": user.get("last_login_at"),
+            "display_name": user.get("display_name") or "",
+            "email": user.get("email") or "",
         }
 
     def setup_required(self) -> bool:
@@ -172,6 +176,23 @@ class AccountStore:
                 (user_id, name, role, now, self.hasher.hash(password), now),
             )
         return self.get_user(user_id)
+
+    def update_profile(self, user_id: str, display_name: Optional[str] = None, email: Optional[str] = None) -> Dict[str, Any]:
+        """The name the person wants to be called and the address to reach them at."""
+        changes = {}
+        if display_name is not None:
+            name = " ".join(str(display_name).split())[:80]
+            changes["display_name"] = name
+        if email is not None:
+            address = str(email).strip()[:200]
+            if address and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", address):
+                raise AccountError("That does not look like an email address.", "email")
+            changes["email"] = address
+        if changes:
+            with self.database.connect() as connection:
+                sets = ", ".join(f"{key} = ?" for key in changes)
+                connection.execute(f"UPDATE users SET {sets}, updated_at = ? WHERE id = ?", (*changes.values(), _iso(_now()), user_id))
+        return self.public_user(self.get_user(user_id))
 
     def set_password(self, user_id: str, password: str) -> None:
         """Set a password outright (setup, admin reset) and sign the account out everywhere."""

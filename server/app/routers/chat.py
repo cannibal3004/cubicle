@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.schemas.contracts import TurnRequest, Message
-from app.services.identity import owner_context
+from app.services.identity import get_current_owner, owner_context
 from app.services.storage_service import current_storage
 from app.services import llm_service
 from app.services.action_gateway import (
@@ -326,6 +326,30 @@ async def _context_window_for(llm_config, model: str) -> Optional[int]:
 
 logger = logging.getLogger(__name__)
 
+def describe_user() -> str:
+    """One line about the person the bot works for, from their profile; empty when unset."""
+    try:
+        from app.services.auth_service import auth_service
+
+        user = auth_service.accounts.get_user(get_current_owner())
+    except Exception:
+        return ""
+    if not user:
+        return ""
+    name = (user.get("display_name") or "").strip()
+    email = (user.get("email") or "").strip()
+    if not name and not email:
+        return ""
+    parts = []
+    if name:
+        parts.append(f"The person you work for is {name} (account {user.get('username')}); address them as {name}.")
+    else:
+        parts.append(f"The person you work for has the account {user.get('username')}.")
+    if email:
+        parts.append(f"Their email address is {email}; use it when they ask to be copied, notified or contacted, without asking for it again.")
+    return " ".join(parts) + "\n\n"
+
+
 async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[str, Any]:
     """Everything a turn (or a compaction) needs, captured once.
 
@@ -342,7 +366,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
 
     raw_prompt = current_bot["system_prompt"] if current_bot else "You are a helpful AI assistant."
     today = datetime.now().strftime("%A, %B %d, %Y")
-    system_prompt = f"{raw_prompt}\n\nToday is {today}."
+    system_prompt = f"{raw_prompt}\n\n{describe_user()}Today is {today}."
     llm_config = llm_service.current_llm_config()
     selected_model = (
         requested_model
