@@ -48,9 +48,10 @@ class Settings:
     # Sent as max_tokens when set. 0 leaves the server's own default, which
     # on some local servers is 8192 and cuts a long tool call in half.
     LLM_MAX_COMPLETION_TOKENS: int = int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "0"))
-    # Sent as max_tokens when set. 0 leaves the server's own default, which
-    # on some local servers is 8192 and cuts a long tool call in half.
-    LLM_MAX_COMPLETION_TOKENS: int = int(os.getenv("LLM_MAX_COMPLETION_TOKENS", "0"))
+    # How many requests may be in flight at the model server at once, shared
+    # fairly between accounts; the rest queue in the chat with their place
+    # shown. 0 means no limit. App Settings (llm_max_concurrent) overrides it.
+    LLM_MAX_CONCURRENT_REQUESTS: int = max(0, int(os.getenv("LLM_MAX_CONCURRENT_REQUESTS", "4")))
     # A safety net, not the working limit: a turn normally ends when the
     # model answers, when the context is full (CONTEXT_STOP_AT) or when it
     # stops making progress (LLM_STALLED_ROUNDS).

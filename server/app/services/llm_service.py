@@ -8,6 +8,8 @@ from app.schemas.contracts import ModelCatalog, ModelInfo
 from app.services.llm_config import PROVIDER_MUAPI, LLMConfig, resolve_llm_config
 from app.services.muapi_service import MUAPI_MODELS, muapi_service
 from app.services.openai_compatible_service import openai_compatible_service
+from app.services.identity import get_current_owner
+from app.services.model_slots import model_slots
 from app.services.storage_service import storage_service
 
 # Model settings are app-wide; any owner's view carries them.
@@ -32,7 +34,8 @@ async def stream_chat_completion(
         generator = openai_compatible_service.stream_chat_completion(
             model, messages, system_prompt, config, tools=tools
         )
-    async for event in generator:
+    # One gate for every request: chat rounds, compaction summaries, all of it.
+    async for event in model_slots.gated(get_current_owner(), generator):
         yield event
 
 

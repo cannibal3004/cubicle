@@ -501,6 +501,13 @@ export async function compactThread(threadId) {
   return res.json();
 }
 
+// The gate in front of the model server: limit, running, waiting.
+export async function fetchModelSlots() {
+  const res = await apiFetch(`${API_BASE_URL}/models/slots`);
+  if (!res.ok) throw new Error('Could not read the model slots.');
+  return res.json();
+}
+
 export async function fetchSettings() {
   try {
     const res = await apiFetch(`${API_BASE_URL}/settings`);
