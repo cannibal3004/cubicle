@@ -156,6 +156,14 @@ class BotsRouterTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(tool_settings={"tools": ["x"]})))
 
+    def test_one_bot_can_be_fetched_by_id(self):
+        bot = asyncio.run(bots_router.create_bot(bots_router.BotInput(name="Solo")))
+        asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(memory="Remember the milk.")))
+        fetched = asyncio.run(bots_router.get_bot(bot["id"]))
+        self.assertEqual((fetched["id"], fetched["memory"]), (bot["id"], "Remember the milk."))
+        with self.assertRaises(HTTPException):
+            asyncio.run(bots_router.get_bot("bot-nope"))
+
     def test_archiving_cancels_a_running_turn(self):
         bot = asyncio.run(bots_router.create_bot(bots_router.BotInput(name="Busy")))
 

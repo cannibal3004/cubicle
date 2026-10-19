@@ -138,6 +138,8 @@ export default function Marketplace({ onOpenSettings }) {
   const [noticeLink, setNoticeLink] = useState('');
   const [error, setError] = useState('');
   const [refreshToken, setRefreshToken] = useState(0);
+  // The app whose sign-in is open in another tab; the page polls until it connects.
+  const [awaiting, setAwaiting] = useState(null);
   // Connected apps whose tools are withheld from every bot.
   const [disabledToolkits, setDisabledToolkits] = useState([]);
 
@@ -245,7 +247,8 @@ export default function Marketplace({ onOpenSettings }) {
         } else if (typeof window !== 'undefined') {
           window.open(result.url, '_blank', 'noopener,noreferrer');
         }
-        setNotice(`Authorization opened for ${app.label}. Refresh after completing it.`);
+        setNotice(`Authorization opened for ${app.label} in a new tab. This page updates when you have signed in.`);
+        setAwaiting({ slug: app.slug, label: app.label, since: Date.now() });
       }
     } catch (err) {
       if (authWindow && !authWindow.closed) authWindow.close();
@@ -254,6 +257,37 @@ export default function Marketplace({ onOpenSettings }) {
       setBusySlug(null);
     }
   };
+
+  // After a sign-in opens, ask the server every few seconds whether the app is
+  // connected yet, for up to ten minutes; the first yes refreshes the page.
+  useEffect(() => {
+    if (!awaiting) return undefined;
+    let disposed = false;
+    const check = async () => {
+      if (Date.now() - awaiting.since > 10 * 60 * 1000) {
+        setAwaiting(null);
+        return;
+      }
+      try {
+        const status = await fetchConnectionStatus([awaiting.slug]);
+        if (disposed) return;
+        if (status?.services?.[awaiting.slug]?.connected) {
+          setAwaiting(null);
+          setConnected((current) => (current.includes(awaiting.slug) ? current : [...current, awaiting.slug]));
+          setNotice(`${awaiting.label} connected. Its tools are offered to your bots from their next turn.`);
+          setNoticeLink(null);
+          setRefreshToken((value) => value + 1);
+        }
+      } catch (err) {
+        // A failed check is retried on the next tick.
+      }
+    };
+    const interval = window.setInterval(check, 3000);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+    };
+  }, [awaiting]);
 
   const setToolsOffered = async (app, offered) => {
     const next = offered ? disabledToolkits.filter((slug) => slug !== app.slug) : [...new Set([...disabledToolkits, app.slug])];

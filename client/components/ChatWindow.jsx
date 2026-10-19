@@ -25,6 +25,7 @@ import {
   clearChatHistory,
   compactThread,
   fetchChatHistory,
+  fetchBot,
 } from '../lib/api';
 
 const AUTO_APPROVAL_MODES = ['off', 'shadow', 'on', 'inherit'];
@@ -409,6 +410,12 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
           if (event.type === 'tool.completed' && String(event.callName || '').startsWith('todo_') && Array.isArray(event.result?.items) && onBotPatched) {
             // A todo result carries the whole list: show it without a refetch.
             onBotPatched(botId, { todo: event.result.items });
+          }
+          if (event.type === 'tool.completed' && ['memory_write', 'memory_edit'].includes(String(event.callName || '')) && onBotPatched) {
+            // The notes changed: fetch them so the editor shows the new text without a reload.
+            fetchBot(botId)
+              .then((fresh) => onBotPatched(botId, { memory: fresh.memory, memory_updated_at: fresh.memory_updated_at }))
+              .catch(() => {});
           }
           if (event.requestId) {
             setPendingApprovals((prev) => prev.filter((approval) => approval.requestId !== event.requestId));
