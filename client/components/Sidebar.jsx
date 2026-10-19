@@ -179,10 +179,9 @@ export default function Sidebar({
       {/* Top Header & Search Area */}
       <div className="p-3.5 space-y-3">
         <div className="flex items-center justify-between pt-1 px-1">
-          <div className="flex items-center space-x-2">
-            <span className="w-3 h-3 rounded-full bg-[#ff5f57] block border border-[#e0443e]/40" />
-            <span className="w-3 h-3 rounded-full bg-[#febc2e] block border border-[#d8a025]/40" />
-            <span className="w-3 h-3 rounded-full bg-[#28c840] block border border-[#1fa031]/40" />
+          <div className="flex items-center gap-2 px-1">
+            <span className="text-base leading-none">🧊</span>
+            <span className="text-sm font-semibold tracking-tight text-zinc-100">Cubicle</span>
           </div>
 
           <button
@@ -282,7 +281,9 @@ export default function Sidebar({
           <button
             suppressHydrationWarning={true}
             onClick={onOpenSettings}
-            className="p-2 text-zinc-400 hover:text-zinc-200 hover:bg-[#1e1e22] rounded-lg transition"
+            className={`p-2 rounded-lg transition ${
+              activeTab === 'settings' ? 'text-white bg-[#1e1e22]' : 'text-zinc-400 hover:text-zinc-200 hover:bg-[#1e1e22]'
+            }`}
             title="Settings"
           >
             <FiSettings className="text-sm" />

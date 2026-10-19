@@ -183,6 +183,12 @@ export async function createBot(botData) {
   return res.json();
 }
 
+export async function fetchBot(botId) {
+  const res = await apiFetch(`${API_BASE_URL}/bots/${botId}`);
+  if (!res.ok) throw new Error('Could not load the bot.');
+  return res.json();
+}
+
 export async function updateBot(botId, updates) {
   const res = await apiFetch(`${API_BASE_URL}/bots/${botId}`, {
     method: 'PUT',

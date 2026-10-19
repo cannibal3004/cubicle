@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
 import Sidebar from './Sidebar';
 import ChatWindow from './ChatWindow';
 import ComputerPanel from './ComputerPanel';
@@ -10,6 +10,7 @@ import SettingsPage from './SettingsPage';
 import BotEditorModal, { ConfirmDialog } from './BotEditorModal';
 
 import {
+  fetchBot,
   fetchBots,
   fetchModels,
   fetchChatHistory,
@@ -30,16 +31,16 @@ export default function Dashboard() {
   // The signed-in account (id, username, role), from the session check.
   const [currentUser, setCurrentUser] = useState(null);
   const [activeBotId, setActiveBotId] = useState('');
-  const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'computer' | 'marketplace' | 'audit'
+  const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'computer' | 'marketplace' | 'audit' | 'settings'
   // Transcripts are cached per bot so a reply that is still streaming for
   // one bot survives switching to another bot or another tab.
   const [messagesByBot, setMessagesByBot] = useState({});
   const [streamingBots, setStreamingBots] = useState({});
   // The server's view of running turns and pending approvals, by bot.
   const [turnStates, setTurnStates] = useState({});
+  const lastTurnStates = useRef({});
   // Text to drop into the chat input, e.g. after handing a computer back.
   const [chatPrefill, setChatPrefill] = useState(null);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   // Bot editor: null, { mode: 'create' } or { mode: 'edit', bot }.
   const [botEditor, setBotEditor] = useState(null);
   const [botToDelete, setBotToDelete] = useState(null);
@@ -76,6 +77,18 @@ export default function Dashboard() {
       if (disposed) return;
       const next = {};
       for (const turn of overview.turns || []) next[turn.thread_id] = turn;
+      // A turn that just finished (a scheduled run, or one driven from another
+      // device) may have changed the bot's notes or to-do list: refresh that bot.
+      const previous = lastTurnStates.current;
+      lastTurnStates.current = next;
+      for (const [threadId, turn] of Object.entries(previous)) {
+        const now = next[threadId];
+        if (turn.status === 'running' && (!now || now.status !== 'running')) {
+          fetchBot(threadId)
+            .then((fresh) => setBots((prev) => prev.map((b) => (b.id === threadId ? { ...b, ...fresh } : b))))
+            .catch(() => {});
+        }
+      }
       setTurnStates((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
     };
     poll();
@@ -254,7 +267,7 @@ export default function Dashboard() {
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         turnStates={turnStates}
-        onOpenSettings={() => setIsSettingsOpen(!isSettingsOpen)}
+        onOpenSettings={() => setActiveTab((tab) => (tab === 'settings' ? 'chat' : 'settings'))}
         onOpenNewBot={() => setBotEditor({ mode: 'create' })}
         onEditBot={(bot) => setBotEditor({ mode: 'edit', bot })}
         onArchiveBot={(bot, archived) => handleArchiveBot(bot, archived).catch((err) => console.error('Archive failed:', err))}
@@ -263,12 +276,12 @@ export default function Dashboard() {
 
       {/* Main Workspace Display Area */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
-        {/* Settings take over the main area; the chat stays mounted beneath, so streams go on. */}
-        {isSettingsOpen && (
+        {/* Settings is a view like the others; the chat stays mounted beneath, so streams go on. */}
+        {activeTab === 'settings' && (
           <SettingsPage
             user={currentUser}
-            isOpen={isSettingsOpen}
-            onClose={() => setIsSettingsOpen(false)}
+            isOpen
+            onClose={() => setActiveTab('chat')}
             currentModel={defaultModel}
             models={models}
             catalogError={catalogError}
@@ -285,7 +298,7 @@ export default function Dashboard() {
             }}
             onProfileUpdate={(name) => setUserName(name || 'You')}
             onSignOut={() => {
-              setIsSettingsOpen(false);
+              setActiveTab('chat');
               setAuthState('login');
             }}
           />
@@ -310,7 +323,7 @@ export default function Dashboard() {
             onBotPatched={(botId, patch) => setBots((prev) => prev.map((b) => (b.id === botId ? { ...b, ...patch } : b)))}
             onToggleComputer={() => setActiveTab('computer')}
             onOpenAudit={() => setActiveTab('audit')}
-            onOpenSettings={() => setIsSettingsOpen(true)}
+            onOpenSettings={() => setActiveTab('settings')}
             defaultModel={defaultModel}
             prefill={chatPrefill}
           />
@@ -331,7 +344,7 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'marketplace' && (
-          <Marketplace onOpenSettings={() => setIsSettingsOpen(true)} />
+          <Marketplace onOpenSettings={() => setActiveTab('settings')} />
         )}
 
         {activeTab === 'audit' && <AuditPanel />}

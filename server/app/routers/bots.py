@@ -123,6 +123,13 @@ async def get_bots():
     return current_storage().get_bots()
 
 
+@router.get("/{bot_id}", response_model=Bot)
+async def get_bot(bot_id: str):
+    """One bot as it is now: the client refreshes notes and to-dos with this after a turn."""
+    bots = current_storage().get_bots()
+    return bots[_find(bots, bot_id)]
+
+
 @router.post("", response_model=Bot)
 async def create_bot(bot_data: BotInput):
     name = bot_data.name.strip()
