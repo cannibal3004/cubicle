@@ -675,6 +675,15 @@ export async function runBotSchedule(botId, scheduleId) {
   return secretsCall(`/bots/${encodeURIComponent(botId)}/schedules/${encodeURIComponent(scheduleId)}/run`, { method: 'POST' });
 }
 
+// A bot's own MCP servers: commands run inside its computer, offered to that bot only.
+export const fetchBotMcpServers = (botId) => secretsCall(`/mcp/bots/${encodeURIComponent(botId)}/servers`);
+export const createBotMcpServer = (botId, server) =>
+  secretsCall(`/mcp/bots/${encodeURIComponent(botId)}/servers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(server) });
+export const updateBotMcpServer = (botId, id, changes) =>
+  secretsCall(`/mcp/bots/${encodeURIComponent(botId)}/servers/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+export const deleteBotMcpServer = (botId, id) => secretsCall(`/mcp/bots/${encodeURIComponent(botId)}/servers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export const testBotMcpServer = (botId, id) => secretsCall(`/mcp/bots/${encodeURIComponent(botId)}/servers/${encodeURIComponent(id)}/test`, { method: 'POST' });
+
 export async function fetchMcpServers() {
   return secretsCall('/mcp/servers');
 }

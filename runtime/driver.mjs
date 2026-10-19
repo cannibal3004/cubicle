@@ -443,6 +443,207 @@ async function raiseBrowser() {
   }
 }
 
+
+// ---- MCP servers in the computer -------------------------------------------
+// A bot can run MCP servers here, next to its files and packages, instead of
+// in the host API. Each is a child process speaking JSON-RPC over stdio; the
+// host API talks to it through POST /mcp/<id>, the streamable-HTTP shape its
+// MCP client already speaks: a request gets its response back as JSON, a
+// notification gets 202. There is no server-to-client stream (GET answers
+// 405, which the protocol allows), so a server's own requests are refused.
+
+const MCP_MAX_SERVERS = 8;
+const MCP_CALL_TIMEOUT_MS = 120000;
+const MCP_STDERR_KEEP = 4000;
+const mcpServers = new Map();
+
+function resolveMcpEnv(env) {
+  // $NAME and ${NAME} stand for the computer's own environment variables,
+  // which is where the user's secrets are; a missing one is a clear error.
+  const out = {};
+  const missing = [];
+  for (const [name, raw] of Object.entries(env || {})) {
+    const value = String(raw ?? '').replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, a, b) => {
+      const key = a || b;
+      if (process.env[key] === undefined) {
+        missing.push(key);
+        return '';
+      }
+      return process.env[key];
+    });
+    out[name] = value;
+  }
+  if (missing.length) throw new Error(`Secret${missing.length > 1 ? 's' : ''} ${missing.join(', ')} ${missing.length > 1 ? 'are' : 'is'} not set in this computer.`);
+  return out;
+}
+
+function mcpStart(body) {
+  const id = String(body.id || '').trim();
+  if (!/^[A-Za-z0-9_-]{1,40}$/.test(id)) throw new Error('An MCP server id is required.');
+  const command = String(body.command || '').trim();
+  if (!command) throw new Error('An MCP server needs the command to run.');
+  const args = Array.isArray(body.args) ? body.args.map((a) => String(a)) : [];
+  const env = resolveMcpEnv(body.env);
+  const signature = JSON.stringify([command, args, body.env || {}]);
+  const existing = mcpServers.get(id);
+  if (existing && existing.alive && existing.signature === signature) {
+    return { started: false, running: true, pid: existing.child.pid };
+  }
+  if (existing) mcpStop(id);
+  if (mcpServers.size >= MCP_MAX_SERVERS) throw new Error(`At most ${MCP_MAX_SERVERS} MCP servers can run in a computer.`);
+
+  const child = spawn(command, args, { cwd: workspace, env: { ...terminalEnv, ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
+  const entry = { id, signature, child, alive: true, exitCode: null, stderr: '', buffer: '', pending: new Map(), startedAt: Date.now() };
+  mcpServers.set(id, entry);
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    entry.buffer += chunk;
+    let index;
+    while ((index = entry.buffer.indexOf('\n')) >= 0) {
+      const line = entry.buffer.slice(0, index).trim();
+      entry.buffer = entry.buffer.slice(index + 1);
+      if (line) mcpMessageFromChild(entry, line);
+    }
+  });
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk) => {
+    entry.stderr = (entry.stderr + chunk).slice(-MCP_STDERR_KEEP);
+  });
+  const ended = (code) => {
+    entry.alive = false;
+    entry.exitCode = code;
+    for (const waiter of entry.pending.values()) waiter.reject(new Error(mcpDeadMessage(entry)));
+    entry.pending.clear();
+  };
+  child.on('error', (error) => {
+    entry.stderr = (entry.stderr + `\n${error.message}`).slice(-MCP_STDERR_KEEP);
+    ended(-1);
+  });
+  child.on('exit', (code, signal) => ended(code ?? (signal ? -1 : 0)));
+  return { started: true, running: true, pid: child.pid };
+}
+
+function mcpDeadMessage(entry) {
+  const tail = entry.stderr.trim().split('\n').slice(-5).join('\n');
+  return `The MCP server exited${entry.exitCode !== null ? ` with code ${entry.exitCode}` : ''}.${tail ? ` Its last output:\n${tail}` : ''}`;
+}
+
+function mcpMessageFromChild(entry, line) {
+  let message;
+  try {
+    message = JSON.parse(line);
+  } catch {
+    entry.stderr = (entry.stderr + `\n[not JSON-RPC] ${line.slice(0, 300)}`).slice(-MCP_STDERR_KEEP);
+    return;
+  }
+  const hasId = message && Object.prototype.hasOwnProperty.call(message, 'id') && message.id !== null;
+  if (hasId && (message.result !== undefined || message.error !== undefined)) {
+    const waiter = entry.pending.get(String(message.id));
+    if (waiter) {
+      entry.pending.delete(String(message.id));
+      waiter.resolve(message);
+    }
+    return;
+  }
+  if (hasId && message.method) {
+    // A request from the server (sampling, roots...): nothing here can answer it.
+    entry.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `${message.method} is not available in this computer.` } }) + '\n');
+  }
+  // Notifications from the server are dropped: there is no stream to carry them.
+}
+
+function mcpSend(entry, message) {
+  return new Promise((resolve, reject) => {
+    if (!entry.alive) {
+      reject(new Error(mcpDeadMessage(entry)));
+      return;
+    }
+    const hasId = Object.prototype.hasOwnProperty.call(message, 'id') && message.id !== null;
+    const isRequest = hasId && typeof message.method === 'string';
+    if (isRequest) {
+      const key = String(message.id);
+      const timer = setTimeout(() => {
+        entry.pending.delete(key);
+        reject(new Error(`The MCP server did not answer ${message.method} within ${MCP_CALL_TIMEOUT_MS / 1000}s.`));
+      }, MCP_CALL_TIMEOUT_MS);
+      entry.pending.set(key, {
+        resolve: (reply) => {
+          clearTimeout(timer);
+          resolve(reply);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+    }
+    entry.child.stdin.write(JSON.stringify(message) + '\n', (error) => {
+      if (error) {
+        if (isRequest) entry.pending.delete(String(message.id));
+        reject(error);
+      } else if (!isRequest) {
+        resolve(null); // a notification or a client response: nothing comes back
+      }
+    });
+  });
+}
+
+function mcpStop(id) {
+  const entry = mcpServers.get(id);
+  if (!entry) return { stopped: false };
+  mcpServers.delete(id);
+  if (entry.alive) {
+    try {
+      entry.child.kill('SIGTERM');
+      setTimeout(() => {
+        if (entry.alive) entry.child.kill('SIGKILL');
+      }, 3000).unref();
+    } catch {
+      // already gone
+    }
+  }
+  return { stopped: true };
+}
+
+function mcpStatuses() {
+  const out = {};
+  for (const [id, entry] of mcpServers) {
+    out[id] = { running: entry.alive, pid: entry.child.pid, exit_code: entry.exitCode, started_at: entry.startedAt, stderr: entry.stderr.slice(-800) };
+  }
+  return out;
+}
+
+// POST /mcp/<id>: one JSON-RPC message in, its response (or 202) out.
+async function mcpEndpoint(request, response, body) {
+  const id = request.url.slice('/mcp/'.length).split('?')[0];
+  const entry = mcpServers.get(id);
+  if (!entry) {
+    json(response, 404, { error: `No MCP server ${id} is running in this computer.` });
+    return;
+  }
+  if (!entry.alive) {
+    json(response, 503, { error: mcpDeadMessage(entry) });
+    return;
+  }
+  const messages = Array.isArray(body) ? body : [body];
+  try {
+    const replies = [];
+    for (const message of messages) {
+      if (!message || typeof message !== 'object') throw new Error('Expected a JSON-RPC message.');
+      const reply = await mcpSend(entry, message);
+      if (reply) replies.push(reply);
+    }
+    if (!replies.length) {
+      response.writeHead(202, { 'content-length': 0, 'cache-control': 'no-store' });
+      response.end();
+      return;
+    }
+    json(response, 200, Array.isArray(body) ? replies : replies[0]);
+  } catch (error) {
+    json(response, entry.alive ? 500 : 503, { error: error.message });
+  }
+}
+
 // ---- HTTP API ------------------------------------------------------------------
 
 // Routes that do not touch the browser run outside its queue, so a page that
@@ -450,6 +651,8 @@ async function raiseBrowser() {
 // screenshot. Returns null for any other route.
 async function unqueued(request, body) {
   if (request.method !== 'POST') return null;
+  if (request.url === '/mcp/start') return { operation: 'mcp.start', ...mcpStart(body) };
+  if (request.url === '/mcp/stop') return { operation: 'mcp.stop', ...mcpStop(String(body.id || '')) };
   if (request.url === '/terminal') {
     return { operation: 'terminal.exec', ...(await executeCommand(body.command, body.timeout_ms)) };
   }
@@ -476,6 +679,21 @@ async function handle(request, response) {
 
   try {
     const body = request.method === 'POST' ? await readBody(request) : {};
+    if (request.method === 'GET' && request.url === '/mcp/servers') {
+      json(response, 200, { computer_id: computerId, servers: mcpStatuses() });
+      return;
+    }
+    if (request.url.startsWith('/mcp/') && !['/mcp/start', '/mcp/stop'].includes(request.url)) {
+      if (request.method === 'POST') {
+        await mcpEndpoint(request, response, body);
+      } else if (request.method === 'DELETE') {
+        json(response, 200, { ok: true }); // no sessions to end
+      } else {
+        response.writeHead(405, { allow: 'POST, DELETE', 'content-length': 0 });
+        response.end();
+      }
+      return;
+    }
     if (request.method === 'GET' && request.url === '/health') {
       const current = currentPage();
       json(response, 200, {

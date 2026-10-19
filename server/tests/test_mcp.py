@@ -56,7 +56,7 @@ class ServerDefinitionTests(unittest.TestCase):
         self.assertEqual(public(http)["secret_references"], ["EXA_API_KEY"])
         for bad, message in (
             ({"name": "", "command": "npx"}, "needs a name"),
-            ({"name": "x", "transport": "ssh"}, "stdio .* or http"),
+            ({"name": "x", "transport": "ssh"}, "stdio .*http"),
             ({"name": "x", "transport": "stdio"}, "needs the command"),
             ({"name": "x", "transport": "http", "url": "ftp://x"}, "http\\(s\\) URL"),
             ({"name": "x", "command": "npx", "env": {"bad name": "1"}}, "not a valid name"),
@@ -199,9 +199,9 @@ class LiveProbeServerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([s.name for s in offered if s.group == "mcp"], ["mcp_list_servers", "mcp_add_server", "mcp_test_server", "mcp_remove_server"])
             self.assertEqual([s.needs_approval for s in MCP_TOOLS], [False, True, False, True])
             self.assertIn("mcp_add_server with the command", describe_tools(offered))
-            add = build_invocation("mcp_add_server", {"name": "Probe 2", "transport": "stdio", "command": sys.executable, "args": [PROBE], "trust_read_only": True}, "bot-1")
+            add = build_invocation("mcp_add_server", {"name": "Probe 2", "scope": "user", "transport": "stdio", "command": sys.executable, "args": [PROBE], "trust_read_only": True}, "bot-1")
             self.assertEqual(add.name, "mcp.servers_add")
-            self.assertIn("Add MCP server 'Probe 2' (stdio)", add.preview)
+            self.assertIn("Add MCP server 'Probe 2' for every bot (stdio)", add.preview)
             self.assertIn("(trusted read-only)", add.preview)
             with self.assertRaisesRegex(ToolCallError, "needs the command"):
                 build_invocation("mcp_add_server", {"name": "x", "transport": "stdio"}, "bot-1")
@@ -212,7 +212,7 @@ class LiveProbeServerTests(unittest.IsolatedAsyncioTestCase):
             names = [s["name"] for s in (await mcp_tools.list_servers(ActionInvocation(name="mcp.servers_list", arguments={}, target={}, preview="")))["servers"]]
             self.assertEqual(names, ["Probe", "Probe 2"])
             # A server that does not connect is kept but switched off.
-            broken = build_invocation("mcp_add_server", {"name": "Broken", "transport": "stdio", "command": sys.executable, "args": ["-c", "raise SystemExit(2)"]}, "bot-1")
+            broken = build_invocation("mcp_add_server", {"name": "Broken", "scope": "user", "transport": "stdio", "command": sys.executable, "args": ["-c", "raise SystemExit(2)"]}, "bot-1")
             outcome = await mcp_tools.add_server(broken)
             self.assertFalse(outcome["connected"])
             self.assertFalse(outcome["server"]["enabled"])

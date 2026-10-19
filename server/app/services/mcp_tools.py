@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.services.action_gateway import ActionDefinition, ActionInvocation, action_gateway
 from app.services.connector_tools import sanitize_schema
@@ -65,13 +65,13 @@ def spec_for(record: Dict[str, Any], tool: Any, taken: set) -> ToolSpec:
     )
 
 
-def mcp_tool_specs(manager: Any = None) -> List[ToolSpec]:
-    """Specs for every tool of every connected, enabled server; nothing blocks."""
+def mcp_tool_specs(manager: Any = None, bot_id: Optional[str] = None) -> List[ToolSpec]:
+    """Specs for every tool of every connected, enabled server the bot may use; nothing blocks."""
     manager = manager if manager is not None else mcp_manager
     specs: List[ToolSpec] = []
     taken: set = set()
     try:
-        servers = manager.cached_tools()
+        servers = manager.cached_tools(bot_id)
     except Exception as exc:
         logger.warning("MCP tools unavailable: %s", exc)
         return []
@@ -109,32 +109,44 @@ def _server_summary(record: Dict[str, Any]) -> Dict[str, Any]:
     return entry
 
 
+def _bot_of(call: ActionInvocation) -> Optional[str]:
+    target = call.target if isinstance(call.target, dict) else {}
+    bot_id = target.get("bot_id")
+    return str(bot_id) if bot_id else None
+
+
 async def list_servers(call: ActionInvocation) -> Dict[str, Any]:
-    return {"servers": [_server_summary(r) for r in mcp_manager.records()]}
+    return {"servers": [_server_summary(r) for r in mcp_manager.records(_bot_of(call))]}
 
 
 async def add_server(call: ActionInvocation) -> Dict[str, Any]:
     arguments = call.arguments if isinstance(call.arguments, dict) else {}
-    record = mcp_manager.user_store.add(arguments.get("server"), created_by="bot")
+    bot_id = _bot_of(call)
+    # scope "computer": the server runs inside this bot's computer and only this bot gets it.
+    store = mcp_manager.bot_store(bot_id) if arguments.get("scope") == "computer" and bot_id else mcp_manager.user_store
+    record = store.add(arguments.get("server"), created_by="bot")
     test = await mcp_manager.test(record)
     if not test.get("ok"):
-        # Keep it, switched off, so the user can fix it in App Settings.
-        record = mcp_manager.user_store.update(record["id"], {"enabled": False})
+        # Keep it, switched off, so the user can fix it in the editor or settings.
+        record = store.update(record["id"], {"enabled": False})
         return {"server": _server_summary(record), "connected": False, "error": test.get("error"), "note": "Saved but switched off: it did not connect. Tell the user what failed."}
-    mcp_manager.connection(record["id"]).start()
+    mcp_manager.connection(record["id"], bot_id).start()
     return {"server": _server_summary(record), "connected": True, "tools": test.get("tools", []), "note": "Its tools are offered from your next turn."}
 
 
 async def test_server(call: ActionInvocation) -> Dict[str, Any]:
     arguments = call.arguments if isinstance(call.arguments, dict) else {}
-    record = mcp_manager.find(str(arguments.get("id") or ""))
+    record = mcp_manager.find(str(arguments.get("id") or ""), _bot_of(call))
     return {"server": _server_summary(record), **(await mcp_manager.test(record))}
 
 
 async def remove_server(call: ActionInvocation) -> Dict[str, Any]:
     arguments = call.arguments if isinstance(call.arguments, dict) else {}
     server_id = str(arguments.get("id") or "")
-    record = mcp_manager.user_store.remove(server_id)
+    record = mcp_manager.find(server_id, _bot_of(call))
+    if record.get("scope") == "system":
+        raise McpError("System servers are managed by an admin in Settings.")
+    record = mcp_manager.store_for(record).remove(server_id)
     await mcp_manager.forget(server_id)
     return {"removed": public(record)}
 

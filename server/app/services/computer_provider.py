@@ -269,6 +269,7 @@ class FakeComputerProvider:
     provider_name = "fake"
 
     def __init__(self, width: int = 1920, height: int = 1080, fps: int = 30):
+        self.mcp_servers: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self.width = width
         self.height = height
         self.fps = fps
@@ -593,6 +594,21 @@ class FakeComputerProvider:
 
     def vnc_target(self, computer_id: str) -> Optional[Dict[str, Any]]:
         return None
+
+    async def mcp_start(self, computer_id: str, server: Dict[str, Any]) -> Dict[str, Any]:
+        self._require_active(computer_id)
+        self.mcp_servers.setdefault(computer_id, {})[str(server.get("id"))] = dict(server)
+        return {"operation": "mcp.start", "started": True, "running": True}
+
+    async def mcp_stop(self, computer_id: str, server_id: str) -> Dict[str, Any]:
+        stopped = self.mcp_servers.get(computer_id, {}).pop(server_id, None) is not None
+        return {"operation": "mcp.stop", "stopped": stopped}
+
+    def mcp_endpoint(self, computer_id: str, server_id: str) -> Optional[Dict[str, Any]]:
+        status = self._computers.get(computer_id)
+        if status is None or status.state != "running" or server_id not in self.mcp_servers.get(computer_id, {}):
+            return None
+        return {"url": f"http://fake-computer/{computer_id}/mcp/{server_id}", "headers": {}}
 
 
 def build_computer_provider() -> ComputerProvider:

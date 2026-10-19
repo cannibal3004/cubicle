@@ -468,15 +468,18 @@ MCP_TOOLS: List[ToolSpec] = [
     ToolSpec(
         name="mcp_add_server",
         description=(
-            "Add an MCP server (the user approves). Either a command run over stdio (command plus args, e.g. npx -y @upstash/context7-mcp) "
-            "or a streamable-HTTP url. For an API key, never ask the user to paste it into the chat: tell them to add it as an app secret "
-            "(App Settings -> Secrets) and write $NAME as the env or header value. The server is connected and tested at once; its tools "
-            "are offered from your next turn. Set trust_read_only only for servers that cannot change anything (documentation, search)."
+            "Add an MCP server (the user approves). scope 'computer' (preferred) runs a command inside your own computer, next to your "
+            "files and the packages you installed there; only you get its tools, and $NAME in env resolves from the computer's environment "
+            "(the user's secrets). scope 'user' runs a stdio command in the host API or connects to a streamable-HTTP url, for every bot of "
+            "the user. For an API key, never ask the user to paste it into the chat: tell them to add it as a secret and write $NAME as the "
+            "env or header value. The server is connected and tested at once; its tools are offered from your next turn. Set "
+            "trust_read_only only for servers that cannot change anything (documentation, search)."
         ),
         parameters=_obj(
             {
                 "name": {"type": "string", "description": "A short name, e.g. Context7"},
-                "transport": {"type": "string", "enum": ["stdio", "http"]},
+                "scope": {"type": "string", "enum": ["computer", "user"], "description": "computer: in your own computer, only for you (default); user: for every bot of the user"},
+                "transport": {"type": "string", "enum": ["stdio", "http"], "description": "scope user only; a computer server is always a command"},
                 "command": {"type": "string", "description": "stdio: the program to run, e.g. npx or uvx"},
                 "args": {"type": "array", "items": {"type": "string"}, "description": "stdio: its arguments"},
                 "env": {"type": "object", "additionalProperties": {"type": "string"}, "description": "stdio: environment variables; use $NAME for an app secret"},
@@ -484,7 +487,7 @@ MCP_TOOLS: List[ToolSpec] = [
                 "headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "http: request headers; use $NAME for an app secret"},
                 "trust_read_only": {"type": "boolean", "description": "Treat every tool of this server as read-only (no approval)"},
             },
-            ["name", "transport"],
+            ["name"],
         ),
         group="mcp",
         needs_approval=True,
@@ -688,6 +691,10 @@ def describe_tools(
                 "own tools when they are offered."
             )
     if "mcp" in groups:
+        lines.append(
+            "- MCP servers in your computer: with mcp_add_server scope computer you can run a tool server next to your files, installing it "
+            "first with your terminal (npm, pip, uv) if needed; it is yours alone and stops with the computer. "
+        )
         lines.append(
             "- MCP servers: tool servers the user runs or points at; their tools are offered like a connected app's, named <server>_<tool>. "
             "When the user asks to add one, call mcp_add_server with the command (stdio) or URL (http) they give you; for an API key, "
@@ -974,27 +981,38 @@ def build_invocation(
         schedule_id = _string(arguments, "id", required=True, max_len=40)
         return ActionInvocation(name="schedule.delete", arguments={"bot_id": bot_id, "id": schedule_id}, target={"bot_id": bot_id}, preview=f"Delete schedule {schedule_id} of {bot_id}")
     if name == "mcp_list_servers":
+        return ActionInvocation(name="mcp.servers_list", arguments={}, target={"bot_id": bot_id}, preview="List MCP servers")
+    if name == "__mcp_list_servers_old__":
         return ActionInvocation(name="mcp.servers_list", arguments={}, target={}, preview="List the MCP servers")
     if name == "mcp_add_server":
         from app.services.mcp_service import McpError, clean_server
 
+        scope = str(arguments.get("scope") or "computer").strip().lower()
+        if scope not in ("computer", "user"):
+            raise ToolCallError("'scope' must be computer or user.")
+        fields = {k: arguments.get(k) for k in ("name", "transport", "command", "args", "env", "url", "headers", "trust_read_only")}
+        if scope == "computer":
+            fields["transport"] = "computer"
+        elif not fields.get("transport"):
+            raise ToolCallError("A user-scope server needs 'transport': stdio or http.")
         try:
-            record = clean_server({k: arguments.get(k) for k in ("name", "transport", "command", "args", "env", "url", "headers", "trust_read_only")})
+            record = clean_server(fields)
         except McpError as exc:
             raise ToolCallError(str(exc)) from exc
-        where = f"{record['command']} {' '.join(record['args'])}".strip() if record["transport"] == "stdio" else record["url"]
+        where = f"{record['command']} {' '.join(record['args'])}".strip() if record["transport"] != "http" else record["url"]
+        place = "in your computer" if scope == "computer" else "for every bot"
         return ActionInvocation(
             name="mcp.servers_add",
-            arguments={"server": {k: record[k] for k in ("name", "transport", "command", "args", "env", "url", "headers", "trust_read_only")}},
-            target={"mcp_server": record["name"]},
-            preview=f"Add MCP server '{record['name']}' ({record['transport']}): {where[:120]}" + (" (trusted read-only)" if record["trust_read_only"] else ""),
+            arguments={"scope": scope, "server": {k: record[k] for k in ("name", "transport", "command", "args", "env", "url", "headers", "trust_read_only")}},
+            target={"mcp_server": record["name"], "bot_id": bot_id},
+            preview=f"Add MCP server '{record['name']}' {place} ({record['transport']}): {where[:120]}" + (" (trusted read-only)" if record["trust_read_only"] else ""),
         )
     if name == "mcp_test_server":
         server_id = _string(arguments, "id", required=True, max_len=20)
-        return ActionInvocation(name="mcp.servers_test", arguments={"id": server_id}, target={"mcp_server": server_id}, preview=f"Test MCP server {server_id}")
+        return ActionInvocation(name="mcp.servers_test", arguments={"id": server_id}, target={"mcp_server": server_id, "bot_id": bot_id}, preview=f"Test MCP server {server_id}")
     if name == "mcp_remove_server":
         server_id = _string(arguments, "id", required=True, max_len=20)
-        return ActionInvocation(name="mcp.servers_remove", arguments={"id": server_id}, target={"mcp_server": server_id}, preview=f"Remove MCP server {server_id}")
+        return ActionInvocation(name="mcp.servers_remove", arguments={"id": server_id}, target={"mcp_server": server_id, "bot_id": bot_id}, preview=f"Remove MCP server {server_id}")
     if name == "connector_connect":
         toolkit = _string(arguments, "toolkit", required=True, max_len=64).lower()
         if not _TOOLKIT_SLUG.fullmatch(toolkit):
