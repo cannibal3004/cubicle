@@ -174,6 +174,12 @@ export default function ToolsPopover({ bot, onSave, onSaveAutoApproval, onSaveGa
                   <p className="mt-1.5 text-[10px] text-zinc-500">
                     Let a decision model approve this bot&apos;s low-risk actions. “App setting” follows Auto-approval in App Settings.
                   </p>
+                  {Array.isArray(bot?.trusted_tools) && bot.trusted_tools.length > 0 && (
+                    <p className="mt-1.5 text-[10px] text-emerald-300/80">
+                      {bot.trusted_tools.length} trusted tool{bot.trusted_tools.length === 1 ? '' : 's'} run without asking whatever the mode
+                      ({bot.trusted_tools.slice(0, 3).join(', ')}{bot.trusted_tools.length > 3 ? ', …' : ''}). Change this under “Choose individual tools”.
+                    </p>
+                  )}
                 </div>
               </>
             )}

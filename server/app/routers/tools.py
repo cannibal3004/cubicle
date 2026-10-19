@@ -7,8 +7,6 @@ from fastapi import APIRouter
 from app.config import settings
 from app.services.composio_service import composio_service
 from app.services.mcp_tools import mcp_tool_specs
-from app.services.mcp_tools import mcp_tool_specs
-from app.services.mcp_tools import mcp_tool_specs
 from app.services.connector_tools import connector_tool_specs
 from app.services.llm_tools import ToolSpec, available_tools
 from app.services.storage_service import current_storage

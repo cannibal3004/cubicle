@@ -423,6 +423,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
                     status: event.type.replace('tool.', ''),
                     error: event.error || null,
                     gate: event.gate || null,
+                    trusted: Boolean(event.trusted),
                   },
                 ],
               };

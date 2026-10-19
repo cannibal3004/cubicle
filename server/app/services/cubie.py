@@ -41,6 +41,7 @@ def cubie_record(model: str, *, bot_id: str = "") -> Dict[str, Any]:
         "tool_settings": {},
         "auto_approval": "inherit",
         "gate_threshold": None,
+        "trusted_tools": [],
         "orchestrator": True,
         "pinned": True,
         "archived": False,

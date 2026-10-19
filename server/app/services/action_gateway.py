@@ -277,8 +277,13 @@ class ActionGateway:
         payload.update({key: redact_sensitive(value, key) for key, value in extra.items()})
         self.audit.add_audit_event(payload)
 
-    def open(self, thread_id: str, bot_id: str, call: Any) -> Tuple[ActionRequest, Optional[Dict[str, Any]]]:
-        """Validate, record, and prepare an action for approval or execution."""
+    def open(self, thread_id: str, bot_id: str, call: Any, *, trusted: bool = False) -> Tuple[ActionRequest, Optional[Dict[str, Any]]]:
+        """Validate, record, and prepare an action for approval or execution.
+
+        `trusted` is the user's standing approval for this tool on this bot:
+        the action is recorded as approved by "trusted" and no card opens.
+        Policy checks are not affected; only the approval step is.
+        """
 
         request_id = _request_id()
         try:
@@ -312,15 +317,18 @@ class ActionGateway:
             arguments=redact_sensitive(invocation.arguments_for_display),
             preview=redact_sensitive(invocation.preview),
             risk=definition.risk,
-            requires_approval=definition.requires_approval,
-            state="pending_approval" if definition.requires_approval else "approved",
+            requires_approval=definition.requires_approval and not trusted,
+            state="pending_approval" if definition.requires_approval and not trusted else "approved",
             created_at=_now(),
         )
         self._pending[request_id] = (request, call)
         self._audit_action("action.requested", request)
 
         approval = None
-        if definition.requires_approval:
+        if definition.requires_approval and trusted:
+            self._decisions[request_id] = "allow"
+            self._audit_action("action.approved", request, decision="allow", state="approved", decided_by="trusted")
+        elif definition.requires_approval:
             approval = self.approvals.open(
                 thread_id,
                 bot_id,

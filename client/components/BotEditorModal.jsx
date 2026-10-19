@@ -116,6 +116,7 @@ export default function BotEditorModal({
   const [orchestrator, setOrchestrator] = useState(false);
   const [memory, setMemory] = useState('');
   const [toolSettings, setToolSettings] = useState({});
+  const [trustedTools, setTrustedTools] = useState([]);
   const [showTools, setShowTools] = useState(false);
   const [showSecrets, setShowSecrets] = useState(false);
   const botId = bot?.id;
@@ -149,6 +150,7 @@ export default function BotEditorModal({
     setOrchestrator(Boolean(bot?.orchestrator));
     setMemory(bot?.memory || '');
     setToolSettings(bot?.tool_settings || {});
+    setTrustedTools(Array.isArray(bot?.trusted_tools) ? bot.trusted_tools : []);
     setShowTools(false);
     setShowSecrets(false);
     setError('');
@@ -174,6 +176,7 @@ export default function BotEditorModal({
         system_prompt: systemPrompt.trim(),
         orchestrator,
         tool_settings: toolSettings,
+        trusted_tools: trustedTools,
         // Only an existing bot has notes to edit; the server records a
         // change in the thread so the bot sees it.
         ...(bot ? { memory } : {}),
@@ -384,11 +387,13 @@ export default function BotEditorModal({
               aria-expanded={showTools}
             >
               <span className={labelClass + ' mb-0'}>Tools</span>
-              <span className="text-[11px] text-zinc-500">{showTools ? 'Hide' : 'Choose which tools this bot may use'}</span>
+              <span className="text-[11px] text-zinc-500">
+                {showTools ? 'Hide' : `Choose which tools this bot may use${trustedTools.length ? ` (${trustedTools.length} trusted)` : ''}`}
+              </span>
             </button>
             {showTools && (
               <div className="mt-2">
-                <BotToolsSection settings={toolSettings} onChange={setToolSettings} />
+                <BotToolsSection settings={toolSettings} onChange={setToolSettings} trusted={trustedTools} onTrustedChange={setTrustedTools} />
               </div>
             )}
           </div>

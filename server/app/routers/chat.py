@@ -40,6 +40,7 @@ from app.services.llm_tools import (
     ToolCallError,
     available_tools,
     build_invocation,
+    trust_tools,
     describe_tools,
     filter_tools,
     openai_tool_definitions,
@@ -217,6 +218,7 @@ async def _perform_action(
     gate_mode: str = "off",
     user_request: str = "",
     gate_threshold: Optional[float] = None,
+    trusted: bool = False,
 ) -> Dict[str, Any]:
     """Run one governed action through the gateway, emitting events on the turn.
 
@@ -224,9 +226,10 @@ async def _perform_action(
     the model (or the system prompt) about it. `gate_mode` is the bot's
     effective auto-approval mode; `user_request` is the user's latest message,
     which the gate shows the decision model next to the proposed action.
+    `trusted` means the user trusts this tool for this bot: no card, no gate.
     """
     try:
-        action_request, approval = action_gateway.open(thread_id, thread_id, action_call)
+        action_request, approval = action_gateway.open(thread_id, thread_id, action_call, **({"trusted": True} if trusted else {}))
     except ActionPolicyError as exc:
         turn.emit({
             "type": "tool.failed",
@@ -239,6 +242,8 @@ async def _perform_action(
 
     action_name = f"{action_request.tool}.{action_request.action}"
     base = {"tool": action_name, "callName": call_name, "requestId": action_request.request_id}
+    if trusted and not approval:
+        base["trusted"] = True
 
     if approval:
         turn.emit({
@@ -404,6 +409,8 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         )
         # A bot whose computer has the shared folder at /shared uses it there.
         tool_specs = without_duplicate_routes(tool_specs)
+        # The user's standing approvals for this bot.
+        tool_specs = trust_tools(tool_specs, current_bot.get("trusted_tools") if current_bot else None)
     tool_definitions = openai_tool_definitions(tool_specs) if tool_specs else None
     # The names of the user's secrets (set in the bot's computer), never the values.
     tools_prompt = describe_tools(tool_specs, secret_names=names_for(thread_id))
@@ -692,13 +699,16 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         continue
 
                     record["summary"] = getattr(invocation, "summary", None) or getattr(invocation, "preview", call_name)
+                    trusted = any(spec.name == call_name and spec.trusted for spec in tool_specs)
                     outcome = await _perform_action(
                         turn, thread_id, invocation, call_name=call_name, gate_mode=gate_mode, user_request=last_user_text,
-                        gate_threshold=gate_threshold,
+                        gate_threshold=gate_threshold, trusted=trusted,
                     )
 
                     status = outcome.get("status", "failed")
                     record["status"] = status
+                    if trusted and status != "rejected":
+                        record["trusted"] = True
                     request_obj = outcome.get("request")
                     if request_obj is not None:
                         record["requestId"] = request_obj.request_id
