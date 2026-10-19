@@ -32,8 +32,10 @@ class OrchestratorTests(unittest.TestCase):
         self.storage = StorageService(Path(self.temp.name))
         self.patch = mock.patch.object(storage_module, "storage_service", self.storage)
         self.patch.start()
-        self.cubie = ensure_orchestrator(self.storage)
-        self.worker = next(b for b in self.storage.get_bots() if not is_orchestrator(b))
+        # A fresh store already holds Cubie; ensure_orchestrator only fills a gap.
+        self.cubie = ensure_orchestrator(self.storage) or next(b for b in self.storage.get_bots() if is_orchestrator(b))
+        self.worker = {"id": "bot-worker", "name": "Worker", "role": "Helper", "system_prompt": "You help.", "model": "m", "tools": []}
+        self.storage.save_bots(self.storage.get_bots() + [self.worker])
 
     def tearDown(self):
         self.patch.stop()
@@ -46,6 +48,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual((self.cubie["name"], self.cubie["orchestrator"], self.cubie["pinned"]), ("Cubie", True, True))
         self.assertEqual(self.storage.get_bots()[0]["id"], self.cubie["id"])
         self.assertIsNone(ensure_orchestrator(self.storage))  # idempotent
+        # Delete it and the next listing brings one back.
+        self.storage.save_bots([b for b in self.storage.get_bots() if not is_orchestrator(b)])
+        self.assertEqual(ensure_orchestrator(self.storage)["name"], "Cubie")
         listed = asyncio.run(bots_router.get_bots())
         self.assertEqual(sum(1 for b in listed if b.get("orchestrator")), 1)
 
@@ -110,8 +115,10 @@ class DelegationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.storage = StorageService(Path(self.temp.name))
         self.config = LLMConfig(provider="openai_compatible", api_key="", base_url="http://localhost:11434/v1", reasoning_effort="", default_model="m")
-        self.cubie = ensure_orchestrator(self.storage)
-        self.worker = next(b for b in self.storage.get_bots() if not is_orchestrator(b))
+        # A fresh store already holds Cubie; ensure_orchestrator only fills a gap.
+        self.cubie = ensure_orchestrator(self.storage) or next(b for b in self.storage.get_bots() if is_orchestrator(b))
+        self.worker = {"id": "bot-worker", "name": "Worker", "role": "Helper", "system_prompt": "You help.", "model": "m", "tools": []}
+        self.storage.save_bots(self.storage.get_bots() + [self.worker])
         workspace = Path(self.temp.name) / "workspace"
         workspace.mkdir()
         self.manager = TurnManager()

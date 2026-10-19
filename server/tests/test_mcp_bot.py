@@ -66,7 +66,8 @@ class BotScopeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([r["name"] for r in self.manager.records(self.bot)], ["Scanner"])
         self.assertEqual(self.manager.find(record["id"], self.bot)["scope"], "bot")
         self.assertEqual(self.manager.find(record["id"])["scope"], "bot")  # a tool call without the bot still finds it
-        other = self.storage.get_bots()[1]["id"]
+        self.storage.save_bots(self.storage.get_bots() + [{"id": "bot-other", "name": "Other"}])
+        other = "bot-other"
         self.assertEqual(self.manager.records(other), [])
         self.assertIs(type(self.manager.store_for(record)), BotMcpStore)
         store.remove(record["id"])

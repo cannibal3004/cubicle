@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 from app.config import settings
 from app.services.action_gateway import ActionDefinition, ActionGateway, ActionInvocation, action_gateway
 from app.services.bot_memory import get_memory
+from app.services.cubie import NAME as DEFAULT_NAME, cubie_record
 from app.services.bot_todo import get_todo
 from app.services.context_builder import latest_compaction
 from app.services.storage_service import StorageService, current_storage
@@ -32,8 +33,6 @@ CREATE_ACTION = "bots.create"
 SEND_ACTION = "bots.send"
 REPLY_ACTION = "bots.reply"
 
-DEFAULT_NAME = "Cubie"
-DEFAULT_AVATAR = "🧊"
 WAIT_MAX_SECONDS = 1800
 REPLY_MAX_CHARS = 8000
 SUMMARY_MAX_CHARS = 4000
@@ -41,15 +40,6 @@ NOTES_MAX_CHARS = 2000
 RECENT_MESSAGES = 6
 MESSAGE_MAX_CHARS = 600
 DELEGATION_MAX_CHARS = 20000
-
-DEFAULT_PROMPT = (
-    "You are Cubie, the orchestrator of this workspace. You do not do specialist work yourself when one of the user's other bots "
-    "is better placed; you look at what they are doing (bots_list, bots_status), create a new bot when a kind of work needs one "
-    "(bots_create: give it a clear role and a focused system prompt), hand work out (bots_send, with everything the bot needs to "
-    "act on its own), and report back to the user in plain terms: what was delegated, to whom, what came back, and what still "
-    "needs them. Keep the user informed rather than busy: one clear summary beats a stream of updates. When a bot waits on an "
-    "approval or a question, tell the user which bot and what for."
-)
 
 
 class OrchestratorError(ValueError):
@@ -68,25 +58,7 @@ def ensure_orchestrator(storage: Optional[StorageService] = None) -> Optional[Di
     bots = store.get_bots()
     if any(is_orchestrator(bot) for bot in bots):
         return None
-    bot = {
-        "id": f"bot-{uuid.uuid4().hex[:6]}",
-        "name": DEFAULT_NAME,
-        "role": "Orchestrator",
-        "description": "Knows what your other bots are doing, creates new ones, and hands out work.",
-        "avatar": DEFAULT_AVATAR,
-        "model": settings.DEFAULT_MODEL,
-        "accent_color": "#22d3ee",
-        "system_prompt": DEFAULT_PROMPT,
-        "tools": [],
-        "tool_settings": {},
-        "auto_approval": "inherit",
-        "gate_threshold": None,
-        "orchestrator": True,
-        "pinned": True,
-        "archived": False,
-        "unread_count": 0,
-        "created_at": datetime.now().isoformat(),
-    }
+    bot = cubie_record(settings.DEFAULT_MODEL)
     store.save_bots([bot] + bots)
     return bot
 
