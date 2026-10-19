@@ -22,6 +22,7 @@ from app.services.computer_provider import (
     check_file_path,
     check_timeout,
 )
+from app.services.file_share import normalize_source
 from app.services.workspace_service import WorkspaceToolCall
 from app.services.bot_todo import STATES as TODO_STATES
 from app.services.schedule_service import ScheduleError, clean_cadence, describe_cadence
@@ -233,12 +234,13 @@ SHARE_TOOLS: List[ToolSpec] = [
         name="share_file",
         description=(
             "Give the user a file as a download card in the chat. Use it whenever you create or find a file the user "
-            "should have (reports, exports, images, archives). `source` is 'workspace' for the shared folder or "
-            "'computer' for your computer; `path` is relative to that root (computer paths may start with /workspace/ or /shared/)."
+            "should have (reports, exports, images, archives). `source` is 'computer' for a file in your computer (its "
+            "/workspace or home) or 'shared' for the shared folder; `path` is relative to that root, and a path starting with "
+            "/workspace/ or /shared/ says where the file is by itself. A file missing from the chosen place is looked for in the other."
         ),
         parameters=_obj(
             {
-                "source": {"type": "string", "enum": ["workspace", "computer"]},
+                "source": {"type": "string", "enum": ["computer", "shared"]},
                 "path": {"type": "string", "description": "File path inside the chosen root"},
             },
             ["source", "path"],
@@ -723,8 +725,9 @@ def describe_tools(
             )
     if "share" in groups:
         lines.append(
-            "- Sharing files: share_file puts a download card for a file in the chat. Do it for anything you produce that the user "
-            "should keep, then mention the file by name; do not paste large file contents into the reply instead."
+            "- Sharing files: share_file puts a download card for a file in the chat (source computer for a file in your computer, "
+            "shared for the shared folder). Do it for anything you produce that the user should keep, then mention the file by "
+            "name; do not paste large file contents into the reply instead."
         )
     if "memory" in groups:
         lines.append(
@@ -985,13 +988,13 @@ def build_invocation(
         return _computer_invocation("send_input", bot_id, {"event": event}, preview)
 
     if name == "share_file":
-        source = _string(arguments, "source", required=True, max_len=20).strip().lower()
+        source = normalize_source(_string(arguments, "source", required=True, max_len=20))
         if source not in {"workspace", "computer"}:
-            raise ToolCallError("'source' must be workspace or computer.")
+            raise ToolCallError("'source' must be computer or shared.")
         path = _string(arguments, "path", required=True, max_len=1000).strip()
         if not path:
             raise ToolCallError("'path' is required.")
-        where = "the shared workspace" if source == "workspace" else f"the computer for {bot_id}"
+        where = "the shared folder" if source == "workspace" else f"the computer for {bot_id}"
         return ActionInvocation(
             name="files.share",
             arguments={"source": source, "path": path},

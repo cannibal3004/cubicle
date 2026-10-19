@@ -47,6 +47,22 @@ class FileShareTests(unittest.TestCase):
         # A leading slash or backslashes are tolerated.
         self.assertEqual(resolve_shared_file("workspace", "/reports\\q3.json", None).path, "reports/q3.json")
 
+    def test_the_path_spelling_wins_and_the_other_root_is_tried(self):
+        # What the Software Developer bot did: its own /workspace file, source "workspace".
+        found = resolve_shared_file("workspace", "chart.png", "bot-1")
+        self.assertEqual((found.source, found.path), ("computer", "chart.png"))
+        self.assertEqual(resolve_shared_file("workspace", "/workspace/chart.png", "bot-1").source, "computer")
+        self.assertEqual(resolve_shared_file("shared", "reports/q3.json", None).source, "workspace")
+        # And the other way round: a shared-folder file asked for from the computer.
+        self.assertEqual(resolve_shared_file("computer", "reports/q3.json", "bot-1").source, "workspace")
+        with self.assertRaisesRegex(FileShareError, "shared folder and the computer"):
+            resolve_shared_file("workspace", "nope.txt", "bot-1")
+        with self.assertRaisesRegex(FileShareError, r"looked in the shared folder\)"):
+            resolve_shared_file("workspace", "nope.txt", None)  # no bot: only one place to look
+        call = build_invocation("share_file", {"source": "shared", "path": "reports/q3.json"}, "bot-1")
+        self.assertEqual(call.arguments["source"], "workspace")
+        self.assertIn("the shared folder", call.preview)
+
     def test_computer_files_accept_the_sandbox_spelling(self):
         shared = resolve_shared_file("computer", "/workspace/chart.png", "bot-1")
         self.assertEqual((shared.path, shared.mime), ("chart.png", "image/png"))
@@ -84,7 +100,7 @@ class FileShareTests(unittest.TestCase):
         self.assertTrue(result["shared"])
         self.assertEqual(result["attachment"], {"source": "computer", "path": "chart.png", "name": "chart.png", "size": 9, "mime": "image/png"})
 
-        with self.assertRaisesRegex(ToolCallError, "workspace or computer"):
+        with self.assertRaisesRegex(ToolCallError, "computer or shared"):
             build_invocation("share_file", {"source": "usb", "path": "x"}, "bot-1")
         with self.assertRaisesRegex(FileShareError, "No such file"):
             asyncio.run(file_share.execute_share(ActionInvocation(
