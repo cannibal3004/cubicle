@@ -46,7 +46,15 @@ def clean_memory(text: Any) -> str:
         raise MemoryError("Notes must be text.")
     cleaned = text.replace("\r\n", "\n").strip()
     if len(cleaned) > MEMORY_MAX_CHARS:
-        raise MemoryError(f"Notes are limited to {MEMORY_MAX_CHARS} characters; these are {len(cleaned)}.")
+        # Say what the notes are for, not just the numbers: a bot that keeps a
+        # running log here will hit any limit, and the fix is to move the log.
+        raise MemoryError(
+            f"Notes are limited to {MEMORY_MAX_CHARS} characters; this would make them {len(cleaned)}. "
+            "Notes are for standing facts: the goal, the user's rules, how things are set up and where they are, "
+            "the current watchlist, and a short latest status. Per-run logs and day-by-day reports belong in files in "
+            "your workspace, with at most a line of status here. Move or drop those sections with memory_edit (or "
+            "rewrite the notes with memory_write) and try again."
+        )
     return cleaned
 
 
