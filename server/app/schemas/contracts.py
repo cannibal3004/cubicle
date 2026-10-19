@@ -24,6 +24,8 @@ class Bot(BaseModel):
     auto_approval: Literal["inherit", "off", "shadow", "on"] = "inherit"
     # The decider's risk threshold for this bot alone; None follows App Settings.
     gate_threshold: Optional[float] = None
+    # An orchestrator sees the user's other bots, creates new ones and hands them work.
+    orchestrator: bool = False
     # The bot's own notes, kept across conversations and compactions. The
     # bot writes them with memory_write; the user can edit them too.
     memory: str = ""

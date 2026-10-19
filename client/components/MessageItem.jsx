@@ -136,6 +136,11 @@ function MessageItem({ message, botId }) {
                   scheduled · {message.raw_payload.scheduled.name}
                 </span>
               )}
+              {message.raw_payload?.delegated && (
+                <span className="block text-[10px] font-mono text-cyan-200/80 mb-0.5" title="Handed over by the orchestrator bot on your behalf">
+                  from {message.raw_payload.delegated.from_name || 'the orchestrator'}
+                </span>
+              )}
               {message.text}
             </span>
             {formattedTime && (

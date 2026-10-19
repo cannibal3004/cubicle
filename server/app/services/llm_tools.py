@@ -432,6 +432,69 @@ QUESTION_TOOLS: List[ToolSpec] = [
     ),
 ]
 
+ORCHESTRATION_TOOLS: List[ToolSpec] = [
+    ToolSpec(
+        name="bots_list",
+        description="The user's other bots: id, name, role, whether each is idle, working or waiting for the user, open to-do items and last activity. Start here before delegating.",
+        parameters=_obj({}),
+        group="orchestration",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="bots_status",
+        description="One bot in detail: its summary of earlier work, to-do list, notes, recent messages (with the tools it used), computer state.",
+        parameters=_obj({"bot_id": {"type": "string"}}, ["bot_id"]),
+        group="orchestration",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="bots_create",
+        description=(
+            "Create a new bot for a kind of work none of the existing bots covers (the user approves). Give it a clear role and a focused "
+            "system prompt that says what it is for and how to work; it gets the usual tools and its own computer."
+        ),
+        parameters=_obj(
+            {
+                "name": {"type": "string", "description": "Short and distinct"},
+                "role": {"type": "string", "description": "One line, e.g. Security researcher"},
+                "description": {"type": "string"},
+                "system_prompt": {"type": "string", "description": "Its standing instructions"},
+                "avatar": {"type": "string", "description": "One emoji"},
+                "model": {"type": "string", "description": "Leave out for the default model"},
+            },
+            ["name", "role", "system_prompt"],
+        ),
+        group="orchestration",
+        needs_approval=True,
+    ),
+    ToolSpec(
+        name="bots_send",
+        description=(
+            "Hand a bot a task (the user approves). The message is posted into that bot's chat as coming from you and its reply starts at "
+            "once; write everything it needs to act on its own, as you would brief a colleague. With wait_seconds (default 600, at most 1800) "
+            "you get its reply back here; otherwise collect it later with bots_reply. If the bot stops at an approval or a question, you are "
+            "told and the user must answer it in that bot's chat."
+        ),
+        parameters=_obj(
+            {
+                "bot_id": {"type": "string"},
+                "message": {"type": "string", "description": "The task, complete and self-contained"},
+                "wait_seconds": {"type": "number", "description": "How long to wait for the reply; 0 to return at once"},
+            },
+            ["bot_id", "message"],
+        ),
+        group="orchestration",
+        needs_approval=True,
+    ),
+    ToolSpec(
+        name="bots_reply",
+        description="A bot's latest reply (or its reply to one of your messages, by message_id) and whether it is idle, working or waiting for the user.",
+        parameters=_obj({"bot_id": {"type": "string"}, "message_id": {"type": "string", "description": "From bots_send, to get the reply to that message"}}, ["bot_id"]),
+        group="orchestration",
+        needs_approval=False,
+    ),
+]
+
 CONNECTOR_TOOLS: List[ToolSpec] = [
     ToolSpec(
         name="connector_connect",
@@ -510,7 +573,12 @@ MCP_TOOLS: List[ToolSpec] = [
 
 
 def available_tools(
-    *, computer: bool, github: bool = False, connectors: Optional[List[ToolSpec]] = None, connector_management: bool = False
+    *,
+    computer: bool,
+    github: bool = False,
+    connectors: Optional[List[ToolSpec]] = None,
+    connector_management: bool = False,
+    orchestrator: bool = False,
 ) -> List[ToolSpec]:
     """The built-in tools plus any discovered for connected apps.
 
@@ -525,6 +593,8 @@ def available_tools(
     specs.extend(TODO_TOOLS)
     specs.extend(SCHEDULE_TOOLS)
     specs.extend(QUESTION_TOOLS)
+    if orchestrator:
+        specs.extend(ORCHESTRATION_TOOLS)
     if connector_management:
         specs.extend(CONNECTOR_TOOLS)
     specs.extend(MCP_TOOLS)
@@ -656,6 +726,14 @@ def describe_tools(
             "steps, todo_add the steps first, mark each doing when you start it and done when it is finished (todo_update), and add "
             "steps you discover. Every todo result shows the whole list, the user sees and can edit it, and after a compaction the "
             "current list comes with the summary. Keep items short; it is a checklist, not notes."
+        )
+    if "orchestration" in groups:
+        lines.append(
+            "- Other bots: you are an orchestrator. bots_list and bots_status show what the user's bots are doing; bots_create makes a "
+            "new one for work nobody covers; bots_send gives a bot a complete task and (with wait_seconds) brings its reply back; "
+            "bots_reply collects a reply later. Delegate specialist work rather than doing it yourself, brief fully, and report to "
+            "the user what was delegated, what came back, and what waits on them (a bot stopped at an approval or a question needs "
+            "the user in that bot's chat)."
         )
     if "questions" in groups:
         lines.append(
@@ -903,6 +981,52 @@ def build_invocation(
 
     if name == "todo_list":
         return ActionInvocation(name="todo.list", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the to-do list of {bot_id}")
+    if name == "bots_list":
+        return ActionInvocation(name="bots.list", arguments={}, target={"bot_id": bot_id}, preview="List the user's bots")
+    if name == "bots_status":
+        other = _string(arguments, "bot_id", required=True, max_len=40)
+        return ActionInvocation(name="bots.status", arguments={"bot_id": other}, target={"bot_id": bot_id}, preview=f"Look at bot {other}")
+    if name == "bots_create":
+        new_name = _string(arguments, "name", required=True, max_len=80).strip()
+        role = _string(arguments, "role", required=True, max_len=200).strip()
+        prompt = _string(arguments, "system_prompt", required=True, max_len=20000).strip()
+        if not new_name or not role or not prompt:
+            raise ToolCallError("'name', 'role' and 'system_prompt' are required.")
+        return ActionInvocation(
+            name="bots.create",
+            arguments={
+                "name": new_name,
+                "role": role,
+                "system_prompt": prompt,
+                "description": _string(arguments, "description", default="", max_len=300),
+                "avatar": _string(arguments, "avatar", default="", max_len=16),
+                "model": _string(arguments, "model", default="", max_len=200),
+            },
+            target={"bot_id": bot_id},
+            preview=f"Create a bot named {new_name} ({role})",
+        )
+    if name == "bots_send":
+        other = _string(arguments, "bot_id", required=True, max_len=40)
+        message = _string(arguments, "message", required=True, max_len=20000).strip()
+        if not message:
+            raise ToolCallError("'message' is required.")
+        wait = arguments.get("wait_seconds", 600)
+        if not isinstance(wait, (int, float)) or isinstance(wait, bool) or wait < 0:
+            raise ToolCallError("'wait_seconds' must be a number of seconds, 0 or more.")
+        return ActionInvocation(
+            name="bots.send",
+            arguments={"bot_id": other, "message": message, "wait_seconds": min(float(wait), 1800.0)},
+            target={"bot_id": bot_id, "to": other},
+            preview=f"Send bot {other} a task: {message[:140]}",
+        )
+    if name == "bots_reply":
+        other = _string(arguments, "bot_id", required=True, max_len=40)
+        return ActionInvocation(
+            name="bots.reply",
+            arguments={"bot_id": other, "message_id": _string(arguments, "message_id", default="", max_len=40)},
+            target={"bot_id": bot_id},
+            preview=f"Collect the reply of bot {other}",
+        )
     if name == "ask_user":
         question = _string(arguments, "question", required=True, max_len=2000).strip()
         if not question:

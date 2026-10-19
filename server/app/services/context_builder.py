@@ -28,6 +28,8 @@ TODO_LEAD = "Your to-do list at this point:"
 TODO_EDIT_LEAD = "The user edited your to-do list. It is now:"
 # A user message a schedule posted; the model is told so it reports rather than converses.
 SCHEDULED_LEAD = "[Scheduled task '{name}', run automatically at {at}. Nobody is reading live: do the job and reply with a report.]"
+# A task handed over by the orchestrator bot: the reply goes back to it.
+DELEGATED_LEAD = "[Task from {name}, the orchestrator bot, on the user's behalf. Do it as you would for the user; your reply goes back to {name}, who reports to the user.]"
 
 
 def is_compaction(message: Dict[str, Any]) -> bool:
@@ -207,6 +209,9 @@ def build_history_messages(history: List[Dict[str, Any]], *, replay_tools: bool)
             scheduled = (message.get("raw_payload") or {}).get("scheduled")
             if isinstance(scheduled, dict):
                 text = f"{SCHEDULED_LEAD.format(name=scheduled.get('name', ''), at=scheduled.get('at', ''))}\n\n{text}"
+            delegated = (message.get("raw_payload") or {}).get("delegated")
+            if isinstance(delegated, dict):
+                text = f"{DELEGATED_LEAD.format(name=delegated.get('from_name') or 'the orchestrator')}\n\n{text}"
             # Attached files follow the user's words: a header saying where
             # each one is, then its text (capped at upload time).
             blocks = [attachment_for_model(a) for a in (message.get("attachments") or []) if isinstance(a, dict)]

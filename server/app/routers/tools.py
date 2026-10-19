@@ -26,6 +26,7 @@ GROUP_LABELS = {
     "connectors": "App connections",
     "mcp": "MCP servers",
     "questions": "Questions to you",
+    "orchestration": "Other bots (orchestrator)",
 }
 
 
@@ -51,6 +52,7 @@ async def tool_catalog():
         computer=settings.COMPUTER_PROVIDER == "docker",
         github=bool(composio_service.get_api_key()) and not connector_specs,
         connector_management=bool(composio_service.get_api_key()),
+        orchestrator=True,
     )
 
     groups: List[Dict[str, Any]] = []

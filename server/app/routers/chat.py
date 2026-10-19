@@ -33,6 +33,7 @@ from app.services.mcp_tools import mcp_tool_specs
 from app.services.mcp_tools import mcp_tool_specs
 from app.services.secrets_service import names_for, redactor_for
 from app.services import attachments as attachment_service
+from app.services import orchestrator as _orchestrator  # noqa: F401 - registers bots.* actions
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
 from app.services.file_share import FileShareError, resolve_shared_file
 from app.services.llm_tools import (
@@ -369,6 +370,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
             github=bool(composio_service.get_api_key()) and not connector_specs,
             connectors=connector_specs,
             connector_management=bool(composio_service.get_api_key()),
+            orchestrator=bool(current_bot.get("orchestrator")),
         )
         # The bot's own tool choices, then apps switched off for every bot.
         tool_specs = filter_tools(
