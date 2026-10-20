@@ -194,7 +194,7 @@ export default function ComputerFiles({ bot }) {
 
   return (
     <div
-      className={`w-full h-full flex flex-col rounded-xl border bg-slate-950 overflow-hidden ${dragging ? 'border-blue-500/70 ring-1 ring-blue-500/40' : 'border-slate-800'}`}
+      className={`w-full h-full flex flex-col rounded-xl border bg-zinc-950 overflow-hidden ${dragging ? 'border-emerald-500/70 ring-1 ring-emerald-500/40' : 'border-zinc-800'}`}
       onDragOver={(event) => {
         event.preventDefault();
         if (!dragging) setDragging(true);
@@ -210,38 +210,38 @@ export default function ComputerFiles({ bot }) {
       }}
     >
       {/* Root switch, breadcrumb, actions */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-800 bg-slate-900/60 text-xs">
-        <div className="flex rounded-lg border border-slate-800 overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-900/60 text-xs">
+        <div className="flex rounded-lg border border-zinc-800 overflow-hidden">
           {ROOTS.map((root) => (
             <button
               key={root.id}
               type="button"
               title={root.hint}
               onClick={() => setSource(root.id)}
-              className={`px-2.5 py-1 font-mono text-[11px] transition ${source === root.id ? 'bg-blue-500/15 text-blue-300' : 'text-slate-500 hover:text-slate-300'}`}
+              className={`px-2.5 py-1 font-mono text-[11px] transition ${source === root.id ? 'bg-[#27272a] text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
               {root.label}
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-1 min-w-0 flex-1 font-mono text-[11px] text-slate-400 overflow-x-auto">
+        <div className="flex items-center gap-1 min-w-0 flex-1 font-mono text-[11px] text-zinc-400 overflow-x-auto">
           <button type="button" onClick={() => open('')} className="hover:text-white">{rootLabel()}</button>
           {crumbs.map((part, index) => {
             const target = crumbs.slice(0, index + 1).join('/');
             return (
               <React.Fragment key={target}>
-                <FiChevronRight className="text-slate-600 flex-shrink-0" />
-                <button type="button" onClick={() => open(target)} className={`hover:text-white truncate ${index === crumbs.length - 1 ? 'text-slate-200' : ''}`}>
+                <FiChevronRight className="text-zinc-600 flex-shrink-0" />
+                <button type="button" onClick={() => open(target)} className={`hover:text-white truncate ${index === crumbs.length - 1 ? 'text-zinc-200' : ''}`}>
                   {part}
                 </button>
               </React.Fragment>
             );
           })}
         </div>
-        <button type="button" onClick={() => load(source, path)} className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800 transition" title="Refresh">
+        <button type="button" onClick={() => load(source, path)} className="p-1.5 rounded-lg text-zinc-500 hover:text-white hover:bg-zinc-800 transition" title="Refresh">
           <FiRefreshCw className={loading ? 'animate-spin' : ''} />
         </button>
-        <button type="button" onClick={() => setNewFolder('')} className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800 transition" title="New folder">
+        <button type="button" onClick={() => setNewFolder('')} className="p-1.5 rounded-lg text-zinc-500 hover:text-white hover:bg-zinc-800 transition" title="New folder">
           <FiFolderPlus />
         </button>
         <button
@@ -256,17 +256,17 @@ export default function ComputerFiles({ bot }) {
       </div>
 
       {(error || notice) && (
-        <div className={`px-3 py-1.5 text-[11px] flex items-center gap-1.5 border-b border-slate-800 ${error ? 'text-rose-300 bg-rose-500/10' : 'text-emerald-300 bg-emerald-500/10'}`}>
+        <div className={`px-3 py-1.5 text-[11px] flex items-center gap-1.5 border-b border-zinc-800 ${error ? 'text-rose-300 bg-rose-500/10' : 'text-emerald-300 bg-emerald-500/10'}`}>
           {error ? <FiAlertCircle /> : null}
           <span className="flex-1">{error || notice}</span>
-          <button type="button" onClick={() => { setError(''); setNotice(''); }} className="text-slate-500 hover:text-white"><FiX /></button>
+          <button type="button" onClick={() => { setError(''); setNotice(''); }} className="text-zinc-500 hover:text-white"><FiX /></button>
         </div>
       )}
 
       {/* Entries */}
       <div className="flex-1 overflow-y-auto">
         {newFolder !== null && (
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-800/60 bg-slate-900/40">
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-zinc-800/60 bg-zinc-900/40">
             <FiFolder className="text-amber-400/80" />
             <input
               autoFocus
@@ -277,19 +277,19 @@ export default function ComputerFiles({ bot }) {
                 if (event.key === 'Escape') setNewFolder(null);
               }}
               placeholder="folder name"
-              className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-[11px] font-mono text-slate-100 focus:outline-none focus:border-slate-500"
+              className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1 text-[11px] font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
             />
             <button type="button" onClick={createFolder} className="text-[11px] text-emerald-300 hover:text-white">Create</button>
-            <button type="button" onClick={() => setNewFolder(null)} className="text-[11px] text-slate-500 hover:text-white">Cancel</button>
+            <button type="button" onClick={() => setNewFolder(null)} className="text-[11px] text-zinc-500 hover:text-white">Cancel</button>
           </div>
         )}
         {listing && !listing.exists && !loading && (
-          <p className="px-4 py-6 text-[11px] text-slate-500 text-center">
+          <p className="px-4 py-6 text-[11px] text-zinc-500 text-center">
             {path ? 'This folder does not exist.' : 'Nothing here yet. The folder is created the first time something is put in it.'}
           </p>
         )}
         {listing?.exists && !entries.length && !loading && (
-          <p className="px-4 py-6 text-[11px] text-slate-500 text-center">Empty folder. Drop files here to upload them.</p>
+          <p className="px-4 py-6 text-[11px] text-zinc-500 text-center">Empty folder. Drop files here to upload them.</p>
         )}
         {entries.map((entry) => {
           const isDir = entry.kind === 'dir';
@@ -298,44 +298,44 @@ export default function ComputerFiles({ bot }) {
           const canPreview = !isDir && (kind === 'image' || kind === 'pdf' || (kind === 'text' && entry.size <= 512 * 1024));
           const confirmingThis = confirming === entry.path;
           return (
-            <div key={entry.path} className="group flex items-center gap-3 px-3 py-1.5 border-b border-slate-800/40 hover:bg-slate-900/60 text-xs">
-              <Icon className={`flex-shrink-0 ${isDir ? 'text-amber-400/80' : 'text-slate-400'}`} />
+            <div key={entry.path} className="group flex items-center gap-3 px-3 py-1.5 border-b border-zinc-800/40 hover:bg-zinc-900/60 text-xs">
+              <Icon className={`flex-shrink-0 ${isDir ? 'text-amber-400/80' : 'text-zinc-400'}`} />
               {isDir ? (
-                <button type="button" onClick={() => open(entry.path)} className="min-w-0 flex-1 text-left text-slate-100 truncate hover:text-white font-medium">
+                <button type="button" onClick={() => open(entry.path)} className="min-w-0 flex-1 text-left text-zinc-100 truncate hover:text-white font-medium">
                   {entry.name}
                 </button>
               ) : (
                 <button
                   type="button"
                   onClick={() => (canPreview ? openPreview(entry) : download(entry))}
-                  className="min-w-0 flex-1 text-left text-slate-200 truncate hover:text-white"
+                  className="min-w-0 flex-1 text-left text-zinc-200 truncate hover:text-white"
                   title={canPreview ? 'Preview' : 'Download'}
                 >
                   {entry.name}
                 </button>
               )}
-              <span className="w-16 text-right text-[10px] text-slate-500 font-mono flex-shrink-0">{isDir ? '' : formatSize(entry.size)}</span>
-              <span className="w-28 text-right text-[10px] text-slate-500 flex-shrink-0 hidden md:block">{formatWhen(entry.modified)}</span>
+              <span className="w-16 text-right text-[10px] text-zinc-500 font-mono flex-shrink-0">{isDir ? '' : formatSize(entry.size)}</span>
+              <span className="w-28 text-right text-[10px] text-zinc-500 flex-shrink-0 hidden md:block">{formatWhen(entry.modified)}</span>
               <div className="flex items-center gap-0.5 flex-shrink-0 w-24 justify-end">
                 {confirmingThis ? (
                   <>
                     <span className="text-[10px] text-rose-300 mr-1">Delete?</span>
                     <button type="button" onClick={() => remove(entry)} className="px-1.5 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-200 hover:bg-rose-500/40">Yes</button>
-                    <button type="button" onClick={() => setConfirming(null)} className="px-1.5 py-0.5 rounded text-[10px] text-slate-400 hover:text-white">No</button>
+                    <button type="button" onClick={() => setConfirming(null)} className="px-1.5 py-0.5 rounded text-[10px] text-zinc-400 hover:text-white">No</button>
                   </>
                 ) : (
                   <>
                     {canPreview && (
-                      <button type="button" onClick={() => openPreview(entry)} className="p-1 rounded text-slate-500 hover:text-white opacity-0 group-hover:opacity-100 transition" title="Preview">
+                      <button type="button" onClick={() => openPreview(entry)} className="p-1 rounded text-zinc-500 hover:text-white opacity-0 group-hover:opacity-100 transition" title="Preview">
                         <FiEye />
                       </button>
                     )}
                     {!isDir && (
-                      <button type="button" onClick={() => download(entry)} className="p-1 rounded text-slate-500 hover:text-white opacity-0 group-hover:opacity-100 transition" title="Download">
+                      <button type="button" onClick={() => download(entry)} className="p-1 rounded text-zinc-500 hover:text-white opacity-0 group-hover:opacity-100 transition" title="Download">
                         <FiDownload />
                       </button>
                     )}
-                    <button type="button" onClick={() => setConfirming(entry.path)} className="p-1 rounded text-slate-500 hover:text-rose-300 opacity-0 group-hover:opacity-100 transition" title={isDir ? 'Delete (empty folders only)' : 'Delete'}>
+                    <button type="button" onClick={() => setConfirming(entry.path)} className="p-1 rounded text-zinc-500 hover:text-rose-300 opacity-0 group-hover:opacity-100 transition" title={isDir ? 'Delete (empty folders only)' : 'Delete'}>
                       <FiTrash2 />
                     </button>
                   </>
@@ -347,7 +347,7 @@ export default function ComputerFiles({ bot }) {
         {listing?.truncated && <p className="px-4 py-2 text-[10px] text-amber-300">Only the first {entries.length} entries are shown.</p>}
       </div>
 
-      <div className="px-3 py-1.5 border-t border-slate-800 text-[10px] text-slate-500 flex items-center gap-2">
+      <div className="px-3 py-1.5 border-t border-zinc-800 text-[10px] text-zinc-500 flex items-center gap-2">
         <FiHardDrive />
         {source === 'computer'
           ? "The bot's /workspace on this server. Uploads simply appear there; the bot is not told and nothing is attached to the chat."

@@ -72,19 +72,21 @@ export default function VncViewer({ url, viewOnly = true, onStatus, onClick }) {
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" style={{ outline: 'none' }} />
-      {viewOnly && onClick && status === 'connected' && (
+      {viewOnly && status === 'connected' && (
+        // Covers the canvas while only watching: an ordinary pointer instead
+        // of the desktop's cursor shape, and the click to enlarge when offered.
         <div
-          className="absolute inset-0 cursor-zoom-in"
-          onClick={onClick}
-          role="button"
-          aria-label="Enlarge the desktop"
-          title="Click to enlarge"
+          className={`absolute inset-0 ${onClick ? 'cursor-zoom-in' : 'cursor-default'}`}
+          onClick={onClick || undefined}
+          role={onClick ? 'button' : undefined}
+          aria-label={onClick ? 'Enlarge the desktop' : undefined}
+          title={onClick ? 'Click to enlarge' : undefined}
         />
       )}
       {status !== 'connected' && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 text-xs text-slate-300 gap-1">
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 text-xs text-zinc-300 gap-1">
           <span>{status === 'connecting' ? 'Connecting to the desktop…' : status === 'error' ? 'Viewer error' : 'Disconnected'}</span>
-          {detail && <span className="text-[10px] text-slate-500">{detail}</span>}
+          {detail && <span className="text-[10px] text-zinc-500">{detail}</span>}
         </div>
       )}
     </div>

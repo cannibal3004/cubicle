@@ -7,8 +7,8 @@ import { fetchComputerStatus } from '../lib/api';
 const DOT = {
   running: 'bg-emerald-400',
   paused: 'bg-amber-400',
-  starting: 'bg-blue-400 animate-pulse',
-  resetting: 'bg-blue-400 animate-pulse',
+  starting: 'bg-cyan-400 animate-pulse',
+  resetting: 'bg-cyan-400 animate-pulse',
   error: 'bg-red-400',
 };
 

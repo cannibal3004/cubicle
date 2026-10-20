@@ -36,9 +36,9 @@ const ACTIVE_STATES = new Set(['running', 'paused']);
 function stateClasses(state) {
   if (state === 'running') return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
   if (state === 'paused') return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
-  if (state === 'starting' || state === 'resetting') return 'bg-blue-500/20 text-blue-300 border-blue-500/30';
+  if (state === 'starting' || state === 'resetting') return 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30';
   if (state === 'error') return 'bg-red-500/20 text-red-300 border-red-500/30';
-  return 'bg-slate-800 text-slate-300 border-slate-700';
+  return 'bg-zinc-800 text-zinc-300 border-zinc-700';
 }
 function prettyState(state) {
   return (state || 'stopped').replace(/_/g, ' ');
@@ -159,7 +159,7 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
 
   if (!bot) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-slate-950/80 p-6 text-sm text-slate-400">
+      <div className="flex-1 flex items-center justify-center bg-zinc-950/80 p-6 text-sm text-zinc-400">
         Select a bot to view its computer.
       </div>
     );
@@ -195,11 +195,11 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
   const liveDesktop = (enlarge) => (
     <div
       className={`w-full h-full rounded-xl border bg-black relative overflow-hidden shadow-2xl ${
-        userHasControl ? 'border-purple-500/60 ring-1 ring-purple-500/40' : 'border-slate-800'
+        userHasControl ? 'border-purple-500/60 ring-1 ring-purple-500/40' : 'border-zinc-800'
       }`}
     >
       <VncViewer key={viewerKey} url={vncUrl} viewOnly={!userHasControl} onStatus={setVncStatus} onClick={enlarge} />
-      <span className="absolute top-3 right-3 rounded bg-black/70 px-2 py-1 text-[10px] font-mono text-slate-300 pointer-events-none">
+      <span className="absolute top-3 right-3 rounded bg-black/70 px-2 py-1 text-[10px] font-mono text-zinc-300 pointer-events-none">
         {userHasControl ? 'you have control' : 'watching · bot has control'}
       </span>
     </div>
@@ -209,60 +209,60 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
     liveDesktop(() => setMaximized(true))
   ) : screen?.available ? (
     screen.data ? (
-      <div className="w-full h-full rounded-xl border border-slate-800 bg-black flex items-center justify-center relative overflow-hidden shadow-2xl">
+      <div className="w-full h-full rounded-xl border border-zinc-800 bg-black flex items-center justify-center relative overflow-hidden shadow-2xl">
         <img src={`data:image/${screen.format || 'jpeg'};base64,${screen.data}`} alt={`Computer frame ${screen.frame_id || ''}`} className="max-w-full max-h-full object-contain" />
-        <span className="absolute top-3 right-3 rounded bg-black/70 px-2 py-1 text-[10px] font-mono text-slate-300">{screen.frame_id}</span>
+        <span className="absolute top-3 right-3 rounded bg-black/70 px-2 py-1 text-[10px] font-mono text-zinc-300">{screen.frame_id}</span>
       </div>
     ) : (
-      <div className="w-full h-full rounded-xl border border-slate-800/80 bg-slate-950 p-4 flex flex-col justify-between font-mono text-xs">
-        <div className="flex items-center justify-between text-slate-400 border-b border-slate-800/60 pb-2">
+      <div className="w-full h-full rounded-xl border border-zinc-800/80 bg-zinc-950 p-4 flex flex-col justify-between font-mono text-xs">
+        <div className="flex items-center justify-between text-zinc-400 border-b border-zinc-800/60 pb-2">
           <span className="text-cyan-400">Provider frame metadata</span>
           <span>{screen.frame_id}</span>
         </div>
         <div className="space-y-2 my-auto">
           <p className="text-emerald-400">✓ Computer is {screen.state}</p>
-          <p className="text-slate-400">Provider: {screen.provider}</p>
+          <p className="text-zinc-400">Provider: {screen.provider}</p>
           <p className="text-amber-400">{screen.message}</p>
         </div>
       </div>
     )
   ) : (
-    <div className="w-full h-full rounded-xl border border-dashed border-slate-800 flex flex-col items-center justify-center text-center p-8">
-      <FiMonitor className="text-4xl text-slate-700 mb-4" />
-      <p className="text-sm font-semibold text-slate-300">{state === 'starting' || state === 'resetting' ? `The computer is ${prettyState(state)}…` : 'The computer is off'}</p>
-      <p className="text-xs text-slate-500 mt-2 max-w-md">
+    <div className="w-full h-full rounded-xl border border-dashed border-zinc-800 flex flex-col items-center justify-center text-center p-8">
+      <FiMonitor className="text-4xl text-zinc-700 mb-4" />
+      <p className="text-sm font-semibold text-zinc-300">{state === 'starting' || state === 'resetting' ? `The computer is ${prettyState(state)}…` : 'The computer is off'}</p>
+      <p className="text-xs text-zinc-500 mt-2 max-w-md">
         Press Start to boot it, or let the bot start it when it needs it. Ubuntu with Chromium, a terminal, Node and Python;
-        <span className="font-mono text-slate-400"> /workspace</span> and the home directory are kept between starts,
-        <span className="font-mono text-slate-400"> /shared</span> is the shared folder. It has internet access: do not sign in to anything you would not type into a shared machine.
+        <span className="font-mono text-zinc-400"> /workspace</span> and the home directory are kept between starts,
+        <span className="font-mono text-zinc-400"> /shared</span> is the shared folder. It has internet access: do not sign in to anything you would not type into a shared machine.
       </p>
     </div>
   );
 
   const activity = (
-    <div className="w-full h-full rounded-xl border border-slate-800 bg-slate-950 p-5 font-mono text-xs space-y-2 overflow-auto">
-      <p className="text-slate-500">[provider] {computer?.provider || 'fake'} adapter</p>
-      <p className="text-slate-400">[state] {prettyState(state)}</p>
-      <p className="text-slate-400">[health] {computer?.health || 'unknown'}</p>
-      <p className="text-slate-400">[control] {computer?.controlled_by || 'bot'}</p>
-      <p className="text-slate-400">[screen] {width}x{height}</p>
-      <p className="text-slate-400">[generation] {computer?.generation ?? 0}</p>
-      <p className="text-slate-400">[operation] {computer?.last_operation || 'none'}</p>
-      <p className="text-slate-400">[browser] {computer?.url || 'no page'}</p>
-      <p className="text-slate-400">[packages] {computer?.packages?.length ? computer.packages.join(', ') : 'none'}</p>
-      <p className="text-slate-400">[capabilities] {capabilities.length ? capabilities.join(', ') : 'none yet'}</p>
-      <p className="text-slate-500">[id] {computer?.computer_id || 'not created'}</p>
-      <p className="text-blue-400">[note] All lifecycle calls are recorded by the action gateway.</p>
+    <div className="w-full h-full rounded-xl border border-zinc-800 bg-zinc-950 p-5 font-mono text-xs space-y-2 overflow-auto">
+      <p className="text-zinc-500">[provider] {computer?.provider || 'fake'} adapter</p>
+      <p className="text-zinc-400">[state] {prettyState(state)}</p>
+      <p className="text-zinc-400">[health] {computer?.health || 'unknown'}</p>
+      <p className="text-zinc-400">[control] {computer?.controlled_by || 'bot'}</p>
+      <p className="text-zinc-400">[screen] {width}x{height}</p>
+      <p className="text-zinc-400">[generation] {computer?.generation ?? 0}</p>
+      <p className="text-zinc-400">[operation] {computer?.last_operation || 'none'}</p>
+      <p className="text-zinc-400">[browser] {computer?.url || 'no page'}</p>
+      <p className="text-zinc-400">[packages] {computer?.packages?.length ? computer.packages.join(', ') : 'none'}</p>
+      <p className="text-zinc-400">[capabilities] {capabilities.length ? capabilities.join(', ') : 'none yet'}</p>
+      <p className="text-zinc-500">[id] {computer?.computer_id || 'not created'}</p>
+      <p className="text-cyan-400">[note] All lifecycle calls are recorded by the action gateway.</p>
     </div>
   );
 
   return (
-    <div className="flex-1 flex flex-col h-screen overflow-hidden bg-slate-950/80 p-4 gap-3">
+    <div className="flex-1 flex flex-col h-screen overflow-hidden bg-zinc-950/80 p-4 gap-3">
       {/* Control bar */}
-      <div className="flex items-center justify-between gap-3 glass-panel px-4 py-3 rounded-2xl border border-slate-800">
+      <div className="flex items-center justify-between gap-3 glass-panel px-4 py-3 rounded-2xl border border-zinc-800">
         <div className="flex items-center gap-3 min-w-0">
           <button
             onClick={onBackToChat}
-            className="w-9 h-9 rounded-xl border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 flex items-center justify-center transition flex-shrink-0"
+            className="w-9 h-9 rounded-xl border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 flex items-center justify-center transition flex-shrink-0"
             aria-label="Back to chat"
           >
             <FiArrowLeft />
@@ -271,17 +271,17 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
             <FiMonitor />
           </div>
           <div className="min-w-0">
-            <h2 className="text-sm font-bold text-slate-100 flex items-center gap-2 flex-wrap">
+            <h2 className="text-sm font-bold text-zinc-100 flex items-center gap-2 flex-wrap">
               <span className="truncate">{bot.name || 'Agent'}&apos;s computer</span>
               <span className={`text-[10px] px-2 py-0.5 rounded font-mono border flex items-center gap-1 capitalize ${stateClasses(state)}`}>
                 <FiActivity className={state === 'running' ? 'animate-pulse' : ''} /> {prettyState(state)}
               </span>
               {isActive && (
-                <span className={`text-[10px] px-2 py-0.5 rounded font-mono border flex items-center gap-1 ${userHasControl ? 'bg-purple-500/20 text-purple-200 border-purple-500/30' : 'bg-slate-800 text-slate-300 border-slate-700'}`}>
+                <span className={`text-[10px] px-2 py-0.5 rounded font-mono border flex items-center gap-1 ${userHasControl ? 'bg-purple-500/20 text-purple-200 border-purple-500/30' : 'bg-zinc-800 text-zinc-300 border-zinc-700'}`}>
                   {userHasControl ? <FiUserCheck /> : <FiEye />} {userHasControl ? 'you have control' : 'bot has control'}
                 </span>
               )}
-              <span className="text-[10px] font-mono text-slate-500">{width}x{height}{hasVnc ? ` · ${vncStatus}` : ''}</span>
+              <span className="text-[10px] font-mono text-zinc-500">{width}x{height}{hasVnc ? ` · ${vncStatus}` : ''}</span>
             </h2>
           </div>
         </div>
@@ -297,10 +297,10 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
               <FiPlay /> {loadingAction === 'start' ? 'Starting…' : 'Start'}
             </button>
           )}
-          <button onClick={() => runAction('reset', resetComputer)} disabled={actionBusy} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700 disabled:opacity-50 transition" title="Recreate the computer: packages are reinstalled, /workspace and the home directory are kept">
+          <button onClick={() => runAction('reset', resetComputer)} disabled={actionBusy} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700 disabled:opacity-50 transition" title="Recreate the computer: packages are reinstalled, /workspace and the home directory are kept">
             <FiRefreshCw className={loadingAction === 'reset' ? 'animate-spin' : ''} /> Reset
           </button>
-          <button onClick={() => runAction('stop', stopComputer)} disabled={actionBusy || state === 'stopped'} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700 disabled:opacity-50 transition">
+          <button onClick={() => runAction('stop', stopComputer)} disabled={actionBusy || state === 'stopped'} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700 disabled:opacity-50 transition">
             <FiSquare /> Stop
           </button>
         </div>
@@ -332,34 +332,34 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
       )}
 
       {/* Tabs and the one big area */}
-      <div className="flex-1 flex flex-col min-h-0 glass-panel rounded-2xl border border-slate-800 overflow-hidden">
+      <div className="flex-1 flex flex-col min-h-0 glass-panel rounded-2xl border border-zinc-800 overflow-hidden">
         <div className="flex items-center gap-1 px-3 pt-3 pb-2">
           {TABS.map(([tab, label]) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition ${activeTab === tab ? 'bg-blue-500/15 text-blue-300' : 'text-slate-500 hover:text-slate-300'}`}
+              className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition ${activeTab === tab ? 'bg-[#27272a] text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
               {label}
             </button>
           ))}
           <span className="flex-1" />
           {activeTab === 'display' && hasVnc && (
-            <button onClick={() => setMaximized(true)} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] text-slate-400 hover:text-white hover:bg-slate-800 transition" title="Fill the window with the desktop">
+            <button onClick={() => setMaximized(true)} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] text-zinc-400 hover:text-white hover:bg-zinc-800 transition" title="Fill the window with the desktop">
               <FiMaximize2 /> Maximize
             </button>
           )}
         </div>
-        <div className="flex-1 bg-slate-950 relative p-3 pt-0 min-h-0">
-          {activeTab === 'display' && (loading && !computer ? <div className="w-full h-full flex items-center justify-center text-xs text-slate-500">Loading…</div> : maximized && hasVnc ? (
-            <div className="w-full h-full rounded-xl border border-slate-800 flex items-center justify-center text-xs text-slate-500">Showing in the large view.</div>
+        <div className="flex-1 bg-zinc-950 relative p-3 pt-0 min-h-0">
+          {activeTab === 'display' && (loading && !computer ? <div className="w-full h-full flex items-center justify-center text-xs text-zinc-500">Loading…</div> : maximized && hasVnc ? (
+            <div className="w-full h-full rounded-xl border border-zinc-800 flex items-center justify-center text-xs text-zinc-500">Showing in the large view.</div>
           ) : display)}
           {activeTab === 'files' && <ComputerFiles bot={bot} />}
           {activeTab === 'activity' && activity}
         </div>
       </div>
 
-      <div className="flex items-center gap-2 text-[10px] text-slate-500 px-1">
+      <div className="flex items-center gap-2 text-[10px] text-zinc-500 px-1">
         <FiHardDrive /> Sandbox has internet access; do not sign in to anything you would not type into a shared machine.
       </div>
 
@@ -374,7 +374,7 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
               <span className="text-xs text-purple-200 max-w-md truncate" title={takeover.reason}>{bot.name || 'The bot'} asked: {takeover.reason}</span>
             )}
             {controlButton(true)}
-            <button onClick={() => setMaximized(false)} className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700 transition" title="Escape">
+            <button onClick={() => setMaximized(false)} className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700 transition" title="Escape">
               <FiX /> Close
             </button>
           </div>
