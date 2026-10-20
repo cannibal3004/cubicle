@@ -190,13 +190,15 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
       )
     ) : null;
 
-  const liveDesktop = (
+  // `enlarge` is the click handler while the bot has control: inline, a click
+  // on the desktop opens the large view; in the large view there is none.
+  const liveDesktop = (enlarge) => (
     <div
       className={`w-full h-full rounded-xl border bg-black relative overflow-hidden shadow-2xl ${
         userHasControl ? 'border-purple-500/60 ring-1 ring-purple-500/40' : 'border-slate-800'
       }`}
     >
-      <VncViewer key={viewerKey} url={vncUrl} viewOnly={!userHasControl} onStatus={setVncStatus} />
+      <VncViewer key={viewerKey} url={vncUrl} viewOnly={!userHasControl} onStatus={setVncStatus} onClick={enlarge} />
       <span className="absolute top-3 right-3 rounded bg-black/70 px-2 py-1 text-[10px] font-mono text-slate-300 pointer-events-none">
         {userHasControl ? 'you have control' : 'watching · bot has control'}
       </span>
@@ -204,16 +206,7 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
   );
 
   const display = hasVnc ? (
-    // While the bot has control the viewer ignores the mouse, so a click enlarges it.
-    <div
-      className={`w-full h-full ${userHasControl ? '' : 'cursor-zoom-in'}`}
-      onClick={() => {
-        if (!userHasControl) setMaximized(true);
-      }}
-      title={userHasControl ? '' : 'Click to enlarge'}
-    >
-      {liveDesktop}
-    </div>
+    liveDesktop(() => setMaximized(true))
   ) : screen?.available ? (
     screen.data ? (
       <div className="w-full h-full rounded-xl border border-slate-800 bg-black flex items-center justify-center relative overflow-hidden shadow-2xl">
@@ -374,7 +367,7 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
       {maximized && hasVnc && (
         <div className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center gap-3 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setMaximized(false); }}>
           <div style={{ aspectRatio: `${width} / ${height}`, width: `min(95vw, calc((95vh - 72px) * ${width / height}))` }} className="max-w-[95vw]">
-            {liveDesktop}
+            {liveDesktop(null)}
           </div>
           <div className="flex items-center gap-3">
             {takeover && !userHasControl && (

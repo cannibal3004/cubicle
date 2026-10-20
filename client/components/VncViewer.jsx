@@ -6,7 +6,11 @@ import React, { useEffect, useRef, useState } from 'react';
 // API, which checks the session and bridges to the sandbox; nothing here
 // knows the sandbox token. `viewOnly` decides whether this browser's mouse
 // and keyboard reach the desktop.
-export default function VncViewer({ url, viewOnly = true, onStatus }) {
+// `onClick` is only used while viewing: noVNC's canvas swallows mouse events
+// even in view-only mode, so a transparent layer above it takes the click
+// (and shows a normal pointer, which the canvas hides when the desktop
+// sends no cursor shape).
+export default function VncViewer({ url, viewOnly = true, onStatus, onClick }) {
   const containerRef = useRef(null);
   const rfbRef = useRef(null);
   const [status, setStatus] = useState('connecting');
@@ -27,6 +31,9 @@ export default function VncViewer({ url, viewOnly = true, onStatus }) {
       rfb.scaleViewport = true;
       rfb.resizeSession = false;
       rfb.clipViewport = false;
+      // A dot where the pointer is when the desktop sends no cursor shape,
+      // rather than no pointer at all while controlling it.
+      rfb.showDotCursor = true;
       rfb.background = '#000';
       rfb.addEventListener('connect', () => {
         if (disposed) return;
@@ -65,6 +72,15 @@ export default function VncViewer({ url, viewOnly = true, onStatus }) {
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" style={{ outline: 'none' }} />
+      {viewOnly && onClick && status === 'connected' && (
+        <div
+          className="absolute inset-0 cursor-zoom-in"
+          onClick={onClick}
+          role="button"
+          aria-label="Enlarge the desktop"
+          title="Click to enlarge"
+        />
+      )}
       {status !== 'connected' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 text-xs text-slate-300 gap-1">
           <span>{status === 'connecting' ? 'Connecting to the desktop…' : status === 'error' ? 'Viewer error' : 'Disconnected'}</span>
