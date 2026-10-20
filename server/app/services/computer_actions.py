@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
 
 from app.services.action_gateway import ActionDefinition, ActionGateway, ActionInvocation, action_gateway
+from app.services.screenshots import map_input, scale_for_model
 from app.services.computer_provider import (
     ComputerProvider,
     ComputerProviderError,
@@ -80,7 +81,9 @@ def register_computer_actions(
 
     async def screenshot(call: ActionInvocation) -> Dict[str, Any]:
         status, started = await _ready(call, target_provider)
-        return _mark_started(await target_provider.screenshot(status.computer_id), started)
+        # The model gets a scaled copy when the screen is wider than the
+        # setting; the user still sees the full screen over VNC.
+        return _mark_started(scale_for_model(status.computer_id, await target_provider.screenshot(status.computer_id)), started)
 
     async def browser_navigate(call: ActionInvocation) -> Dict[str, Any]:
         status, started = await _ready(call, target_provider)
@@ -125,7 +128,8 @@ def register_computer_actions(
         event = call.arguments.get("event")
         if not isinstance(event, dict):
             raise ComputerProviderError("Computer input requires an event object.")
-        return _mark_started(await target_provider.send_input(status.computer_id, event), started)
+        # Coordinates come in the pixels of the last screenshot the model saw.
+        return _mark_started(await target_provider.send_input(status.computer_id, map_input(status.computer_id, event)), started)
 
     async def cleanup(call: ActionInvocation) -> Dict[str, Any]:
         return await target_provider.cleanup(_status_for(call, target_provider).computer_id)

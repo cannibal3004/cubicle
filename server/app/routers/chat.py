@@ -112,10 +112,15 @@ def _screenshot_message(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     image_format = str(result.get("format") or "jpeg").lower()
     frame = result.get("frame_id") or "latest"
     url = data if data.startswith("data:") else f"data:image/{image_format};base64,{data}"
+    size = ""
+    if result.get("width") and result.get("height"):
+        size = f" {result['width']}x{result['height']}"
+        if result.get("scaled") and result.get("screen_width"):
+            size += f" (the screen is {result['screen_width']}x{result['screen_height']}, shown scaled; send coordinates in this image's pixels)"
     return {
         "role": "user",
         "content": [
-            {"type": "text", "text": f"[Screenshot from computer_screenshot, frame {frame}. This image is the tool result, not a new user message.]"},
+            {"type": "text", "text": f"[Screenshot from computer_screenshot, frame {frame}{size}. This image is the tool result, not a new user message.]"},
             {"type": "image_url", "image_url": {"url": url}},
         ],
     }

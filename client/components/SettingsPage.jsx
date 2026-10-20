@@ -122,6 +122,7 @@ export default function SettingsPage({
   const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState("");
   const [maxConcurrent, setMaxConcurrent] = useState(4);
+  const [screenshotWidth, setScreenshotWidth] = useState(1280);
   const [slots, setSlots] = useState(null); // {limit, active, waiting}
   const [showApiKey, setShowApiKey] = useState(false);
 
@@ -164,6 +165,7 @@ export default function SettingsPage({
             setApiKeyConfigured(Boolean(data.llm_api_key_configured));
             setReasoningEffort(data.llm_reasoning_effort || "");
             setMaxConcurrent(Number.isFinite(Number(data.llm_max_concurrent)) ? Number(data.llm_max_concurrent) : 4);
+            setScreenshotWidth(Number.isFinite(Number(data.computer_screenshot_max_width)) ? Number(data.computer_screenshot_max_width) : 1280);
             setComposioApiKey("");
             setComposioConfigured(Boolean(data.composio_api_key_configured));
             setDefaultModel(data.default_model || "");
@@ -208,6 +210,7 @@ export default function SettingsPage({
               llm_api_key: apiKey,
               llm_reasoning_effort: reasoningEffort,
               llm_max_concurrent: Math.max(0, Math.min(64, Math.round(Number(maxConcurrent) || 0))),
+              computer_screenshot_max_width: Math.max(0, Math.min(4096, Math.round(Number(screenshotWidth) || 0))),
               composio_api_key: composioApiKey,
               default_model: defaultModel,
               theme: "dark",
@@ -590,6 +593,37 @@ export default function SettingsPage({
               How many requests the model server handles at once; everything beyond that waits its turn, shared fairly between
               accounts, and the chat shows the place in line. Match it to the server (a halogen-flash-server runs 4). 0 means no limit.
               Saved with the default model.
+            </p>
+          </div>
+
+          {/* Screenshots to the model */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+              <span className="text-violet-400">•</span> Screenshots to the model
+            </label>
+            <div className="flex items-center gap-2">
+              <select
+                suppressHydrationWarning={true}
+                value={String(screenshotWidth)}
+                disabled={!admin}
+                onChange={(e) => setScreenshotWidth(Number(e.target.value))}
+                className={`${inputClass} cursor-pointer`}
+              >
+                {[
+                  ['0', 'Full screen resolution'],
+                  ['1600', 'Scaled to 1600 px wide'],
+                  ['1280', 'Scaled to 1280 px wide (default)'],
+                  ['1024', 'Scaled to 1024 px wide'],
+                ].map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+              {admin && <SaveButton field="model" onClick={handleSaveModel} />}
+            </div>
+            <p className="text-[10px] leading-relaxed text-zinc-500">
+              You always watch the computer at its full size. This is what the bot sees when it takes a screenshot: fewer pixels mean
+              fewer vision tokens and a faster look; the full screen is sharper for small text. Clicks are mapped back either way.
+              Applies from the next screenshot.
             </p>
           </div>
         </div>

@@ -134,7 +134,7 @@ class Settings:
     AUTH_COOKIE_SECURE: bool = os.getenv("AUTH_COOKIE_SECURE", "0").lower() in {"1", "true", "yes"}
     COMPUTER_PROVIDER: str = os.getenv("COMPUTER_PROVIDER", "fake").strip().lower()
     COMPUTER_DOCKER_IMAGE: str = os.getenv(
-        "COMPUTER_DOCKER_IMAGE", "cubicle-computer:2.8.0"
+        "COMPUTER_DOCKER_IMAGE", "cubicle-computer:2.9.0"
     ).strip()
     COMPUTER_DOCKER_BINARY: str = os.getenv("COMPUTER_DOCKER_BINARY", "docker").strip()
     COMPUTER_DOCKER_WORKSPACE_ROOT: Path = Path(
@@ -143,6 +143,12 @@ class Settings:
     COMPUTER_DOCKER_CPU_LIMIT: str = os.getenv("COMPUTER_DOCKER_CPU_LIMIT", "2.0").strip()
     COMPUTER_DOCKER_MEMORY_LIMIT: str = os.getenv("COMPUTER_DOCKER_MEMORY_LIMIT", "2g").strip()
     COMPUTER_DOCKER_PIDS_LIMIT: int = int(os.getenv("COMPUTER_DOCKER_PIDS_LIMIT", "2048"))
+    # The computer's screen, WIDTHxHEIGHT; set when a computer is created, so an
+    # existing one keeps its size until it is reset.
+    COMPUTER_DOCKER_SCREEN: str = os.getenv("COMPUTER_DOCKER_SCREEN", "1920x1200").strip().lower()
+    # Screenshots handed to the model are scaled to this width when wider; 0
+    # sends the full screen. App Settings (computer_screenshot_max_width) overrides it.
+    COMPUTER_SCREENSHOT_MAX_WIDTH: int = max(0, int(os.getenv("COMPUTER_SCREENSHOT_MAX_WIDTH", "1280")))
     COMPUTER_DOCKER_START_TIMEOUT: float = float(
         os.getenv("COMPUTER_DOCKER_START_TIMEOUT", "20")
     )

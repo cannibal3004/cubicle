@@ -171,3 +171,5 @@ class AppSettingsSchema(BaseModel):
     # Requests in flight at the model server at once, shared fairly between
     # accounts; the rest wait in the chat with their place shown. 0 = no limit.
     llm_max_concurrent: int = Field(default_factory=lambda: settings.LLM_MAX_CONCURRENT_REQUESTS, ge=0, le=64)
+    # Screenshots to the model are scaled to this width when wider; 0 = the full screen.
+    computer_screenshot_max_width: int = Field(default_factory=lambda: settings.COMPUTER_SCREENSHOT_MAX_WIDTH, ge=0, le=4096)

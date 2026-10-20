@@ -63,6 +63,9 @@ export DBUS_SESSION_BUS_ADDRESS
 # Wallpaper: the generated default, or a file mounted over it by the host
 # (COMPUTER_DOCKER_WALLPAPER). Fall back to a flat colour if it cannot load.
 xsetroot -solid '#15171c'
+# A real arrow over the desktop: without a root cursor the X server reports an
+# empty one and the VNC viewer hides the pointer while the user controls it.
+xsetroot -cursor_name left_ptr
 feh --no-fehbg --bg-fill /opt/cubicle-computer/wallpaper >/tmp/feh.log 2>&1 || true
 
 # The compositor gives Plank its transparent theme and smooth hiding.

@@ -41,6 +41,12 @@ export default function Dashboard() {
   const lastTurnStates = useRef({});
   // Text to drop into the chat input, e.g. after handing a computer back.
   const [chatPrefill, setChatPrefill] = useState(null);
+  // How the computer page should open: which tab, and whether maximized (a takeover).
+  const [computerView, setComputerView] = useState({ tab: 'display', maximize: false, nonce: 0 });
+  const openComputer = (tab = 'display', maximize = false) => {
+    setComputerView({ tab, maximize, nonce: Date.now() });
+    setActiveTab('computer');
+  };
   // Bot editor: null, { mode: 'create' } or { mode: 'edit', bot }.
   const [botEditor, setBotEditor] = useState(null);
   const [botToDelete, setBotToDelete] = useState(null);
@@ -321,7 +327,9 @@ export default function Dashboard() {
             onEditBot={() => activeBot && setBotEditor({ mode: 'edit', bot: activeBot })}
             onUpdateBot={handleUpdateBot}
             onBotPatched={(botId, patch) => setBots((prev) => prev.map((b) => (b.id === botId ? { ...b, ...patch } : b)))}
-            onToggleComputer={() => setActiveTab('computer')}
+            onToggleComputer={() => openComputer('display')}
+            onOpenFiles={() => openComputer('files')}
+            onOpenTakeover={() => openComputer('display', true)}
             onOpenAudit={() => setActiveTab('audit')}
             onOpenSettings={() => setActiveTab('settings')}
             defaultModel={defaultModel}
@@ -332,11 +340,14 @@ export default function Dashboard() {
         {activeTab === 'computer' && (
           <ComputerPanel
             bot={activeBot}
+            initial={computerView}
             onBackToChat={() => setActiveTab('chat')}
             onHandBack={() => {
+              // Sent as a message, so the bot's next turn starts without a click.
               setChatPrefill({
                 text: "I'm done on the computer and have handed control back to you. Please continue.",
                 nonce: Date.now(),
+                send: true,
               });
               setActiveTab('chat');
             }}
