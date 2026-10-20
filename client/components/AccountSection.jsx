@@ -263,8 +263,12 @@ export default function AccountSection({ onSignOut }) {
               Sign out other devices
             </button>
           )}
-          <button type="button" onClick={onSignOut} className="text-[11px] text-zinc-500 hover:text-zinc-200 transition underline-offset-2 hover:underline">
-            Sign out of this browser
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-rose-500/40 bg-rose-500/10 text-[11px] font-semibold text-rose-300 hover:bg-rose-500/20 hover:text-rose-200 transition"
+          >
+            <FiLogOut /> Sign out
           </button>
         </div>
       </div>
