@@ -162,6 +162,49 @@ export async function fetchSharedFile(attachment, botId, { inline = false } = {}
   return res.blob();
 }
 
+// The file browser: one folder of the computer's /workspace or the shared folder.
+async function browseCall(url, options = {}) {
+  const res = await apiFetch(url, options);
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      detail = (await res.json()).detail || detail;
+    } catch (err) {
+      /* not JSON */
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+export function listBrowsedFiles(source, path, botId) {
+  const params = new URLSearchParams({ source, path: path || '', bot_id: botId || '' });
+  return browseCall(`${API_BASE_URL}/files/list?${params.toString()}`);
+}
+
+export function uploadBrowsedFiles(source, path, botId, files) {
+  const body = new FormData();
+  body.append('source', source);
+  body.append('path', path || '');
+  body.append('bot_id', botId || '');
+  for (const file of files) body.append('files', file, file.name);
+  return browseCall(`${API_BASE_URL}/files/upload`, { method: 'POST', body });
+}
+
+export function makeBrowsedFolder(source, path, botId, name) {
+  const body = new FormData();
+  body.append('source', source);
+  body.append('path', path || '');
+  body.append('bot_id', botId || '');
+  body.append('name', name);
+  return browseCall(`${API_BASE_URL}/files/folder`, { method: 'POST', body });
+}
+
+export function deleteBrowsedFile(source, path, botId) {
+  const params = new URLSearchParams({ source, path, bot_id: botId || '' });
+  return browseCall(`${API_BASE_URL}/files?${params.toString()}`, { method: 'DELETE' });
+}
+
 export async function fetchBots() {
   try {
     const res = await apiFetch(`${API_BASE_URL}/bots`);

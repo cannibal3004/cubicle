@@ -29,6 +29,7 @@ import {
   stopComputer,
 } from '../lib/api';
 import VncViewer from './VncViewer';
+import ComputerFiles from './ComputerFiles';
 
 const ACTIVE_STATES = new Set(['running', 'paused']);
 
@@ -275,6 +276,7 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack }) {
           <div className="flex items-center gap-1 px-3 pt-3">
             {[
               ['display', 'Display'],
+              ['files', 'Files'],
               ['activity', 'Activity'],
             ].map(([tab, label]) => (
               <button
@@ -345,6 +347,8 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack }) {
                   </p>
                 </div>
               )
+            ) : activeTab === 'files' ? (
+              <ComputerFiles bot={bot} />
             ) : (
               <div className="w-full h-full rounded-xl border border-slate-800 bg-slate-950 p-5 font-mono text-xs space-y-2 overflow-auto">
                 <p className="text-slate-500">[provider] {computer?.provider || 'fake'} adapter</p>

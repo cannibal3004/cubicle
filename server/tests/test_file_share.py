@@ -118,7 +118,9 @@ class FileShareTests(unittest.TestCase):
         self.assertEqual(response.media_type, "application/json")
         self.assertIn('filename="q3.json"', response.headers["content-disposition"])
         self.assertTrue(response.headers["content-disposition"].startswith("attachment"))
-        inline = asyncio.run(files_router.download_file(source="computer", path="chart.png", bot_id="bot-1", inline=True))
+        # The route only serves the caller's own bots; this test has no bot store, so the check is stood down.
+        with mock.patch.object(files_router, "_own_bot", lambda value: value or None):
+            inline = asyncio.run(files_router.download_file(source="computer", path="chart.png", bot_id="bot-1", inline=True))
         self.assertTrue(inline.headers["content-disposition"].startswith("inline"))
         with self.assertRaises(HTTPException) as caught:
             asyncio.run(files_router.download_file(source="workspace", path="../secret.txt", bot_id="", inline=False))
