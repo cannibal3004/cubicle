@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from app.schemas.contracts import Bot
 from app.services import llm_service
+from app.services.command_rules import clean_rules
 from app.services.bot_memory import MEMORY_MAX_CHARS, MemoryError, clean_memory, memory_note_message
 from app.services.bot_todo import TODO_MAX_ITEMS, TodoError, clean_todo, todo_note_message
 from app.services.computer_provider import ComputerProviderError, computer_id_for_bot, computer_provider
@@ -27,7 +28,7 @@ MAX_SHORT = 200
 MAX_PROMPT = 20_000
 # Only these fields can be changed from the client; ids, counters, and
 # timestamps are the server's.
-EDITABLE_FIELDS = {"name", "role", "description", "avatar", "model", "accent_color", "system_prompt", "tools", "pinned", "tool_settings", "auto_approval", "gate_threshold", "trusted_tools"}  # memory is handled separately
+EDITABLE_FIELDS = {"name", "role", "description", "avatar", "model", "accent_color", "system_prompt", "tools", "pinned", "tool_settings", "auto_approval", "gate_threshold", "trusted_tools", "allowed_commands"}  # memory is handled separately
 MAX_TOOL_SETTINGS_ENTRIES = 2000
 MAX_TRUSTED_TOOLS = 500
 _TOOL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -46,6 +47,13 @@ def clean_trusted_tools(value: Any) -> List[str]:
     if len(cleaned) > MAX_TRUSTED_TOOLS:
         raise HTTPException(status_code=422, detail="trusted_tools has too many entries.")
     return cleaned
+
+
+def clean_allowed_commands(value: Any) -> List[str]:
+    try:
+        return clean_rules(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def clean_tool_settings(value: Any) -> Dict[str, Dict[str, bool]]:
@@ -85,6 +93,7 @@ class BotInput(BaseModel):
     system_prompt: str = Field(default="", max_length=MAX_PROMPT)
     tools: List[str] = Field(default_factory=list)
     trusted_tools: List[str] = Field(default_factory=list)
+    allowed_commands: List[str] = Field(default_factory=list)
     orchestrator: bool = False
 
 
@@ -104,6 +113,7 @@ class BotUpdate(BaseModel):
     # A number from 0.01 to 0.99, or "inherit" to follow App Settings again.
     gate_threshold: Optional[Any] = None
     trusted_tools: Optional[List[str]] = None
+    allowed_commands: Optional[List[str]] = None
     orchestrator: Optional[bool] = None
     memory: Optional[str] = Field(default=None, max_length=MEMORY_MAX_CHARS)
     todo: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=TODO_MAX_ITEMS)
@@ -150,6 +160,7 @@ async def create_bot(bot_data: BotInput):
         "auto_approval": "inherit",
         "gate_threshold": None,
         "trusted_tools": clean_trusted_tools(bot_data.trusted_tools),
+        "allowed_commands": clean_allowed_commands(bot_data.allowed_commands),
         "orchestrator": bool(bot_data.orchestrator),
         "pinned": False,
         "archived": False,
@@ -177,6 +188,8 @@ async def update_bot(bot_id: str, updates: BotUpdate):
         changes["tool_settings"] = clean_tool_settings(changes["tool_settings"])
     if "trusted_tools" in changes:
         changes["trusted_tools"] = clean_trusted_tools(changes["trusted_tools"])
+    if "allowed_commands" in changes:
+        changes["allowed_commands"] = clean_allowed_commands(changes["allowed_commands"])
     if "gate_threshold" in changes:
         raw = changes["gate_threshold"]
         if raw in ("inherit", "", None):

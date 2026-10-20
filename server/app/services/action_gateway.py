@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import inspect
 import uuid
 import re
-from typing import Any, Callable, Dict, Literal, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Literal, Mapping, Optional, Tuple, Union
 
 from app.schemas.contracts import ActionRequest, ActionResult
 from app.services.approval_broker import ApprovalBroker, approval_broker
@@ -277,11 +277,12 @@ class ActionGateway:
         payload.update({key: redact_sensitive(value, key) for key, value in extra.items()})
         self.audit.add_audit_event(payload)
 
-    def open(self, thread_id: str, bot_id: str, call: Any, *, trusted: bool = False) -> Tuple[ActionRequest, Optional[Dict[str, Any]]]:
+    def open(self, thread_id: str, bot_id: str, call: Any, *, trusted: Union[bool, str] = False) -> Tuple[ActionRequest, Optional[Dict[str, Any]]]:
         """Validate, record, and prepare an action for approval or execution.
 
         `trusted` is the user's standing approval for this tool on this bot:
-        the action is recorded as approved by "trusted" and no card opens.
+        the action is recorded as approved by "trusted" (or the label given,
+        such as "allowed_command") and no card opens.
         Policy checks are not affected; only the approval step is.
         """
 
@@ -327,7 +328,7 @@ class ActionGateway:
         approval = None
         if definition.requires_approval and trusted:
             self._decisions[request_id] = "allow"
-            self._audit_action("action.approved", request, decision="allow", state="approved", decided_by="trusted")
+            self._audit_action("action.approved", request, decision="allow", state="approved", decided_by=trusted if isinstance(trusted, str) else "trusted")
         elif definition.requires_approval:
             approval = self.approvals.open(
                 thread_id,

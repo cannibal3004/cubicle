@@ -27,6 +27,10 @@ class Bot(BaseModel):
     # Tools (by name) this bot runs without an approval card, whatever the
     # auto-approval mode: the user's standing "yes" for this bot alone.
     trusted_tools: List[str] = Field(default_factory=list)
+    # Shell commands this bot may run without asking, as word prefixes
+    # ("git status", "npm test", "cat"); a script passes only when every
+    # command it runs matches one. Read by services/command_rules.
+    allowed_commands: List[str] = Field(default_factory=list)
     # An orchestrator sees the user's other bots, creates new ones and hands them work.
     orchestrator: bool = False
     # The bot's own notes, kept across conversations and compactions. The

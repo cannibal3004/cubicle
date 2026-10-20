@@ -438,6 +438,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
                     error: event.error || null,
                     gate: event.gate || null,
                     trusted: Boolean(event.trusted),
+                    trusted_by: event.trustedBy || null,
                   },
                 ],
               };
@@ -864,7 +865,16 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             approval.requestType === 'question' ? (
               <QuestionCard key={approval.requestId} question={approval} onAnswer={handleQuestionAnswer} />
             ) : (
-              <ApprovalCard key={approval.requestId} approval={approval} onRespond={handleApprovalResponse} />
+              <ApprovalCard
+                key={approval.requestId}
+                approval={approval}
+                onRespond={handleApprovalResponse}
+                onAlwaysAllow={
+                  bot && onUpdateBot
+                    ? (shapes) => onUpdateBot(bot.id, { allowed_commands: [...new Set([...(bot.allowed_commands || []), ...shapes])] })
+                    : null
+                }
+              />
             )
           )}
 
