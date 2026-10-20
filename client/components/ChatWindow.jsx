@@ -10,7 +10,8 @@ import ToolsPopover from './ToolsPopover';
 import ContextMeter from './ContextMeter';
 import TodoCard from './TodoCard';
 import MascotAvatar from './MascotAvatar';
-import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiEdit2, FiArrowDown, FiFile } from 'react-icons/fi';
+import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiEdit2, FiArrowDown, FiFile, FiFolder } from 'react-icons/fi';
+import ComputerStatusButton from './ComputerStatusButton';
 import {
   sendMessage,
   subscribeToChatStream,
@@ -67,7 +68,7 @@ function formatHeaderDate(msgs) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-export default function ChatWindow({ bot, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onBotPatched, onToggleComputer, onOpenAudit, onOpenSettings, defaultModel, prefill }) {
+export default function ChatWindow({ bot, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onBotPatched, onToggleComputer, onOpenFiles, onOpenTakeover, onOpenAudit, onOpenSettings, defaultModel, prefill }) {
   const [inputPrompt, setInputPrompt] = useState('');
   // Streaming is tracked per bot by the Dashboard so a reply keeps going
   // while another bot or tab is shown.
@@ -114,7 +115,13 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
   // Text handed in from elsewhere (e.g. "I'm done on the computer" after a
   // hand-back). An object with a nonce so the same text can be re-applied.
   useEffect(() => {
-    if (prefill?.text) setInputPrompt(prefill.text);
+    if (!prefill?.text) return;
+    if (prefill.send) {
+      submitText(prefill.text).catch((err) => console.error('Could not send the hand-back message:', err));
+    } else {
+      setInputPrompt(prefill.text);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill]);
   const messagesEndRef = useRef(null);
   const scrollContainerRef = useRef(null);
@@ -832,14 +839,17 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             />
           )}
 
-          <button
-            suppressHydrationWarning={true}
-            onClick={onToggleComputer}
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-[#1f1f23] transition"
-            title="Toggle Desktop Screen Preview"
-          >
-            <FiMonitor className="text-base" />
-          </button>
+          {bot && onOpenFiles && (
+            <button
+              suppressHydrationWarning={true}
+              onClick={onOpenFiles}
+              className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-[#1f1f23] transition"
+              title="Files on this bot's computer"
+            >
+              <FiFolder className="text-base" />
+            </button>
+          )}
+          <ComputerStatusButton bot={bot} onClick={onToggleComputer} />
         </div>
       </header>
 
@@ -893,7 +903,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
                   </p>
                   <p className="text-xs text-zinc-200 mt-1">{request.reason || 'The bot asked you to take over its computer.'}</p>
                   <p className="text-[11px] text-zinc-400 mt-1">
-                    Open the computer, press Take control, do the step, then Hand back. The bot will continue when you tell it you are done.
+                    Open the computer, press Take control, do the step, then press I&apos;m done: the bot carries on from there.
                   </p>
                 </div>
               </div>
@@ -911,7 +921,8 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
                   type="button"
                   onClick={() => {
                     setTakeoverRequests((prev) => prev.filter((item) => item.id !== request.id));
-                    if (onToggleComputer) onToggleComputer();
+                    if (onOpenTakeover) onOpenTakeover();
+                    else if (onToggleComputer) onToggleComputer();
                   }}
                   className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold shadow-lg shadow-purple-600/30 transition"
                 >
