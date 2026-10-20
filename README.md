@@ -233,6 +233,8 @@ The server reads these variables from the environment:
 | `COMPUTER_DOCKER_WORKSPACE_ROOT` | `DATA_DIR/computers` | Root for per-bot runtime workspaces |
 | `COMPUTER_DOCKER_CPU_LIMIT` | `2.0` | Docker CPU limit per computer |
 | `COMPUTER_DOCKER_MEMORY_LIMIT` | `2g` | Docker memory limit per computer |
+| `COMPUTER_DOCKER_SCREEN` | `1920x1200` | The computer's screen size, set when a computer is created (an existing one keeps its size until it is reset). You watch it at full size over VNC |
+| `COMPUTER_SCREENSHOT_MAX_WIDTH` | `1280` | Screenshots handed to the model are scaled to this width when the screen is wider; `0` sends the full screen. Clicks are mapped back to screen pixels either way. App Settings > Model server overrides it |
 | `COMPUTER_DOCKER_PIDS_LIMIT` | `2048` | Process slots per computer. Linux counts every thread, and the browser alone holds a few hundred; once the limit is reached nothing new can start inside the computer (screenshots, input and terminal commands fail until something exits) |
 | `COMPUTER_DOCKER_START_TIMEOUT` | `20` | Runtime readiness timeout in seconds |
 | `COMPUTER_DOCKER_COMMAND_TIMEOUT` | `60` | Seconds a terminal command may run when the model sets no `timeout_seconds`; the driver kills it at the limit and returns exit code 124 with its output so far |

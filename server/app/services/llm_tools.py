@@ -210,7 +210,7 @@ COMPUTER_TOOLS: List[ToolSpec] = [
     ),
     ToolSpec(
         name="computer_send_input",
-        description="Send pointer or keyboard input to the sandbox browser. Coordinates are page pixels at the screenshot's size (1280x720).",
+        description="Send pointer or keyboard input to the sandbox desktop. Coordinates are pixels of the latest screenshot (its width and height are in the screenshot result).",
         parameters=_obj(
             {
                 "type": {"type": "string", "enum": list(_INPUT_TYPES)},

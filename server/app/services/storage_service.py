@@ -38,6 +38,7 @@ SETTING_KEYS = {
     "decider_url",
     "decider_threshold",
     "llm_max_concurrent",
+    "computer_screenshot_max_width",
 }
 # App-wide keys live under the system owner and only admins change them;
 # every other key is personal to the account that saved it.
@@ -53,6 +54,7 @@ APP_SETTING_KEYS = {
     "default_model",
     "decider_url",
     "llm_max_concurrent",
+    "computer_screenshot_max_width",
     "mcp_servers",
 }
 
@@ -131,6 +133,7 @@ class StorageService:
             "decider_url": settings.DECIDER_URL,
             "decider_threshold": settings.DECIDER_THRESHOLD,
             "llm_max_concurrent": settings.LLM_MAX_CONCURRENT_REQUESTS,
+            "computer_screenshot_max_width": settings.COMPUTER_SCREENSHOT_MAX_WIDTH,
         }
 
     def _stored_setting_keys(self) -> set:

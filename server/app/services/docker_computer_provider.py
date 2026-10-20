@@ -32,7 +32,7 @@ import re
 import secrets
 import subprocess
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Sequence
+from typing import Tuple, Any, Callable, Dict, Optional, Sequence
 from urllib.parse import urlparse
 
 import httpx
@@ -97,6 +97,18 @@ class _RuntimeRecord:
     volume: Optional[str] = None
 
 
+def parse_screen(value: str) -> Tuple[int, int]:
+    """"1920x1200" -> (1920, 1200); anything odd falls back to 1920x1200, within 640..4096."""
+    try:
+        width_text, height_text = str(value or "").lower().replace(" ", "").split("x", 1)
+        width, height = int(width_text), int(height_text)
+    except (TypeError, ValueError):
+        return 1920, 1200
+    if not (640 <= width <= 4096 and 480 <= height <= 4096):
+        return 1920, 1200
+    return width, height
+
+
 class DockerComputerProvider:
     """Run browser, terminal, file, input, and screenshot actions in Docker."""
 
@@ -111,6 +123,7 @@ class DockerComputerProvider:
         cpu_limit: Optional[str] = None,
         memory_limit: Optional[str] = None,
         pids_limit: Optional[int] = None,
+        screen: Optional[str] = None,
         start_timeout: Optional[float] = None,
         command_timeout: Optional[float] = None,
         runtime_port: Optional[int] = None,
@@ -131,6 +144,7 @@ class DockerComputerProvider:
         self.cpu_limit = cpu_limit or settings.COMPUTER_DOCKER_CPU_LIMIT
         self.memory_limit = memory_limit or settings.COMPUTER_DOCKER_MEMORY_LIMIT
         self.pids_limit = pids_limit or settings.COMPUTER_DOCKER_PIDS_LIMIT
+        self.screen_width, self.screen_height = parse_screen(screen or settings.COMPUTER_DOCKER_SCREEN)
         self.start_timeout = start_timeout or settings.COMPUTER_DOCKER_START_TIMEOUT
         self.command_timeout = command_timeout or settings.COMPUTER_DOCKER_COMMAND_TIMEOUT
         self.command_timeout_max = max(self.command_timeout, settings.COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX)
@@ -159,16 +173,15 @@ class DockerComputerProvider:
         self._runtimes: Dict[str, _RuntimeRecord] = {}
         self._lock = asyncio.Lock()
 
-    @staticmethod
-    def _new_status(bot_id: str, generation: int = 0) -> ComputerStatus:
+    def _new_status(self, bot_id: str, generation: int = 0) -> ComputerStatus:
         return ComputerStatus(
             computer_id=computer_id_for_bot(bot_id),
             bot_id=bot_id.strip(),
             provider=DockerComputerProvider.provider_name,
             state="stopped",
             health="unknown",
-            width=1280,
-            height=720,
+            width=self.screen_width,
+            height=self.screen_height,
             fps=10,
             generation=generation,
             capabilities=COMPUTER_CAPABILITIES + ("vnc",),
@@ -433,6 +446,10 @@ class DockerComputerProvider:
             f"PORT={self.runtime_port}",
             "--env",
             "WORKSPACE=/workspace",
+            "--env",
+            f"VIEWPORT_WIDTH={self.screen_width}",
+            "--env",
+            f"VIEWPORT_HEIGHT={self.screen_height}",
             "--env",
             f"COMMAND_TIMEOUT_MS={int(self.command_timeout * 1000)}",
             "--env",

@@ -16,6 +16,8 @@ tzdata==2026.5
 mcp==2.3.0
 # Text from PDF, Word, Excel and PowerPoint attachments.
 markitdown[docx,pdf,pptx,xls,xlsx]==0.1.8
+# Screenshots scaled for the model (markitdown brings it in; pinned because we import it).
+pillow==13.0.0
 # Password login: argon2 hashes, TOTP two-factor, and the enrolment QR code.
 argon2-cffi==25.1.0
 pyotp==2.10.0
