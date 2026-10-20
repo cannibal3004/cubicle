@@ -176,3 +176,44 @@ class TrustedTurnTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AllowedCommandTests(unittest.TestCase):
+    """A bot's allowed-command rules make a matching terminal call trusted; anything else asks."""
+
+    def test_rules_are_stored_and_decide_the_call(self):
+        temp = tempfile.TemporaryDirectory()
+        storage = StorageService(Path(temp.name))
+        with mock.patch.object(storage_module, "storage_service", storage):
+            bot = asyncio.run(bots_router.create_bot(bots_router.BotInput(name="Shelly")))
+            updated = asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(allowed_commands=["git status", " npm   test ", "cat", "git status"])))
+            self.assertEqual(updated["allowed_commands"], ["git status", "npm test", "cat"])
+            with self.assertRaises(HTTPException):
+                asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(allowed_commands=[""])))
+        self.assertEqual(chat_router.command_trusted(updated, "computer_terminal_execute", {"command": "cd x && npm test | cat"}), False)  # cd is not allowed
+        self.assertEqual(chat_router.command_trusted(updated, "computer_terminal_execute", {"command": "npm test | cat"}), "allowed_command")
+        self.assertEqual(chat_router.command_trusted(updated, "computer_terminal_execute", {"command": 'bash -c "git status -sb"'}), "allowed_command")
+        self.assertFalse(chat_router.command_trusted(updated, "computer_terminal_execute", {"command": "git push"}))
+        self.assertFalse(chat_router.command_trusted(updated, "computer_terminal_execute", {"command": "cat <<EOF\nx\nEOF"}))
+        self.assertFalse(chat_router.command_trusted(updated, "computer_write_file", {"path": "x"}))
+        self.assertFalse(chat_router.command_trusted({**updated, "allowed_commands": []}, "computer_terminal_execute", {"command": "cat x"}))
+        try:
+            temp.cleanup()
+        except PermissionError:
+            pass
+
+    def test_the_gateway_records_who_allowed_it(self):
+        async def scenario():
+            temp = tempfile.TemporaryDirectory()
+            audit = RecordingAudit()
+            gateway = ActionGateway(workspace=WorkspaceService(Path(temp.name)), approvals=ImmediateApprovalBroker(), audit=audit)
+            request, approval = gateway.open("thread", "bot", parse_workspace_command("/shared write notes.txt\nhello"), trusted="allowed_command")
+            self.assertIsNone(approval)
+            approved = next(e for e in audit.events if e["event"] == "action.approved")
+            self.assertEqual(approved["decided_by"], "allowed_command")
+            try:
+                temp.cleanup()
+            except PermissionError:
+                pass
+
+        asyncio.run(scenario())

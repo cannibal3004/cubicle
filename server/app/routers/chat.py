@@ -8,10 +8,11 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from app.config import settings
 from app.schemas.contracts import TurnRequest, Message
+from app.services.command_rules import describe_for_card, script_allowed
 from app.services.identity import get_current_owner, owner_context
 from app.services.storage_service import current_storage
 from app.services import llm_service
@@ -218,7 +219,7 @@ async def _perform_action(
     gate_mode: str = "off",
     user_request: str = "",
     gate_threshold: Optional[float] = None,
-    trusted: bool = False,
+    trusted: Union[bool, str] = False,
 ) -> Dict[str, Any]:
     """Run one governed action through the gateway, emitting events on the turn.
 
@@ -229,7 +230,7 @@ async def _perform_action(
     `trusted` means the user trusts this tool for this bot: no card, no gate.
     """
     try:
-        action_request, approval = action_gateway.open(thread_id, thread_id, action_call, **({"trusted": True} if trusted else {}))
+        action_request, approval = action_gateway.open(thread_id, thread_id, action_call, **({"trusted": trusted} if trusted else {}))
     except ActionPolicyError as exc:
         turn.emit({
             "type": "tool.failed",
@@ -244,6 +245,7 @@ async def _perform_action(
     base = {"tool": action_name, "callName": call_name, "requestId": action_request.request_id}
     if trusted and not approval:
         base["trusted"] = True
+        base["trustedBy"] = trusted if isinstance(trusted, str) else "trusted"
 
     if approval:
         turn.emit({
@@ -255,6 +257,8 @@ async def _perform_action(
             "summary": approval["summary"],
             "arguments": approval["arguments"],
             "action": action_request.model_dump(),
+            # For a terminal command: the rules the card can offer to remember.
+            **(describe_for_card(str(getattr(action_call, "arguments", {}).get("command") or "")) if action_name == "computer.terminal_execute" else {}),
         })
         turn.set_pending_approval({
             "request_id": action_request.request_id,
@@ -330,6 +334,17 @@ async def _context_window_for(llm_config, model: str) -> Optional[int]:
 
 
 logger = logging.getLogger(__name__)
+
+def command_trusted(bot: Optional[Dict[str, Any]], call_name: str, arguments: Dict[str, Any]) -> Union[bool, str]:
+    """"allowed_command" when the bot's rules cover every command this terminal call runs."""
+    if call_name != "computer_terminal_execute" or not bot:
+        return False
+    rules = [r for r in (bot.get("allowed_commands") or []) if isinstance(r, str)]
+    if not rules:
+        return False
+    allowed, _ = script_allowed(str(arguments.get("command") or ""), rules)
+    return "allowed_command" if allowed else False
+
 
 def describe_user() -> str:
     """One line about the person the bot works for, from their profile; empty when unset."""
@@ -704,7 +719,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         continue
 
                     record["summary"] = getattr(invocation, "summary", None) or getattr(invocation, "preview", call_name)
-                    trusted = any(spec.name == call_name and spec.trusted for spec in tool_specs)
+                    trusted = any(spec.name == call_name and spec.trusted for spec in tool_specs) or command_trusted(current_bot, call_name, arguments)
                     outcome = await _perform_action(
                         turn, thread_id, invocation, call_name=call_name, gate_mode=gate_mode, user_request=last_user_text,
                         gate_threshold=gate_threshold, trusted=trusted,
@@ -714,6 +729,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     record["status"] = status
                     if trusted and status != "rejected":
                         record["trusted"] = True
+                        record["trusted_by"] = trusted if isinstance(trusted, str) else "trusted"
                     request_obj = outcome.get("request")
                     if request_obj is not None:
                         record["requestId"] = request_obj.request_id

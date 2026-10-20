@@ -29,15 +29,50 @@ function GateLine({ verdict }) {
   );
 }
 
-export default function ApprovalCard({ approval, onRespond }) {
+// The arguments worth showing in full: the command for a terminal call,
+// otherwise every argument except the ids the server adds for itself.
+const HIDDEN_ARGUMENTS = new Set(['bot_id', 'computer_id', 'thread_id']);
+
+function ArgumentView({ approval }) {
+  const args = approval.arguments && typeof approval.arguments === 'object' ? approval.arguments : {};
+  if (typeof args.command === 'string') {
+    return (
+      <pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-black/40 border border-slate-800 px-3 py-2 text-[11px] leading-relaxed font-mono text-slate-100 whitespace-pre-wrap break-all">
+        {args.command}
+      </pre>
+    );
+  }
+  const rows = Object.entries(args).filter(([key, value]) => !HIDDEN_ARGUMENTS.has(key) && value !== undefined && value !== null && value !== '');
+  if (!rows.length) return null;
+  return (
+    <dl className="mt-2 max-h-64 overflow-auto rounded-lg bg-black/40 border border-slate-800 px-3 py-2 text-[11px] font-mono space-y-1">
+      {rows.map(([key, value]) => (
+        <div key={key} className="flex gap-2">
+          <dt className="text-slate-500 flex-shrink-0">{key}</dt>
+          <dd className="text-slate-100 whitespace-pre-wrap break-all min-w-0">{typeof value === 'string' ? value : JSON.stringify(value, null, 1)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+export default function ApprovalCard({ approval, onRespond, onAlwaysAllow }) {
   const [status, setStatus] = useState('pending'); // pending, allowed, denied
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
+  // The command shapes the user ticks to remember for this bot.
+  const shapes = Array.isArray(approval.command_shapes) ? approval.command_shapes : [];
+  const [remember, setRemember] = useState([]);
+  const canRemember = Boolean(onAlwaysAllow) && shapes.length > 0;
 
   const handleAction = async (action) => {
     setIsSubmitting(true);
     setError('');
     try {
+      if (action === 'allow' && remember.length && onAlwaysAllow) {
+        // Saved first, so a rule that fails to save never lets the command through on its own.
+        await onAlwaysAllow(remember);
+      }
       if (onRespond) {
         await onRespond(approval.requestId, action);
       }
@@ -65,14 +100,43 @@ export default function ApprovalCard({ approval, onRespond }) {
         <div className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center text-amber-400 border border-slate-700 flex-shrink-0">
           <FiTerminal className="text-base" />
         </div>
-        <div>
+        <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-slate-200">{approval.summary}</p>
-          <p className="text-[11px] text-slate-400 mt-0.5">
-            Agent is requesting permission to execute an action on your environment.
-          </p>
+          <ArgumentView approval={approval} />
+          {approval.command_parse_error && (
+            <p className="mt-1.5 text-[10px] text-zinc-500">Cannot be remembered as a rule: the command has {approval.command_parse_error}.</p>
+          )}
           <GateLine verdict={approval.gate} />
         </div>
       </div>
+
+      {status === 'pending' && canRemember && (
+        <div className="mt-3 pt-2 border-t border-slate-800/60">
+          <p className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1.5">Always allow for this bot</p>
+          <div className="flex flex-wrap gap-1.5">
+            {shapes.map((shape) => {
+              const on = remember.includes(shape);
+              return (
+                <button
+                  key={shape}
+                  type="button"
+                  onClick={() => setRemember((current) => (on ? current.filter((s) => s !== shape) : [...current, shape]))}
+                  className={`px-2 py-1 rounded-lg border text-[11px] font-mono transition ${
+                    on ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-200' : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-500'
+                  }`}
+                  title={on ? `Will run without asking from now on: ${shape} …` : `Remember ${shape} … as allowed for this bot`}
+                >
+                  {on ? '✓ ' : ''}{shape} …
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-1.5 text-[10px] text-zinc-500">
+            A ticked command runs without asking whenever the whole script is made of allowed commands. Each is a prefix: “git status”
+            covers any git status, “cat” covers any cat. Edit the list in the bot editor under Tools.
+          </p>
+        </div>
+      )}
 
       {status === 'pending' ? (
         <div className="flex items-center justify-end gap-2 mt-4 pt-2 border-t border-slate-800/60">
@@ -90,7 +154,7 @@ export default function ApprovalCard({ approval, onRespond }) {
             className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-lg shadow-emerald-600/30 transition disabled:opacity-50"
           >
             <FiCheck className="text-sm" />
-            <span>Allow Execution</span>
+            <span>{remember.length ? `Allow and remember ${remember.length}` : 'Allow'}</span>
           </button>
           {error && <span className="text-[10px] text-rose-400">{error}</span>}
         </div>

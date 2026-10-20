@@ -117,6 +117,8 @@ export default function BotEditorModal({
   const [memory, setMemory] = useState('');
   const [toolSettings, setToolSettings] = useState({});
   const [trustedTools, setTrustedTools] = useState([]);
+  const [allowedCommands, setAllowedCommands] = useState([]);
+  const [newRule, setNewRule] = useState('');
   const [showTools, setShowTools] = useState(false);
   const [showSecrets, setShowSecrets] = useState(false);
   const botId = bot?.id;
@@ -151,6 +153,8 @@ export default function BotEditorModal({
     setMemory(bot?.memory || '');
     setToolSettings(bot?.tool_settings || {});
     setTrustedTools(Array.isArray(bot?.trusted_tools) ? bot.trusted_tools : []);
+    setAllowedCommands(Array.isArray(bot?.allowed_commands) ? bot.allowed_commands : []);
+    setNewRule('');
     setShowTools(false);
     setShowSecrets(false);
     setError('');
@@ -177,6 +181,7 @@ export default function BotEditorModal({
         orchestrator,
         tool_settings: toolSettings,
         trusted_tools: trustedTools,
+        allowed_commands: allowedCommands,
         // Only an existing bot has notes to edit; the server records a
         // change in the thread so the bot sees it.
         ...(bot ? { memory } : {}),
@@ -388,12 +393,48 @@ export default function BotEditorModal({
             >
               <span className={labelClass + ' mb-0'}>Tools</span>
               <span className="text-[11px] text-zinc-500">
-                {showTools ? 'Hide' : `Choose which tools this bot may use${trustedTools.length ? ` (${trustedTools.length} trusted)` : ''}`}
+                {showTools
+                  ? 'Hide'
+                  : `Choose which tools this bot may use${trustedTools.length ? ` (${trustedTools.length} trusted)` : ''}${allowedCommands.length ? ` (${allowedCommands.length} allowed command${allowedCommands.length === 1 ? '' : 's'})` : ''}`}
               </span>
             </button>
             {showTools && (
               <div className="mt-2">
                 <BotToolsSection settings={toolSettings} onChange={setToolSettings} trusted={trustedTools} onTrustedChange={setTrustedTools} />
+                <div className="mt-3 rounded-xl border border-[#26262b] bg-[#141417] p-3">
+                  <div className="text-xs text-zinc-100">Always-allowed commands</div>
+                  <p className="text-[11px] text-zinc-500 mt-0.5">
+                    Terminal commands that run without asking, as prefixes: “git status”, “npm test”, “cat”. A script runs unasked only when every
+                    command in it matches one. Added from the approval card, or here.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {allowedCommands.map((rule) => (
+                      <span key={rule} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-emerald-500/40 bg-emerald-500/10 text-[11px] font-mono text-emerald-200">
+                        {rule} …
+                        <button type="button" onClick={() => setAllowedCommands((current) => current.filter((r) => r !== rule))} className="text-emerald-300/70 hover:text-white" title="Remove">
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                    {!allowedCommands.length && <span className="text-[11px] text-zinc-600">None yet.</span>}
+                  </div>
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      value={newRule}
+                      onChange={(e) => setNewRule(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return;
+                        e.preventDefault();
+                        const rule = newRule.trim().split(/\s+/).join(' ');
+                        if (rule && !allowedCommands.includes(rule)) setAllowedCommands((current) => [...current, rule]);
+                        setNewRule('');
+                      }}
+                      placeholder="git status"
+                      className="flex-1 bg-[#0f0f12] border border-[#2a2a2f] rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
+                    />
+                    <span className="text-[10px] text-zinc-500 self-center">Enter adds</span>
+                  </div>
+                </div>
               </div>
             )}
           </div>

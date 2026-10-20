@@ -83,7 +83,7 @@ function ToolCallList({ calls }) {
       {calls.map((call, index) => (
         <span
           key={call.id || `${call.name}-${index}`}
-          title={[call.error || call.summary || call.name, gateTitle(call.gate), call.trusted ? 'Trusted for this bot: ran without asking' : ''].filter(Boolean).join('\n')}
+          title={[call.error || call.summary || call.name, gateTitle(call.gate), call.trusted ? (call.trusted_by === 'allowed_command' || call.trustedBy === 'allowed_command' ? 'An always-allowed command: ran without asking' : 'Trusted for this bot: ran without asking') : ''].filter(Boolean).join('\n')}
           className="inline-flex items-center gap-1.5 rounded-lg border border-[#2b2b32] bg-[#141416]/70 px-2 py-1 text-[10px] font-mono text-zinc-300"
         >
           <FiTool className="text-[10px] text-zinc-500" />
