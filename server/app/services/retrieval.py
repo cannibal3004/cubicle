@@ -49,9 +49,7 @@ RERANK_MAX_DOCUMENTS = 16
 MAX_EMBED_CHARS = 6000
 MAX_QUERY_CHARS = 2000
 MAX_INDEX_CHARS = 2_000_000
-# Only a couple of embedding calls at once: they are quick, and a burst of
-# attachments must not starve the chat.
-_embed_slots = asyncio.Semaphore(2)
+# Requests are serialised in services/npu.py, one NPU call at a time.
 
 # Embeddings supplied by tests or other callers: (texts, model) -> vectors.
 EmbedFunction = Callable[[Sequence[str], Optional[str]], "asyncio.Future[List[List[float]]]"]
@@ -109,7 +107,7 @@ async def embed_texts(texts: Sequence[str], config: Optional[RetrievalConfig] = 
     if not config.base_url:
         raise RetrievalError("no model server configured")
     vectors: List[List[float]] = []
-    async with _embed_slots:
+    if True:  # one block: the batches go out one after another through the NPU lock
         for start in range(0, len(texts), EMBED_BATCH):
             batch = [text[:MAX_EMBED_CHARS] for text in texts[start:start + EMBED_BATCH]]
             payload: Dict[str, Any] = {"input": batch}
