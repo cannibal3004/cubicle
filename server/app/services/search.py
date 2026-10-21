@@ -108,7 +108,7 @@ async def search(query: str, *, bot_id: Optional[str] = None, limit: int = 12, k
     if not candidates:
         return []
     candidates.sort(key=lambda hit: hit.score, reverse=True)
-    pool = candidates[: max(limit * 4, 30)]
+    pool = candidates[: max(limit, retrieval.RERANK_MAX_DOCUMENTS)]
     ranked = await retrieval.rerank(query, [hit.text for hit in pool], limit, config) if len(pool) > limit else None
     if ranked:
         picked = []

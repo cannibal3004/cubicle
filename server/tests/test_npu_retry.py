@@ -84,5 +84,55 @@ class RetryTests(unittest.TestCase):
                 asyncio.run(approval_gate.DeciderClient("http://npu.test", 5.0).score({"tool": "x"}, {"destroy": "Does it destroy?"}))
 
 
+class RequestShapeTests(unittest.TestCase):
+    """What filled the NPU's heap: too many items in one request, and two at once."""
+
+    def test_reranks_send_at_most_sixteen_documents_and_embeddings_batch_sixteen(self):
+        config = RetrievalConfig(enabled=True, embedding_model="", rerank_model="", base_url="http://npu.test/v1")
+        seen = []
+
+        def handler(request):
+            body = request.read()
+            import json
+            payload = json.loads(body)
+            seen.append(payload)
+            if request.url.path.endswith("/rerank"):
+                return httpx.Response(200, json={"results": [{"index": i, "relevance_score": 1.0 - i / 100} for i in range(len(payload["documents"]))][: payload.get("top_n", 10)]})
+            return httpx.Response(200, json={"data": [{"index": i, "embedding": [0.1]} for i in range(len(payload["input"]))]})
+
+        def factory(timeout, headers=None):
+            return httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=timeout, headers=headers or {})
+
+        with mock.patch.object(npu, "client_factory", factory):
+            ranked = asyncio.run(retrieval.rerank("q", [f"doc {i}" for i in range(40)], 6, config))
+            vectors = asyncio.run(retrieval.embed_texts([f"text {i}" for i in range(40)], config))
+        self.assertEqual(len(seen[0]["documents"]), 16)
+        self.assertEqual(seen[0]["documents"][0], "doc 0")  # the best-first head is what is kept
+        self.assertEqual(len(ranked), 6)
+        self.assertEqual([len(p["input"]) for p in seen[1:]], [16, 16, 8])
+        self.assertEqual(len(vectors), 40)
+
+    def test_npu_calls_never_overlap(self):
+        config = RetrievalConfig(enabled=True, embedding_model="", rerank_model="", base_url="http://npu.test/v1")
+        in_flight = {"now": 0, "max": 0}
+
+        async def handler(request):
+            in_flight["now"] += 1
+            in_flight["max"] = max(in_flight["max"], in_flight["now"])
+            await asyncio.sleep(0.02)
+            in_flight["now"] -= 1
+            return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.1]}]})
+
+        def factory(timeout, headers=None):
+            return httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=timeout, headers=headers or {})
+
+        async def scenario():
+            await asyncio.gather(*(retrieval.embed_texts(["x"], config) for _ in range(5)))
+
+        with mock.patch.object(npu, "client_factory", factory):
+            asyncio.run(scenario())
+        self.assertEqual(in_flight["max"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
