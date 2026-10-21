@@ -42,6 +42,7 @@ SETTING_KEYS = {
     "retrieval_enabled",
     "embedding_model",
     "rerank_model",
+    "tool_selection_max",
 }
 # App-wide keys live under the system owner and only admins change them;
 # every other key is personal to the account that saved it.
@@ -61,6 +62,7 @@ APP_SETTING_KEYS = {
     "retrieval_enabled",
     "embedding_model",
     "rerank_model",
+    "tool_selection_max",
     "mcp_servers",
 }
 
@@ -143,6 +145,7 @@ class StorageService:
             "retrieval_enabled": "on" if settings.RETRIEVAL_ENABLED.lower() in {"1", "true", "on", "yes"} else "off",
             "embedding_model": settings.EMBEDDING_MODEL,
             "rerank_model": settings.RERANK_MODEL,
+            "tool_selection_max": settings.TOOL_SELECTION_MAX,
         }
 
     def _stored_setting_keys(self) -> set:

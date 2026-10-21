@@ -676,7 +676,7 @@ def openai_tool_definitions(specs: List[ToolSpec]) -> List[Dict[str, Any]]:
 
 
 def describe_tools(
-    specs: List[ToolSpec], secret_names: Optional[List[str]] = None, *, shared_in_computer: bool = SHARED_IN_COMPUTER
+    specs: List[ToolSpec], secret_names: Optional[List[str]] = None, *, shared_in_computer: bool = SHARED_IN_COMPUTER, selection_note: str = ""
 ) -> str:
     """System-prompt paragraph so the model knows what it has and the rules.
 
@@ -802,6 +802,8 @@ def describe_tools(
             "returns a sign-in link): give the user that link as a Markdown link and stop. Once they say they have signed in, "
             "connector_status confirms it, and the app's own tools are offered from your next turn."
         )
+    if selection_note:
+        lines.append("- " + selection_note)
     approval = sorted(spec.name for spec in specs if spec.needs_approval)
     if approval:
         lines.append("Tools that need approval: " + ", ".join(approval) + ".")

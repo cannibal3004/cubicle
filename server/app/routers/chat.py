@@ -35,6 +35,7 @@ from app.services.mcp_tools import mcp_tool_specs
 from app.services.secrets_service import names_for, redactor_for
 from app.services import attachments as attachment_service
 from app.services import recall, retrieval
+from app.services.tool_selection import select_tools
 from app.services import orchestrator as _orchestrator  # noqa: F401 - registers bots.* actions
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
 from app.services.file_share import FileShareError, resolve_shared_file
@@ -439,6 +440,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
     # takes a single prompt, so there the slash commands remain the only tools.
     tools_enabled = settings.LLM_TOOLS_ENABLED and llm_config.provider != "muapi"
     tool_specs: List[Any] = []
+    selection = None
     if tools_enabled:
         # Every app connected through Composio becomes a set of tools. If the
         # catalog cannot be fetched, fall back to the two built-in GitHub tools.
@@ -462,9 +464,16 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         tool_specs = without_duplicate_routes(tool_specs)
         # The user's standing approvals for this bot.
         tool_specs = trust_tools(tool_specs, current_bot.get("trusted_tools") if current_bot else None)
+        # Too many app tools for one round: keep the ones that match the message.
+        latest_user = next((m for m in reversed(history) if m.get("sender") == "user" and m.get("text")), None)
+        try:
+            tool_specs, selection = await select_tools(tool_specs, str(latest_user.get("text") or "") if latest_user else "", history=history)
+        except Exception as exc:  # never let selection fail a turn
+            logger.warning("Tool selection failed for %s: %s", thread_id, exc)
+            selection = None
     tool_definitions = openai_tool_definitions(tool_specs) if tool_specs else None
     # The names of the user's secrets (set in the bot's computer), never the values.
-    tools_prompt = describe_tools(tool_specs, secret_names=names_for(thread_id))
+    tools_prompt = describe_tools(tool_specs, secret_names=names_for(thread_id), selection_note=selection.note() if selection else "")
     # The bot's auto-approval mode is fixed for the whole turn, like its tools.
     gate_mode = approval_gate.mode_for(current_bot)
     gate_threshold = approval_gate.threshold_for(current_bot)
@@ -485,6 +494,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         "tools_prompt": tools_prompt,
         "gate_mode": gate_mode,
         "gate_threshold": gate_threshold,
+        "tool_selection": {"offered": selection.offered, "total": selection.total} if selection and selection.narrowed else None,
     }
 
 
@@ -563,7 +573,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         stopped = False
         round_text = ""
         try:
-            turn.emit({"type": "turn.started", "botMsgId": bot_msg_id, "model": selected_model})
+            turn.emit({"type": "turn.started", "botMsgId": bot_msg_id, "model": selected_model, **({"toolSelection": setup["tool_selection"]} if setup.get("tool_selection") else {})})
 
             # --- compaction: the thread has outgrown its share of the window ------
             await compact_if_needed(last_prompt_tokens(history))

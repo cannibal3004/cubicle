@@ -177,3 +177,5 @@ class AppSettingsSchema(BaseModel):
     retrieval_enabled: Literal["on", "off"] = Field(default_factory=lambda: "on" if settings.RETRIEVAL_ENABLED.lower() in {"1", "true", "on", "yes"} else "off")
     embedding_model: str = Field(default_factory=lambda: settings.EMBEDDING_MODEL, max_length=200)
     rerank_model: str = Field(default_factory=lambda: settings.RERANK_MODEL, max_length=200)
+    # Narrow the connected apps' tools to the ones that match the message when a turn would carry more than this; 0 = all.
+    tool_selection_max: int = Field(default_factory=lambda: settings.TOOL_SELECTION_MAX, ge=0, le=500)

@@ -126,6 +126,7 @@ export default function SettingsPage({
   const [retrievalEnabled, setRetrievalEnabled] = useState("on");
   const [embeddingModel, setEmbeddingModel] = useState("");
   const [rerankModel, setRerankModel] = useState("");
+  const [toolSelectionMax, setToolSelectionMax] = useState(40);
   const [slots, setSlots] = useState(null); // {limit, active, waiting}
   const [showApiKey, setShowApiKey] = useState(false);
 
@@ -172,6 +173,7 @@ export default function SettingsPage({
             setRetrievalEnabled(data.retrieval_enabled === "off" ? "off" : "on");
             setEmbeddingModel(data.embedding_model || "");
             setRerankModel(data.rerank_model || "");
+            setToolSelectionMax(Number.isFinite(Number(data.tool_selection_max)) ? Number(data.tool_selection_max) : 40);
             setComposioApiKey("");
             setComposioConfigured(Boolean(data.composio_api_key_configured));
             setDefaultModel(data.default_model || "");
@@ -220,6 +222,7 @@ export default function SettingsPage({
               retrieval_enabled: retrievalEnabled,
               embedding_model: embeddingModel.trim(),
               rerank_model: rerankModel.trim(),
+              tool_selection_max: Math.max(0, Math.min(500, Math.round(Number(toolSelectionMax) || 0))),
               composio_api_key: composioApiKey,
               default_model: defaultModel,
               theme: "dark",
@@ -678,6 +681,32 @@ export default function SettingsPage({
               Long attachments are indexed with the model server&apos;s embedding model, and each message pulls in the passages that match it,
               reranked when the server has a reranker; the chat only inlines a file&apos;s beginning. Leave the names blank to use the server&apos;s
               defaults (halogen serves qwen3-embedding-0.6b and qwen3-reranker-0.6b). Saved with the default model.
+            </p>
+          </div>
+
+          {/* Tool selection */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+              <span className="text-lime-400">•</span> Tools per turn
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                suppressHydrationWarning={true}
+                type="number"
+                min="0"
+                max="500"
+                step="1"
+                value={toolSelectionMax}
+                disabled={!admin}
+                onChange={(e) => setToolSelectionMax(e.target.value)}
+                className={`${inputClass} w-28 font-mono`}
+              />
+              {admin && <SaveButton field="model" onClick={handleSaveModel} />}
+            </div>
+            <p className="text-[10px] leading-relaxed text-zinc-500">
+              When a bot could be offered more tools than this in one round, the connected apps&apos; tools are narrowed to the ones that
+              match the message (by the same embeddings), keeping any the thread used recently; the built-in tools always stay. 0 offers
+              everything. Needs Retrieval on. Saved with the default model.
             </p>
           </div>
         </div>
