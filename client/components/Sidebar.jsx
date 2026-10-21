@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { searchEverything } from '../lib/api';
 import {
   FiSearch,
   FiPlus,
@@ -99,6 +100,32 @@ export default function Sidebar({
   turnStates,
 }) {
   const [searchTerm, setSearchTerm] = useState('');
+  // Results from inside the conversations, fetched a moment after typing stops.
+  const [found, setFound] = useState(null); // null, or { query, results }
+  const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    const query = searchTerm.trim();
+    if (query.length < 3) {
+      setFound(null);
+      return undefined;
+    }
+    let disposed = false;
+    const timer = window.setTimeout(async () => {
+      setSearching(true);
+      try {
+        const data = await searchEverything(query);
+        if (!disposed) setFound({ query, results: data.results || [] });
+      } catch (err) {
+        if (!disposed) setFound({ query, results: [], error: err?.message });
+      } finally {
+        if (!disposed) setSearching(false);
+      }
+    }, 450);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [searchTerm]);
   const [showArchived, setShowArchived] = useState(false);
   const displayName = userName || 'You';
 
@@ -223,8 +250,40 @@ export default function Sidebar({
             </button>
           </div>
         )}
-        {all.length > 0 && active.length === 0 && archived.length === 0 && (
-          <p className="px-3 py-6 text-center text-xs text-zinc-500">Nothing matches “{searchTerm}”.</p>
+        {all.length > 0 && active.length === 0 && archived.length === 0 && !(found && found.results.length) && (
+          <p className="px-3 py-6 text-center text-xs text-zinc-500">{searching ? 'Searching…' : `Nothing matches “${searchTerm}”.`}</p>
+        )}
+
+        {term.length >= 3 && (found || searching) && (
+          <div className="pt-2">
+            <div className="px-3 pb-1 text-[10px] uppercase tracking-wide text-zinc-500 flex items-center justify-between">
+              <span>In conversations</span>
+              {searching && <span className="normal-case text-zinc-600">searching…</span>}
+            </div>
+            {found?.error && <p className="px-3 py-2 text-[11px] text-rose-300">{found.error}</p>}
+            {found && !found.error && found.results.length === 0 && !searching && (
+              <p className="px-3 py-2 text-[11px] text-zinc-600">Nothing similar in messages, files or notes.</p>
+            )}
+            {(found?.results || []).map((hit) => (
+              <button
+                key={`${hit.kind}-${hit.ref}-${hit.chunk}`}
+                type="button"
+                onClick={() => onSelectBot(hit.bot_id)}
+                className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#1e1e22] transition"
+                title={hit.snippet}
+              >
+                <div className="flex items-center gap-1.5 text-[10px] text-zinc-500">
+                  <span className="text-zinc-300 font-semibold truncate">{hit.bot_name || hit.bot_id}</span>
+                  <span className="px-1 rounded border border-[#2c2c30] uppercase tracking-wide">{hit.kind === 'attachment' ? 'file' : hit.kind}</span>
+                  {hit.created_at && <span className="ml-auto">{String(hit.created_at).slice(0, 10)}</span>}
+                </div>
+                <div className="text-[11px] text-zinc-300 leading-snug line-clamp-3 mt-0.5">
+                  {hit.kind === 'attachment' && hit.name ? <span className="text-zinc-500">{hit.name}: </span> : null}
+                  {hit.snippet}
+                </div>
+              </button>
+            ))}
+          </div>
         )}
 
         {archived.length > 0 && (

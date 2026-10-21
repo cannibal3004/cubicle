@@ -439,8 +439,8 @@ QUESTION_TOOLS: List[ToolSpec] = [
 ORCHESTRATION_TOOLS: List[ToolSpec] = [
     ToolSpec(
         name="bots_list",
-        description="The user's other bots: id, name, role, whether each is idle, working or waiting for the user, open to-do items and last activity. Start here before delegating.",
-        parameters=_obj({}),
+        description="The user's other bots: id, name, role, whether each is idle, working or waiting for the user, open to-do items and last activity. Start here before delegating; give `task` to have them ranked by fit.",
+        parameters=_obj({"task": {"type": "string", "description": "Optional: the job to delegate, in a sentence; the bots come back best match first with a relevance score"}}),
         group="orchestration",
         needs_approval=False,
     ),
@@ -1007,7 +1007,8 @@ def build_invocation(
     if name == "todo_list":
         return ActionInvocation(name="todo.list", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the to-do list of {bot_id}")
     if name == "bots_list":
-        return ActionInvocation(name="bots.list", arguments={}, target={"bot_id": bot_id}, preview="List the user's bots")
+        task = _string(arguments, "task", max_len=2000).strip()
+        return ActionInvocation(name="bots.list", arguments={"task": task} if task else {}, target={"bot_id": bot_id}, preview="List the user's bots" + (" ranked for a task" if task else ""))
     if name == "bots_status":
         other = _string(arguments, "bot_id", required=True, max_len=40)
         return ActionInvocation(name="bots.status", arguments={"bot_id": other}, target={"bot_id": bot_id}, preview=f"Look at bot {other}")

@@ -80,6 +80,9 @@ def _save_memory(bot_id: str, cleaned: str, storage: StorageService) -> Dict[str
     bot["memory"] = cleaned
     bot["memory_updated_at"] = datetime.now().isoformat()
     storage.save_bots(bots)
+    from app.services.search import schedule_notes_index  # here: search imports retrieval, which must not import this module
+
+    schedule_notes_index(bot_id, str(bot.get("name") or bot_id), cleaned)
     return {"chars": len(cleaned), "updated_at": bot["memory_updated_at"]}
 
 

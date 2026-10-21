@@ -13,6 +13,7 @@ listed; any bot can be made one in its editor.
 """
 
 import asyncio
+import logging
 import time
 import uuid
 from datetime import datetime
@@ -20,10 +21,13 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.services.action_gateway import ActionDefinition, ActionGateway, ActionInvocation, action_gateway
+from app.services import search
 from app.services.bot_memory import get_memory
 from app.services.cubie import NAME as DEFAULT_NAME, cubie_record
 from app.services.bot_todo import get_todo
 from app.services.context_builder import latest_compaction
+
+logger = logging.getLogger(__name__)
 from app.services.storage_service import StorageService, current_storage
 from app.services.turn_manager import TurnBusyError, turn_manager
 
@@ -241,8 +245,24 @@ async def execute_list(call: ActionInvocation) -> Dict[str, Any]:
     me = _me(call, storage)
     # Archived bots are listed too, flagged, so the orchestrator can say one
     # exists but is parked rather than guess or create a duplicate.
-    bots = [bot_overview(b, storage) for b in storage.get_bots() if b.get("id") != me["id"]]
-    return {"bots": bots, "note": "bots_status gives one bot's summary, to-do list, notes and recent messages. An archived bot is parked by the user: ask before sending it work or creating a replacement."}
+    others = [b for b in storage.get_bots() if b.get("id") != me["id"]]
+    bots = [bot_overview(b, storage) for b in others]
+    note = "bots_status gives one bot's summary, to-do list, notes and recent messages. An archived bot is parked by the user: ask before sending it work or creating a replacement."
+    task = str((call.arguments or {}).get("task") or "").strip() if isinstance(call.arguments, dict) else ""
+    if task and others:
+        # Ranked by how well each bot's role, prompt and notes fit the task.
+        try:
+            ranked = await search.rank_bots(others, task, notes={b["id"]: get_memory(b["id"], storage) for b in others})
+        except Exception as exc:  # ranking is a nicety
+            logger.warning("Bot ranking failed: %s", exc)
+            ranked = []
+        if ranked:
+            scores = {bot["id"]: score for bot, score in ranked}
+            bots.sort(key=lambda b: scores.get(b["id"], -1.0), reverse=True)
+            for overview in bots:
+                overview["relevance"] = round(max(0.0, min(1.0, scores.get(overview["id"], 0.0))), 3)
+            note = "Listed best match first for the task given (relevance is similarity of the bot's role, prompt and notes to it; above 0.5 is a good fit, below 0.3 probably needs a new bot). " + note
+    return {"bots": bots, "note": note}
 
 
 async def execute_status(call: ActionInvocation) -> Dict[str, Any]:
