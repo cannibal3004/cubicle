@@ -34,7 +34,7 @@ from app.services.mcp_tools import mcp_tool_specs
 from app.services.mcp_tools import mcp_tool_specs
 from app.services.secrets_service import names_for, redactor_for
 from app.services import attachments as attachment_service
-from app.services import retrieval
+from app.services import recall, retrieval
 from app.services import orchestrator as _orchestrator  # noqa: F401 - registers bots.* actions
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
 from app.services.file_share import FileShareError, resolve_shared_file
@@ -212,6 +212,7 @@ async def send_message(req: TurnRequest):
         user_msg["attachments"] = attached
 
     current_storage().add_message(user_msg)
+    recall.schedule_index(req.bot_id, user_msg)
     if user_msg.get("attachments"):
         user_msg = {**user_msg, "attachments": attachment_service.without_text(user_msg["attachments"])}
     return {"status": "ok", "message": user_msg}
@@ -366,6 +367,19 @@ async def retrieved_context(bot_id: str, query: str) -> str:
         hits,
         heading="Passages from the attached files that match this message (retrieved by similarity; the file itself holds the rest):",
     )
+
+
+async def recalled_context(bot_id: str, query: str, history: List[Dict[str, Any]]) -> str:
+    """Earlier exchanges of this bot that match the message and are no longer in the context; "" when none."""
+    try:
+        config = retrieval.current_config()
+        if not config.enabled:
+            return ""
+        recall.ensure_backfilled(bot_id, history, config=config)
+        return await recall.recall_for_turn(bot_id, query, history, config=config)
+    except Exception as exc:  # never let recall fail a turn
+        logger.warning("Recall failed for %s: %s", bot_id, exc)
+        return ""
 
 
 def describe_user() -> str:
@@ -583,6 +597,11 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             if retrieved:
                 turn.emit({"type": "retrieval.used", "botMsgId": bot_msg_id, "count": retrieved.count("--- from ")})
                 turn_system_prompt = f"{turn_system_prompt}\n\n{retrieved}"
+            # Past exchanges that the compaction folded away but that match this message.
+            recalled = await recalled_context(thread_id, last_user_text, history)
+            if recalled:
+                turn.emit({"type": "recall.used", "botMsgId": bot_msg_id, "count": recalled.count("--- from ")})
+                turn_system_prompt = f"{turn_system_prompt}\n\n{recalled}"
 
             # --- model turn, looping while it calls tools ------------------------
             messages: List[Dict[str, Any]] = list(formatted_history)
@@ -844,6 +863,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             "raw_payload": raw_payload or None,
         }
         current_storage().add_message(bot_msg)
+        recall.schedule_index(thread_id, bot_msg)
         if stopped:
             turn.emit({"type": "turn.cancelled", "botMsgId": bot_msg_id})
             raise asyncio.CancelledError()
@@ -886,6 +906,7 @@ async def start_scheduled_turn(bot_id: str, message: Dict[str, Any], owner_id: O
         if current is not None and not current.finished:
             raise TurnBusyError(current)
         current_storage().add_message(message)
+        recall.schedule_index(bot_id, message)
         runner, selected_model = await _build_turn_runner(bot_id, None)
         return turn_manager.start(bot_id, _bot_id_for(bot_id), selected_model, runner)
 

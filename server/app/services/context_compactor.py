@@ -213,5 +213,9 @@ async def compact_thread(
         },
     }
     storage.add_message(message)
+    # The summary is itself worth recalling later, once another compaction folds it away.
+    from app.services import recall
+
+    recall.schedule_index(thread_id, message)
     logger.info("Compacted thread %s: %d messages summarised (%s)", thread_id, len(older), reason)
     return message
