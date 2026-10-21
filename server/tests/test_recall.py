@@ -81,7 +81,8 @@ class RecallTests(unittest.TestCase):
         with mock.patch.object(retrieval, "rerank", fake_rerank):
             block = asyncio.run(recall.recall_for_turn("bot-1", "where do deploys run from", self.history, config=CONFIG, storage=self.storage, embed=fake_embed, limit=1))
         self.assertIn("ops laptop", block)
-        self.assertEqual(block.count("--- from "), 1)
+        self.assertEqual(block.count("\n- "), 1)
+        self.assertIn('"', block)  # quoted, so it reads as a past message, not the request
 
     def test_a_bot_with_history_but_no_vectors_is_backfilled_once(self):
         async def scenario():

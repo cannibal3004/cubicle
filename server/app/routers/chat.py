@@ -610,7 +610,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             # Past exchanges that the compaction folded away but that match this message.
             recalled = await recalled_context(thread_id, last_user_text, history)
             if recalled:
-                turn.emit({"type": "recall.used", "botMsgId": bot_msg_id, "count": recalled.count("--- from ")})
+                turn.emit({"type": "recall.used", "botMsgId": bot_msg_id, "count": recalled.count("\n- ")})
                 turn_system_prompt = f"{turn_system_prompt}\n\n{recalled}"
 
             # --- model turn, looping while it calls tools ------------------------

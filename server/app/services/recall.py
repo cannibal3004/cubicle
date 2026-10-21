@@ -172,7 +172,20 @@ async def recall_for_turn(bot_id: str, query: str, history: List[Dict[str, Any]]
         else:
             hits = hits[:limit]
     hits.sort(key=lambda hit: hit.meta.get("created_at") or "")
-    return retrieval.render_hits(
-        hits,
-        heading="Earlier in this conversation, recalled by similarity (these are no longer in the context above; the summary may not mention them):",
-    )
+    return render_recalled(hits)
+
+
+def render_recalled(hits: List[retrieval.Hit]) -> str:
+    """Quoted past messages, clearly not the current request."""
+    if not hits:
+        return ""
+    lines = [
+        "Earlier in this conversation (recalled by similarity because they match the latest message; they are no longer "
+        "in the context above and are quoted here only for reference, they are not the current request):"
+    ]
+    for hit in hits:
+        text = " ".join(hit.text.split())
+        if len(text) > 1500:
+            text = text[:1500] + "…"
+        lines.append(f'- {hit.meta.get("name") or hit.ref}: "{text}"')
+    return "\n".join(lines)
