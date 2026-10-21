@@ -34,6 +34,7 @@ from app.services.mcp_tools import mcp_tool_specs
 from app.services.mcp_tools import mcp_tool_specs
 from app.services.secrets_service import names_for, redactor_for
 from app.services import attachments as attachment_service
+from app.services import retrieval
 from app.services import orchestrator as _orchestrator  # noqa: F401 - registers bots.* actions
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
 from app.services.file_share import FileShareError, resolve_shared_file
@@ -351,6 +352,22 @@ def command_trusted(bot: Optional[Dict[str, Any]], call_name: str, arguments: Di
     return "allowed_command" if allowed else False
 
 
+async def retrieved_context(bot_id: str, query: str) -> str:
+    """The passages of this bot's attachments that match the message, as a prompt block; "" when none."""
+    try:
+        config = retrieval.current_config()
+        if not config.enabled:
+            return ""
+        hits = await retrieval.retrieve(query, kind="attachment", ref_prefix=f"{bot_id}:", config=config)
+    except Exception as exc:  # never let retrieval fail a turn
+        logger.warning("Retrieval failed for %s: %s", bot_id, exc)
+        return ""
+    return retrieval.render_hits(
+        hits,
+        heading="Passages from the attached files that match this message (retrieved by similarity; the file itself holds the rest):",
+    )
+
+
 def describe_user() -> str:
     """One line about the person the bot works for, from their profile; empty when unset."""
     try:
@@ -560,6 +577,12 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                 turn_system_prompt = f"{turn_system_prompt}\n\n{tools_prompt}"
             if tool_context:
                 turn_system_prompt = f"{turn_system_prompt}\n\n{tool_context}"
+            # Passages from long attachments that match this message: the
+            # inlined part of a file is only its beginning.
+            retrieved = await retrieved_context(thread_id, last_user_text)
+            if retrieved:
+                turn.emit({"type": "retrieval.used", "botMsgId": bot_msg_id, "count": retrieved.count("--- from ")})
+                turn_system_prompt = f"{turn_system_prompt}\n\n{retrieved}"
 
             # --- model turn, looping while it calls tools ------------------------
             messages: List[Dict[str, Any]] = list(formatted_history)

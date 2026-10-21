@@ -173,3 +173,7 @@ class AppSettingsSchema(BaseModel):
     llm_max_concurrent: int = Field(default_factory=lambda: settings.LLM_MAX_CONCURRENT_REQUESTS, ge=0, le=64)
     # Screenshots to the model are scaled to this width when wider; 0 = the full screen.
     computer_screenshot_max_width: int = Field(default_factory=lambda: settings.COMPUTER_SCREENSHOT_MAX_WIDTH, ge=0, le=4096)
+    # Retrieval over long attachments: embeddings and a reranker on the model server.
+    retrieval_enabled: Literal["on", "off"] = Field(default_factory=lambda: "on" if settings.RETRIEVAL_ENABLED.lower() in {"1", "true", "on", "yes"} else "off")
+    embedding_model: str = Field(default_factory=lambda: settings.EMBEDDING_MODEL, max_length=200)
+    rerank_model: str = Field(default_factory=lambda: settings.RERANK_MODEL, max_length=200)

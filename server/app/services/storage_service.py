@@ -39,6 +39,9 @@ SETTING_KEYS = {
     "decider_threshold",
     "llm_max_concurrent",
     "computer_screenshot_max_width",
+    "retrieval_enabled",
+    "embedding_model",
+    "rerank_model",
 }
 # App-wide keys live under the system owner and only admins change them;
 # every other key is personal to the account that saved it.
@@ -55,6 +58,9 @@ APP_SETTING_KEYS = {
     "decider_url",
     "llm_max_concurrent",
     "computer_screenshot_max_width",
+    "retrieval_enabled",
+    "embedding_model",
+    "rerank_model",
     "mcp_servers",
 }
 
@@ -134,6 +140,9 @@ class StorageService:
             "decider_threshold": settings.DECIDER_THRESHOLD,
             "llm_max_concurrent": settings.LLM_MAX_CONCURRENT_REQUESTS,
             "computer_screenshot_max_width": settings.COMPUTER_SCREENSHOT_MAX_WIDTH,
+            "retrieval_enabled": "on" if settings.RETRIEVAL_ENABLED.lower() in {"1", "true", "on", "yes"} else "off",
+            "embedding_model": settings.EMBEDDING_MODEL,
+            "rerank_model": settings.RERANK_MODEL,
         }
 
     def _stored_setting_keys(self) -> set:
