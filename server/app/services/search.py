@@ -123,11 +123,12 @@ async def search(query: str, *, bot_id: Optional[str] = None, limit: int = 12, k
     results: List[Dict[str, Any]] = []
     seen = set()
     for hit in chosen:
-        key = (hit.kind, hit.ref, hit.chunk)
+        owner_bot = _bot_of(hit)
+        # The same passage twice (a repeated message, a re-attached file) is one result.
+        key = (hit.kind, owner_bot, " ".join(hit.text.split())[:400])
         if key in seen:
             continue
         seen.add(key)
-        owner_bot = _bot_of(hit)
         results.append({
             "kind": hit.kind,
             "bot_id": owner_bot,
