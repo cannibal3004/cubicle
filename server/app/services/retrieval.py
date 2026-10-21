@@ -33,10 +33,13 @@ import httpx
 
 from app.config import settings
 from app.services.identity import get_current_owner
+from app.services.npu import NpuError, post_json_with_retry
 
 logger = logging.getLogger(__name__)
 
-EMBED_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
+# Per attempt: an embedding batch or a rerank takes a second or two; a hung
+# NPU request is cut off here and retried (see services/npu.py).
+EMBED_TIMEOUT = httpx.Timeout(settings.NPU_REQUEST_TIMEOUT_SECONDS, connect=5.0)
 EMBED_BATCH = 32
 # The embedding model's window is small (4k tokens on halogen); a chunk and
 # a query are kept well under it.
@@ -104,24 +107,23 @@ async def embed_texts(texts: Sequence[str], config: Optional[RetrievalConfig] = 
         raise RetrievalError("no model server configured")
     vectors: List[List[float]] = []
     async with _embed_slots:
-        async with httpx.AsyncClient(timeout=EMBED_TIMEOUT, headers=config.headers) as client:
-            for start in range(0, len(texts), EMBED_BATCH):
-                batch = [text[:MAX_EMBED_CHARS] for text in texts[start:start + EMBED_BATCH]]
-                payload: Dict[str, Any] = {"input": batch}
-                if config.embedding_model:
-                    payload["model"] = config.embedding_model
-                try:
-                    response = await client.post(f"{config.base_url}/embeddings", json=payload)
-                except httpx.HTTPError as exc:
-                    raise RetrievalError(f"embedding server unreachable: {type(exc).__name__}") from exc
-                if response.status_code != 200:
-                    raise RetrievalError(f"embedding server returned {response.status_code}: {response.text[:200]}")
-                try:
-                    data = response.json()["data"]
-                    ordered = sorted(data, key=lambda item: int(item.get("index", 0)))
-                    vectors.extend([float(x) for x in item["embedding"]] for item in ordered)
-                except (KeyError, TypeError, ValueError) as exc:
-                    raise RetrievalError("embedding server returned an unexpected reply") from exc
+        for start in range(0, len(texts), EMBED_BATCH):
+            batch = [text[:MAX_EMBED_CHARS] for text in texts[start:start + EMBED_BATCH]]
+            payload: Dict[str, Any] = {"input": batch}
+            if config.embedding_model:
+                payload["model"] = config.embedding_model
+            try:
+                response = await post_json_with_retry(f"{config.base_url}/embeddings", payload, timeout=EMBED_TIMEOUT, headers=config.headers, label="embedding model")
+            except NpuError as exc:
+                raise RetrievalError(str(exc)) from exc
+            if response.status_code != 200:
+                raise RetrievalError(f"embedding server returned {response.status_code}: {response.text[:200]}")
+            try:
+                data = response.json()["data"]
+                ordered = sorted(data, key=lambda item: int(item.get("index", 0)))
+                vectors.extend([float(x) for x in item["embedding"]] for item in ordered)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise RetrievalError("embedding server returned an unexpected reply") from exc
     if len(vectors) != len(texts):
         raise RetrievalError("embedding server returned the wrong number of vectors")
     return vectors
@@ -136,10 +138,9 @@ async def rerank(query: str, documents: Sequence[str], top_n: int, config: Optio
     if config.rerank_model:
         payload["model"] = config.rerank_model
     try:
-        async with httpx.AsyncClient(timeout=EMBED_TIMEOUT, headers=config.headers) as client:
-            response = await client.post(f"{config.base_url}/rerank", json=payload)
-    except httpx.HTTPError as exc:
-        logger.info("Reranker unreachable (%s); keeping embedding order", type(exc).__name__)
+        response = await post_json_with_retry(f"{config.base_url}/rerank", payload, timeout=EMBED_TIMEOUT, headers=config.headers, label="reranker")
+    except NpuError as exc:
+        logger.info("%s; keeping embedding order", exc)
         return None
     if response.status_code != 200:
         logger.info("Reranker returned %s; keeping embedding order", response.status_code)

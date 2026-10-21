@@ -26,6 +26,7 @@ import httpx
 from app.config import settings
 from app.schemas.contracts import ActionRequest
 from app.services.action_gateway import redact_sensitive
+from app.services.npu import NpuError, post_json_with_retry
 from app.services.storage_service import StorageService, current_storage
 from app.services.workspace_service import WorkspaceService, WorkspaceToolError, workspace_service
 
@@ -113,10 +114,9 @@ class DeciderClient:
             "questions": {key: {"type": "noul", "instructions": text} for key, text in questions.items()},
         }
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(f"{self.base_url}/v1/systemone", json=payload)
-        except httpx.HTTPError as exc:
-            raise DeciderError(f"decision server unreachable: {type(exc).__name__}") from exc
+            response = await post_json_with_retry(f"{self.base_url}/v1/systemone", payload, timeout=httpx.Timeout(self.timeout, connect=5.0), label="decision model")
+        except NpuError as exc:
+            raise DeciderError(f"decision server unreachable: {exc}") from exc
         if response.status_code != 200:
             detail = ""
             try:

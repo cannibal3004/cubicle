@@ -142,6 +142,12 @@ class Settings:
     DECIDER_URL: str = os.getenv("DECIDER_URL", "").strip().rstrip("/")
     DECIDER_THRESHOLD: float = min(0.99, max(0.01, float(os.getenv("DECIDER_THRESHOLD", "0.2"))))
     DECIDER_TIMEOUT_SECONDS: float = float(os.getenv("DECIDER_TIMEOUT_SECONDS", "15"))
+    # The decider, the embedding model and the reranker run on the model server's
+    # NPU, which can crash and restart within seconds: each call gets this many
+    # attempts, pausing these seconds between them (per-attempt timeouts are short).
+    NPU_RETRY_ATTEMPTS: int = max(1, int(os.getenv("NPU_RETRY_ATTEMPTS", "3")))
+    NPU_RETRY_BACKOFF_SECONDS: str = os.getenv("NPU_RETRY_BACKOFF_SECONDS", "1,3").strip()
+    NPU_REQUEST_TIMEOUT_SECONDS: float = float(os.getenv("NPU_REQUEST_TIMEOUT_SECONDS", "20"))
     # Browser sessions are server-side records; this is their lifetime.
     AUTH_SESSION_MAX_AGE: int = int(os.getenv("AUTH_SESSION_MAX_AGE", str(30 * 86400)))
     AUTH_COOKIE_SECURE: bool = os.getenv("AUTH_COOKIE_SECURE", "0").lower() in {"1", "true", "yes"}
