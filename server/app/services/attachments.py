@@ -15,7 +15,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+import logging
+
 from app.config import settings
+from app.services import retrieval
+from app.services.identity import get_current_owner, owner_context
+
+logger = logging.getLogger(__name__)
 from app.services.computer_provider import computer_id_for_bot
 from app.services.file_share import FileShareError, SharedFile, resolve_shared_file
 
@@ -182,14 +188,49 @@ async def attach(shared: SharedFile, bot_id: Optional[str]) -> Dict[str, Any]:
     """The attachment record for a message: card fields, location and the
     text for the model (extracted in a worker thread)."""
     record = describe(shared, bot_id)
+    # Extracted once in full: the message inlines the first part, and the
+    # whole text is indexed for retrieval when embeddings are available.
     try:
-        extract = await asyncio.wait_for(asyncio.to_thread(extract_text, shared.absolute), timeout=settings.ATTACHMENT_EXTRACT_TIMEOUT)
+        full = await asyncio.wait_for(asyncio.to_thread(extract_text, shared.absolute, retrieval.MAX_INDEX_CHARS), timeout=settings.ATTACHMENT_EXTRACT_TIMEOUT)
     except asyncio.TimeoutError:
-        extract = Extract(text="", chars=0, truncated=False, note=f"text extraction did not finish within {settings.ATTACHMENT_EXTRACT_TIMEOUT:.0f}s")
+        full = Extract(text="", chars=0, truncated=False, note=f"text extraction did not finish within {settings.ATTACHMENT_EXTRACT_TIMEOUT:.0f}s")
     except Exception as exc:  # pragma: no cover - extract_text should not raise
-        extract = Extract(text="", chars=0, truncated=False, note=f"no text could be extracted ({type(exc).__name__})")
+        full = Extract(text="", chars=0, truncated=False, note=f"no text could be extracted ({type(exc).__name__})")
+    cap = settings.ATTACHMENT_INLINE_MAX_CHARS
+    extract = Extract(text=full.text[:cap], chars=full.chars, truncated=full.chars > cap, note=full.note)
     record["extract"] = asdict(extract)
+    if full.text and bot_id:
+        schedule_indexing(bot_id, record, full.text)
     return record
+
+
+def attachment_ref(bot_id: str, attachment: Dict[str, Any]) -> str:
+    return f"{bot_id}:{attachment.get('source')}:{attachment.get('path')}"
+
+
+def schedule_indexing(bot_id: str, attachment: Dict[str, Any], text: str) -> None:
+    """Index the attachment's text for retrieval without holding up the message."""
+    try:
+        config = retrieval.current_config()
+    except Exception:
+        return
+    if not config.enabled:
+        return
+    meta = {"name": attachment.get("name"), "bot_id": bot_id, "source": attachment.get("source"), "path": attachment.get("path")}
+    owner = get_current_owner()
+
+    async def run() -> None:
+        with owner_context(owner):
+            try:
+                count = await retrieval.index_text("attachment", attachment_ref(bot_id, attachment), text, meta=meta, config=config)
+                logger.info("Indexed %s in %d chunks for retrieval", attachment.get("name"), count)
+            except Exception as exc:  # retrieval is a nicety; the attachment itself is already saved
+                logger.warning("Could not index %s for retrieval: %s", attachment.get("name"), exc)
+
+    try:
+        asyncio.get_running_loop().create_task(run())
+    except RuntimeError:
+        pass
 
 
 def _size(bytes_count: int) -> str:

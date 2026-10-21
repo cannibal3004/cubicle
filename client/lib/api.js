@@ -406,6 +406,14 @@ export async function fetchTurnStatus(threadId) {
 }
 
 // Running turns and pending approvals for every bot (sidebar indicators).
+// Semantic search over messages, attachment passages and notes.
+export async function searchEverything(query, botId = '', limit = 10) {
+  const params = new URLSearchParams({ q: query, bot_id: botId || '', limit: String(limit) });
+  const res = await apiFetch(`${API_BASE_URL}/search?${params.toString()}`);
+  if (!res.ok) throw new Error('Search is unavailable.');
+  return res.json();
+}
+
 export async function fetchTurnsOverview() {
   try {
     const res = await apiFetch(`${API_BASE_URL}/chat/turns`);

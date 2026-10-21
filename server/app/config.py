@@ -115,6 +115,19 @@ class Settings:
     ATTACHMENT_MAX_BYTES: int = int(os.getenv("ATTACHMENT_MAX_BYTES", str(50 * 1024 * 1024)))
     ATTACHMENT_INLINE_MAX_CHARS: int = int(os.getenv("ATTACHMENT_INLINE_MAX_CHARS", "40000"))
     ATTACHMENT_EXTRACT_TIMEOUT: float = float(os.getenv("ATTACHMENT_EXTRACT_TIMEOUT", "60"))
+    # Retrieval: embeddings (and a reranker when the server has one) on the
+    # model server, used to bring the relevant parts of long attachments to a
+    # turn. Empty model names let the server pick its defaults. App Settings
+    # overrides all three.
+    RETRIEVAL_ENABLED: str = os.getenv("RETRIEVAL_ENABLED", "1").strip()
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "").strip()
+    RERANK_MODEL: str = os.getenv("RERANK_MODEL", "").strip()
+    RETRIEVAL_TOP_K: int = int(os.getenv("RETRIEVAL_TOP_K", "6"))
+    RETRIEVAL_CHUNK_CHARS: int = int(os.getenv("RETRIEVAL_CHUNK_CHARS", "1200"))
+    # When a bot could be offered more tools than this, the connected apps' tools
+    # are narrowed to the ones that match the message (built-ins always stay).
+    # 0 offers everything. App Settings (tool_selection_max) overrides it.
+    TOOL_SELECTION_MAX: int = int(os.getenv("TOOL_SELECTION_MAX", "40"))
     # Turns run server-side and outlive the page, so an approval can wait
     # for someone to come back to it.
     APPROVAL_TIMEOUT_SECONDS: int = int(os.getenv("APPROVAL_TIMEOUT_SECONDS", "900"))

@@ -34,6 +34,8 @@ from app.services.mcp_tools import mcp_tool_specs
 from app.services.mcp_tools import mcp_tool_specs
 from app.services.secrets_service import names_for, redactor_for
 from app.services import attachments as attachment_service
+from app.services import recall, retrieval
+from app.services.tool_selection import select_tools
 from app.services import orchestrator as _orchestrator  # noqa: F401 - registers bots.* actions
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
 from app.services.file_share import FileShareError, resolve_shared_file
@@ -211,6 +213,7 @@ async def send_message(req: TurnRequest):
         user_msg["attachments"] = attached
 
     current_storage().add_message(user_msg)
+    recall.schedule_index(req.bot_id, user_msg)
     if user_msg.get("attachments"):
         user_msg = {**user_msg, "attachments": attachment_service.without_text(user_msg["attachments"])}
     return {"status": "ok", "message": user_msg}
@@ -351,6 +354,35 @@ def command_trusted(bot: Optional[Dict[str, Any]], call_name: str, arguments: Di
     return "allowed_command" if allowed else False
 
 
+async def retrieved_context(bot_id: str, query: str) -> str:
+    """The passages of this bot's attachments that match the message, as a prompt block; "" when none."""
+    try:
+        config = retrieval.current_config()
+        if not config.enabled:
+            return ""
+        hits = await retrieval.retrieve(query, kind="attachment", ref_prefix=f"{bot_id}:", config=config)
+    except Exception as exc:  # never let retrieval fail a turn
+        logger.warning("Retrieval failed for %s: %s", bot_id, exc)
+        return ""
+    return retrieval.render_hits(
+        hits,
+        heading="Passages from the attached files that match this message (retrieved by similarity; the file itself holds the rest):",
+    )
+
+
+async def recalled_context(bot_id: str, query: str, history: List[Dict[str, Any]]) -> str:
+    """Earlier exchanges of this bot that match the message and are no longer in the context; "" when none."""
+    try:
+        config = retrieval.current_config()
+        if not config.enabled:
+            return ""
+        recall.ensure_backfilled(bot_id, history, config=config)
+        return await recall.recall_for_turn(bot_id, query, history, config=config)
+    except Exception as exc:  # never let recall fail a turn
+        logger.warning("Recall failed for %s: %s", bot_id, exc)
+        return ""
+
+
 def describe_user() -> str:
     """One line about the person the bot works for, from their profile; empty when unset."""
     try:
@@ -408,6 +440,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
     # takes a single prompt, so there the slash commands remain the only tools.
     tools_enabled = settings.LLM_TOOLS_ENABLED and llm_config.provider != "muapi"
     tool_specs: List[Any] = []
+    selection = None
     if tools_enabled:
         # Every app connected through Composio becomes a set of tools. If the
         # catalog cannot be fetched, fall back to the two built-in GitHub tools.
@@ -431,9 +464,16 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         tool_specs = without_duplicate_routes(tool_specs)
         # The user's standing approvals for this bot.
         tool_specs = trust_tools(tool_specs, current_bot.get("trusted_tools") if current_bot else None)
+        # Too many app tools for one round: keep the ones that match the message.
+        latest_user = next((m for m in reversed(history) if m.get("sender") == "user" and m.get("text")), None)
+        try:
+            tool_specs, selection = await select_tools(tool_specs, str(latest_user.get("text") or "") if latest_user else "", history=history)
+        except Exception as exc:  # never let selection fail a turn
+            logger.warning("Tool selection failed for %s: %s", thread_id, exc)
+            selection = None
     tool_definitions = openai_tool_definitions(tool_specs) if tool_specs else None
     # The names of the user's secrets (set in the bot's computer), never the values.
-    tools_prompt = describe_tools(tool_specs, secret_names=names_for(thread_id))
+    tools_prompt = describe_tools(tool_specs, secret_names=names_for(thread_id), selection_note=selection.note() if selection else "")
     # The bot's auto-approval mode is fixed for the whole turn, like its tools.
     gate_mode = approval_gate.mode_for(current_bot)
     gate_threshold = approval_gate.threshold_for(current_bot)
@@ -454,6 +494,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         "tools_prompt": tools_prompt,
         "gate_mode": gate_mode,
         "gate_threshold": gate_threshold,
+        "tool_selection": {"offered": selection.offered, "total": selection.total} if selection and selection.narrowed else None,
     }
 
 
@@ -532,7 +573,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         stopped = False
         round_text = ""
         try:
-            turn.emit({"type": "turn.started", "botMsgId": bot_msg_id, "model": selected_model})
+            turn.emit({"type": "turn.started", "botMsgId": bot_msg_id, "model": selected_model, **({"toolSelection": setup["tool_selection"]} if setup.get("tool_selection") else {})})
 
             # --- compaction: the thread has outgrown its share of the window ------
             await compact_if_needed(last_prompt_tokens(history))
@@ -560,6 +601,17 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                 turn_system_prompt = f"{turn_system_prompt}\n\n{tools_prompt}"
             if tool_context:
                 turn_system_prompt = f"{turn_system_prompt}\n\n{tool_context}"
+            # Passages from long attachments that match this message: the
+            # inlined part of a file is only its beginning.
+            retrieved = await retrieved_context(thread_id, last_user_text)
+            if retrieved:
+                turn.emit({"type": "retrieval.used", "botMsgId": bot_msg_id, "count": retrieved.count("--- from ")})
+                turn_system_prompt = f"{turn_system_prompt}\n\n{retrieved}"
+            # Past exchanges that the compaction folded away but that match this message.
+            recalled = await recalled_context(thread_id, last_user_text, history)
+            if recalled:
+                turn.emit({"type": "recall.used", "botMsgId": bot_msg_id, "count": recalled.count("\n- ")})
+                turn_system_prompt = f"{turn_system_prompt}\n\n{recalled}"
 
             # --- model turn, looping while it calls tools ------------------------
             messages: List[Dict[str, Any]] = list(formatted_history)
@@ -821,6 +873,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             "raw_payload": raw_payload or None,
         }
         current_storage().add_message(bot_msg)
+        recall.schedule_index(thread_id, bot_msg)
         if stopped:
             turn.emit({"type": "turn.cancelled", "botMsgId": bot_msg_id})
             raise asyncio.CancelledError()
@@ -863,6 +916,7 @@ async def start_scheduled_turn(bot_id: str, message: Dict[str, Any], owner_id: O
         if current is not None and not current.finished:
             raise TurnBusyError(current)
         current_storage().add_message(message)
+        recall.schedule_index(bot_id, message)
         runner, selected_model = await _build_turn_runner(bot_id, None)
         return turn_manager.start(bot_id, _bot_id_for(bot_id), selected_model, runner)
 

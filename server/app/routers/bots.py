@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from app.schemas.contracts import Bot
 from app.services import llm_service
 from app.services.command_rules import clean_rules
+from app.services.search import schedule_notes_index
 from app.services.bot_memory import MEMORY_MAX_CHARS, MemoryError, clean_memory, memory_note_message
 from app.services.bot_todo import TODO_MAX_ITEMS, TodoError, clean_todo, todo_note_message
 from app.services.computer_provider import ComputerProviderError, computer_id_for_bot, computer_provider
@@ -211,6 +212,7 @@ async def update_bot(bot_id: str, updates: BotUpdate):
         if memory != str(bots[index].get("memory") or ""):
             bots[index]["memory"] = memory
             bots[index]["memory_updated_at"] = datetime.now().isoformat()
+            schedule_notes_index(bot_id, str(bots[index].get("name") or bot_id), memory)
             # Recorded in the thread so the model sees the edit where it
             # happened, without the system prompt (and the cache) changing.
             memory_note = memory_note_message(bot_id, memory, message_id=f"msg-{uuid.uuid4().hex[:6]}")

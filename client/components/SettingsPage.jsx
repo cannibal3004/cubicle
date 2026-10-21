@@ -123,6 +123,10 @@ export default function SettingsPage({
   const [reasoningEffort, setReasoningEffort] = useState("");
   const [maxConcurrent, setMaxConcurrent] = useState(4);
   const [screenshotWidth, setScreenshotWidth] = useState(1280);
+  const [retrievalEnabled, setRetrievalEnabled] = useState("on");
+  const [embeddingModel, setEmbeddingModel] = useState("");
+  const [rerankModel, setRerankModel] = useState("");
+  const [toolSelectionMax, setToolSelectionMax] = useState(40);
   const [slots, setSlots] = useState(null); // {limit, active, waiting}
   const [showApiKey, setShowApiKey] = useState(false);
 
@@ -166,6 +170,10 @@ export default function SettingsPage({
             setReasoningEffort(data.llm_reasoning_effort || "");
             setMaxConcurrent(Number.isFinite(Number(data.llm_max_concurrent)) ? Number(data.llm_max_concurrent) : 4);
             setScreenshotWidth(Number.isFinite(Number(data.computer_screenshot_max_width)) ? Number(data.computer_screenshot_max_width) : 1280);
+            setRetrievalEnabled(data.retrieval_enabled === "off" ? "off" : "on");
+            setEmbeddingModel(data.embedding_model || "");
+            setRerankModel(data.rerank_model || "");
+            setToolSelectionMax(Number.isFinite(Number(data.tool_selection_max)) ? Number(data.tool_selection_max) : 40);
             setComposioApiKey("");
             setComposioConfigured(Boolean(data.composio_api_key_configured));
             setDefaultModel(data.default_model || "");
@@ -211,6 +219,10 @@ export default function SettingsPage({
               llm_reasoning_effort: reasoningEffort,
               llm_max_concurrent: Math.max(0, Math.min(64, Math.round(Number(maxConcurrent) || 0))),
               computer_screenshot_max_width: Math.max(0, Math.min(4096, Math.round(Number(screenshotWidth) || 0))),
+              retrieval_enabled: retrievalEnabled,
+              embedding_model: embeddingModel.trim(),
+              rerank_model: rerankModel.trim(),
+              tool_selection_max: Math.max(0, Math.min(500, Math.round(Number(toolSelectionMax) || 0))),
               composio_api_key: composioApiKey,
               default_model: defaultModel,
               theme: "dark",
@@ -624,6 +636,77 @@ export default function SettingsPage({
               You always watch the computer at its full size. This is what the bot sees when it takes a screenshot: fewer pixels mean
               fewer vision tokens and a faster look; the full screen is sharper for small text. Clicks are mapped back either way.
               Applies from the next screenshot.
+            </p>
+          </div>
+
+          {/* Retrieval */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+              <span className="text-teal-400">•</span> Retrieval
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              <select
+                suppressHydrationWarning={true}
+                value={retrievalEnabled}
+                disabled={!admin}
+                onChange={(e) => setRetrievalEnabled(e.target.value)}
+                className={`${inputClass} cursor-pointer`}
+              >
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
+              <input
+                suppressHydrationWarning={true}
+                type="text"
+                value={embeddingModel}
+                disabled={!admin}
+                onChange={(e) => setEmbeddingModel(e.target.value)}
+                placeholder="embedding model (server default)"
+                className={`${inputClass} font-mono`}
+              />
+              <input
+                suppressHydrationWarning={true}
+                type="text"
+                value={rerankModel}
+                disabled={!admin}
+                onChange={(e) => setRerankModel(e.target.value)}
+                placeholder="reranker model (server default)"
+                className={`${inputClass} font-mono`}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              {admin && <SaveButton field="model" onClick={handleSaveModel} />}
+            </div>
+            <p className="text-[10px] leading-relaxed text-zinc-500">
+              Long attachments are indexed with the model server&apos;s embedding model, and each message pulls in the passages that match it,
+              reranked when the server has a reranker; the chat only inlines a file&apos;s beginning. Leave the names blank to use the server&apos;s
+              defaults (halogen serves qwen3-embedding-0.6b and qwen3-reranker-0.6b). Saved with the default model.
+            </p>
+          </div>
+
+          {/* Tool selection */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+              <span className="text-lime-400">•</span> Tools per turn
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                suppressHydrationWarning={true}
+                type="number"
+                min="0"
+                max="500"
+                step="1"
+                value={toolSelectionMax}
+                disabled={!admin}
+                onChange={(e) => setToolSelectionMax(e.target.value)}
+                className={`${inputClass} w-28 font-mono`}
+              />
+              {admin && <SaveButton field="model" onClick={handleSaveModel} />}
+            </div>
+            <p className="text-[10px] leading-relaxed text-zinc-500">
+              When a bot could be offered more tools than this in one round, the connected apps&apos; tools are narrowed to the ones that
+              match the message (by the same embeddings), keeping any the thread used recently; the built-in tools always stay. 0 offers
+              everything. Needs Retrieval on. Saved with the default model.
             </p>
           </div>
         </div>

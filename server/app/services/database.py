@@ -167,6 +167,22 @@ SCHEMA_MIGRATIONS = {
         ALTER TABLE users ADD COLUMN display_name TEXT;
         ALTER TABLE users ADD COLUMN email TEXT;
     """,
+    # Embeddings: one row per chunk of indexed text, per account (see services/retrieval.py).
+    9: """
+        CREATE TABLE IF NOT EXISTS vectors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            ref TEXT NOT NULL,
+            chunk INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            vector BLOB NOT NULL,
+            model TEXT NOT NULL DEFAULT '',
+            meta TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS vectors_owner_kind_ref ON vectors(owner_id, kind, ref);
+    """,
 }
 
 OWNER_TABLES = (
