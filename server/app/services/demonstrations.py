@@ -95,6 +95,8 @@ def describe_step(step: Dict[str, Any], previous_url: Optional[str] = None) -> s
     if kind == "select":
         return f'Chose "{step.get("value") or ""}" in {_control(step)}{where}.'
     if kind == "check":
+        if "radio" in str(target.get("role") or ""):
+            return f"Selected {_control(step)}{where}."
         return f"{'Checked' if step.get('checked') else 'Unchecked'} {_control(step)}{where}."
     if kind == "file":
         return f'Chose the file "{step.get("value") or ""}" with {_control(step)}{where}.'

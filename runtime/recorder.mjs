@@ -268,6 +268,15 @@ export function createRecorder({ ensureBrowser, getContext, captureDesktop, rais
       return;
     }
     if (type === 'check') {
+      // The click that toggled it was just recorded: that step becomes the
+      // check, keeping its frame, rather than a second line saying the same.
+      const last = recording.steps[recording.steps.length - 1];
+      if (last && last.type === 'click' && sameField(last.target, target) && last.url === url) {
+        last.type = type;
+        last.checked = Boolean(event.checked);
+        last.at_ms = elapsed();
+        return;
+      }
       pushStep({ type, url, target, checked: Boolean(event.checked) });
       return;
     }
