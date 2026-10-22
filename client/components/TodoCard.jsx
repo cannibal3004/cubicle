@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { FiCheckSquare, FiChevronDown, FiChevronRight, FiPlus, FiX } from 'react-icons/fi';
+import { FiCheckSquare, FiChevronRight, FiPlus, FiX } from 'react-icons/fi';
 
-// The bot's working list for the job at hand, shown above the chat. The bot
+// The bot's working list for the job at hand, in a panel beside the chat
+// (open when the list has items, a narrow rail otherwise). The bot
 // keeps it with the todo tools; the user can tick, reword, add and remove
 // items here. Every change saves the whole list; the server records the
 // edit in the thread so the model sees it.
@@ -15,7 +16,7 @@ const STATE_STYLES = {
 
 export default function TodoCard({ bot, onSave }) {
   const items = Array.isArray(bot?.todo) ? bot.todo : [];
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(items.length > 0);
   const [draft, setDraft] = useState('');
   const [editing, setEditing] = useState(null); // { id, text }
   const [saving, setSaving] = useState(false);
@@ -25,7 +26,13 @@ export default function TodoCard({ bot, onSave }) {
     setEditing(null);
     setDraft('');
     setError(null);
-  }, [bot?.id]);
+    setOpen((Array.isArray(bot?.todo) ? bot.todo : []).length > 0);
+  }, [bot?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A list that fills (the bot wrote it) opens the panel; emptying it does not close it.
+  const count = items.length;
+  useEffect(() => {
+    if (count > 0) setOpen(true);
+  }, [count > 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!bot) return null;
   const done = items.filter((i) => i.state === 'done').length;
@@ -66,25 +73,45 @@ export default function TodoCard({ bot, onSave }) {
     ? `${done} of ${items.length} done${doing ? ` · now: ${doing.text}` : ''}`
     : 'empty';
 
+  if (!open) {
+    return (
+      <aside className="flex-shrink-0 w-9 border-l border-[#1f1f23] bg-[#0b0b0d] flex flex-col items-center pt-3 z-10" aria-label="To-do list">
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="flex flex-col items-center gap-2 text-zinc-500 hover:text-zinc-200"
+          title={`To-do · ${summary}`}
+          aria-expanded={false}
+        >
+          <FiCheckSquare className="text-sm text-cyan-300/80" />
+          <span className="text-[10px] font-mono" style={{ writingMode: 'vertical-rl' }}>
+            {items.length ? `${done}/${items.length}` : 'to-do'}
+          </span>
+        </button>
+      </aside>
+    );
+  }
+
   return (
-    <section className="px-6 pt-2 z-10" aria-label="To-do list">
-      <div className="max-w-4xl mx-auto w-full px-12 md:px-20">
-        <div className="rounded-xl border border-[#27272a] bg-[#0f0f11]/90 text-[11px] text-zinc-300 shadow-sm">
+    <aside className="flex-shrink-0 w-72 border-l border-[#1f1f23] bg-[#0b0b0d] flex flex-col min-h-0 z-10" aria-label="To-do list">
+      <div className="flex flex-col min-h-0 flex-1 text-[11px] text-zinc-300">
+        <div>
           <button
             type="button"
-            onClick={() => setOpen((v) => !v)}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-left font-mono text-zinc-400 hover:text-zinc-200"
+            onClick={() => setOpen(false)}
+            className="w-full flex items-center gap-2 px-3 py-2 text-left font-mono text-zinc-400 hover:text-zinc-200 border-b border-[#1f1f23]"
             aria-expanded={open}
+            title="Collapse"
           >
-            {open ? <FiChevronDown className="text-xs" /> : <FiChevronRight className="text-xs" />}
             <FiCheckSquare className="text-xs text-cyan-300/80" />
             <span className="text-zinc-200">To-do</span>
             <span className="truncate">· {summary}</span>
             {saving && <span className="ml-auto text-zinc-500">saving…</span>}
+            <FiChevronRight className="text-xs ml-auto" />
           </button>
 
           {open && (
-            <div className="px-3 pb-2.5 space-y-1">
+            <div className="px-3 py-2.5 space-y-1.5 overflow-y-auto max-h-[calc(100vh-7rem)]">
               {items.map((item) => (
                 <div key={item.id} className="group flex items-start gap-2">
                   <button
@@ -157,6 +184,6 @@ export default function TodoCard({ bot, onSave }) {
           )}
         </div>
       </div>
-    </section>
+    </aside>
   );
 }

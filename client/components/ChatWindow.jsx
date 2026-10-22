@@ -68,7 +68,7 @@ function formatHeaderDate(msgs) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-export default function ChatWindow({ bot, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onBotPatched, onToggleComputer, onOpenFiles, onOpenTakeover, onOpenAudit, onOpenSettings, defaultModel, prefill }) {
+export default function ChatWindow({ bot, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onBotPatched, onToggleComputer, onOpenFiles, onOpenTakeover, onOpenAudit, onOpenSettings, defaultModel, prefill, onBotsChanged }) {
   const [inputPrompt, setInputPrompt] = useState('');
   // Streaming is tracked per bot by the Dashboard so a reply keeps going
   // while another bot or tab is shown.
@@ -417,6 +417,10 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
           if (event.type === 'tool.completed' && String(event.callName || '').startsWith('todo_') && Array.isArray(event.result?.items) && onBotPatched) {
             // A todo result carries the whole list: show it without a refetch.
             onBotPatched(botId, { todo: event.result.items });
+          }
+          if (event.type === 'tool.completed' && String(event.callName || '') === 'bots_create' && onBotsChanged) {
+            // An orchestrator made a bot: the list shows it without a reload.
+            onBotsChanged();
           }
           if (event.type === 'tool.completed' && ['memory_write', 'memory_edit'].includes(String(event.callName || '')) && onBotPatched) {
             // The notes changed: fetch them so the editor shows the new text without a reload.
@@ -856,8 +860,9 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
         </div>
       </header>
 
-      {bot && <TodoCard bot={bot} onSave={onUpdateBot ? (items) => onUpdateBot(bot.id, { todo: items }) : null} />}
-
+      {/* The thread and the composer, with the bot's to-do list in a panel on the right. */}
+      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
       {/* Main Canvas Scrollable Chat Thread */}
       <div ref={scrollContainerRef} onScroll={handleThreadScroll} className="flex-1 overflow-y-auto px-6 py-4 relative">
         <div className="max-w-4xl mx-auto w-full space-y-3 px-12 md:px-20">
@@ -1101,6 +1106,10 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
           </button>
 
         </form>
+      </div>
+      </div>
+
+      {bot && <TodoCard bot={bot} onSave={onUpdateBot ? (items) => onUpdateBot(bot.id, { todo: items }) : null} />}
       </div>
 
     </div>
