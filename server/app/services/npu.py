@@ -22,6 +22,21 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 RETRY_STATUSES = {408, 425, 429, 500, 502, 503, 504}
+# One NPU request at a time from this server. halogen runs them one after
+# another anyway, and two large requests in flight together is what filled
+# the device heap and hung it (2026-10-21). The lock belongs to the running
+# event loop, so it is made for the loop that first needs it (tests run many).
+_lock: Optional[asyncio.Lock] = None
+_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def npu_lock() -> asyncio.Lock:
+    global _lock, _lock_loop
+    loop = asyncio.get_running_loop()
+    if _lock is None or _lock_loop is not loop:
+        _lock = asyncio.Lock()
+        _lock_loop = loop
+    return _lock
 
 
 def _backoff() -> list:
@@ -57,19 +72,20 @@ async def post_json_with_retry(
     tries = max(1, int(settings.NPU_RETRY_ATTEMPTS if attempts is None else attempts))
     pauses = _backoff()
     last_error: Optional[str] = None
-    for attempt in range(1, tries + 1):
-        try:
-            async with client_factory(timeout, headers) as client:
-                response = await client.post(url, json=payload)
-        except httpx.HTTPError as exc:
-            last_error = f"{type(exc).__name__}"
-            response = None
-        if response is not None and response.status_code not in RETRY_STATUSES:
-            return response
-        if response is not None:
-            last_error = f"HTTP {response.status_code}"
-        if attempt < tries:
-            pause = pauses[min(attempt - 1, len(pauses) - 1)]
-            logger.warning("%s call failed (%s), attempt %d of %d; retrying in %.0fs", label, last_error, attempt, tries, pause)
-            await asyncio.sleep(pause)
+    async with npu_lock():
+        for attempt in range(1, tries + 1):
+            try:
+                async with client_factory(timeout, headers) as client:
+                    response = await client.post(url, json=payload)
+            except httpx.HTTPError as exc:
+                last_error = f"{type(exc).__name__}"
+                response = None
+            if response is not None and response.status_code not in RETRY_STATUSES:
+                return response
+            if response is not None:
+                last_error = f"HTTP {response.status_code}"
+            if attempt < tries:
+                pause = pauses[min(attempt - 1, len(pauses) - 1)]
+                logger.warning("%s call failed (%s), attempt %d of %d; retrying in %.0fs", label, last_error, attempt, tries, pause)
+                await asyncio.sleep(pause)
     raise NpuError(f"{label} unavailable after {tries} attempts ({last_error})")

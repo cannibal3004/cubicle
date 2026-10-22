@@ -137,7 +137,7 @@ async def select_tools(
             norms[norms == 0] = 1.0
             scores = (matrix @ qv) / (norms * (float(np.linalg.norm(qv)) or 1.0))
             order = sorted(range(len(pool)), key=lambda i: float(scores[i]), reverse=True)
-            candidates = order[: max(need * 3, need)]
+            candidates = order[: min(max(need * 3, need), retrieval.RERANK_MAX_DOCUMENTS)]
             ranked = await retrieval.rerank(query, [texts[i] for i in candidates], need, config) if len(candidates) > need else None
             if ranked:
                 chosen = [pool[candidates[position]] for position, _score in ranked[:need] if 0 <= position < len(candidates)]

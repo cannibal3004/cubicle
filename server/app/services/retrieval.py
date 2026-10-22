@@ -40,15 +40,16 @@ logger = logging.getLogger(__name__)
 # Per attempt: an embedding batch or a rerank takes a second or two; a hung
 # NPU request is cut off here and retried (see services/npu.py).
 EMBED_TIMEOUT = httpx.Timeout(settings.NPU_REQUEST_TIMEOUT_SECONDS, connect=5.0)
-EMBED_BATCH = 32
+# Items per NPU request are kept small: a rerank of 30 documents exhausted the
+# NPU's device heap and hung it (2026-10-21); 20 in a request never did.
+EMBED_BATCH = 16
+RERANK_MAX_DOCUMENTS = 16
 # The embedding model's window is small (4k tokens on halogen); a chunk and
 # a query are kept well under it.
 MAX_EMBED_CHARS = 6000
 MAX_QUERY_CHARS = 2000
 MAX_INDEX_CHARS = 2_000_000
-# Only a couple of embedding calls at once: they are quick, and a burst of
-# attachments must not starve the chat.
-_embed_slots = asyncio.Semaphore(2)
+# Requests are serialised in services/npu.py, one NPU call at a time.
 
 # Embeddings supplied by tests or other callers: (texts, model) -> vectors.
 EmbedFunction = Callable[[Sequence[str], Optional[str]], "asyncio.Future[List[List[float]]]"]
@@ -106,7 +107,7 @@ async def embed_texts(texts: Sequence[str], config: Optional[RetrievalConfig] = 
     if not config.base_url:
         raise RetrievalError("no model server configured")
     vectors: List[List[float]] = []
-    async with _embed_slots:
+    if True:  # one block: the batches go out one after another through the NPU lock
         for start in range(0, len(texts), EMBED_BATCH):
             batch = [text[:MAX_EMBED_CHARS] for text in texts[start:start + EMBED_BATCH]]
             payload: Dict[str, Any] = {"input": batch}
@@ -134,6 +135,8 @@ async def rerank(query: str, documents: Sequence[str], top_n: int, config: Optio
     config = config or current_config()
     if not documents or not config.base_url:
         return None
+    # Callers pass candidates best first, so the cut keeps the likeliest ones.
+    documents = list(documents)[:RERANK_MAX_DOCUMENTS]
     payload: Dict[str, Any] = {"query": query[:MAX_QUERY_CHARS], "documents": [d[:MAX_EMBED_CHARS] for d in documents], "top_n": max(1, min(top_n, len(documents)))}
     if config.rerank_model:
         payload["model"] = config.rerank_model
@@ -334,7 +337,7 @@ async def retrieve(query: str, *, kind: Optional[str] = None, ref_prefix: Option
     except RetrievalError as exc:
         logger.warning("Retrieval skipped: %s", exc)
         return []
-    candidates = index.search(query_vector, kind=kind, ref_prefix=ref_prefix, limit=max(limit * 5, 20))
+    candidates = index.search(query_vector, kind=kind, ref_prefix=ref_prefix, limit=min(max(limit * 3, 12), RERANK_MAX_DOCUMENTS))
     if not candidates:
         return []
     if use_reranker and len(candidates) > limit:
