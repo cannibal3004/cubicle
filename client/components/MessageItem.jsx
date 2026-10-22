@@ -6,6 +6,22 @@ import remarkGfm from 'remark-gfm';
 import { FiX, FiChevronRight, FiTool, FiZap, FiShield } from 'react-icons/fi';
 import FileCard from './FileCard';
 
+// The steps a user message carries after a demonstration on the bot's computer.
+function DemonstrationChip({ demonstration }) {
+  const [open, setOpen] = useState(false);
+  const steps = demonstration.steps || 0;
+  return (
+    <span className="block mb-1">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="text-[10px] font-mono text-red-200/80 hover:text-white flex items-center gap-1" title="Recorded on the bot's computer">
+        <span className="w-1.5 h-1.5 rounded-full bg-red-400" /> showed the bot · {steps} step{steps === 1 ? '' : 's'} · {open ? 'hide' : 'show'}
+      </button>
+      {open && demonstration.text && (
+        <pre className="mt-1 max-h-56 overflow-auto rounded-lg bg-black/30 p-2 text-[10px] font-mono text-zinc-200 whitespace-pre-wrap text-left">{demonstration.text}</pre>
+      )}
+    </span>
+  );
+}
+
 function formatMsgTime(createdAt) {
   if (!createdAt) return '';
   const d = new Date(createdAt);
@@ -137,6 +153,7 @@ function MessageItem({ message, botId }) {
                   scheduled · {message.raw_payload.scheduled.name}
                 </span>
               )}
+              {message.raw_payload?.demonstration && <DemonstrationChip demonstration={message.raw_payload.demonstration} />}
               {message.raw_payload?.delegated && (
                 <span className="block text-[10px] font-mono text-cyan-200/80 mb-0.5" title="Handed over by the orchestrator bot on your behalf">
                   from {message.raw_payload.delegated.from_name || 'the orchestrator'}

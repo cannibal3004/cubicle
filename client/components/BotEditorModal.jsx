@@ -132,6 +132,9 @@ export default function BotEditorModal({
   const removeSchedule = useCallback((id) => deleteBotSchedule(botId, id), [botId]);
   const runSchedule = useCallback((id) => runBotSchedule(botId, id), [botId]);
   const [showMcp, setShowMcp] = useState(false);
+  const [procedures, setProcedures] = useState([]);
+  const [showProcedures, setShowProcedures] = useState(false);
+  const [openProcedure, setOpenProcedure] = useState('');
   const loadMcp = useCallback(() => fetchBotMcpServers(botId), [botId]);
   const addMcp = useCallback((server) => createBotMcpServer(botId, server), [botId]);
   const changeMcp = useCallback((id, changes) => updateBotMcpServer(botId, id, changes), [botId]);
@@ -154,6 +157,9 @@ export default function BotEditorModal({
     setToolSettings(bot?.tool_settings || {});
     setTrustedTools(Array.isArray(bot?.trusted_tools) ? bot.trusted_tools : []);
     setAllowedCommands(Array.isArray(bot?.allowed_commands) ? bot.allowed_commands : []);
+    setProcedures(Array.isArray(bot?.procedures) ? bot.procedures : []);
+    setShowProcedures(false);
+    setOpenProcedure('');
     setNewRule('');
     setShowTools(false);
     setShowSecrets(false);
@@ -184,7 +190,7 @@ export default function BotEditorModal({
         allowed_commands: allowedCommands,
         // Only an existing bot has notes to edit; the server records a
         // change in the thread so the bot sees it.
-        ...(bot ? { memory } : {}),
+        ...(bot ? { memory, procedures } : {}),
       });
     } catch (err) {
       setError(err?.message || 'Could not save the bot.');
@@ -497,6 +503,46 @@ export default function BotEditorModal({
               {showMcp && (
                 <div className="mt-2">
                   <BotMcpSection load={loadMcp} create={addMcp} update={changeMcp} remove={removeMcp} test={testMcp} />
+                </div>
+              )}
+            </div>
+          )}
+
+          {bot && (
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowProcedures((v) => !v)}
+                className="flex items-center justify-between w-full text-left"
+                aria-expanded={showProcedures}
+              >
+                <span className={labelClass + ' mb-0'}>Procedures</span>
+                <span className="text-[11px] text-zinc-500">{showProcedures ? 'Hide' : `What you showed it${procedures.length ? ` (${procedures.length})` : ''}`}</span>
+              </button>
+              {showProcedures && (
+                <div className="mt-2 rounded-xl border border-[#26262b] bg-[#141417] p-3">
+                  <p className="text-[11px] text-zinc-500">
+                    How-tos the bot wrote from what you showed it on its computer (Show the bot, on the computer page). It reads one before a task it covers.
+                  </p>
+                  <div className="mt-2 space-y-1.5">
+                    {procedures.map((procedure) => (
+                      <div key={procedure.id} className="rounded-lg border border-[#26262b] bg-[#0f0f12]">
+                        <div className="flex items-center gap-2 px-2.5 py-1.5">
+                          <button type="button" onClick={() => setOpenProcedure((current) => (current === procedure.id ? '' : procedure.id))} className="flex-1 min-w-0 text-left text-xs text-zinc-100 truncate hover:text-white" title={procedure.title}>
+                            {procedure.title}
+                          </button>
+                          <span className="text-[10px] text-zinc-600 font-mono shrink-0">{(procedure.updated_at || procedure.created_at || '').slice(0, 10)}</span>
+                          <button type="button" onClick={() => setProcedures((current) => current.filter((p) => p.id !== procedure.id))} className="text-zinc-500 hover:text-rose-300 shrink-0" title="Remove (saved with the bot)">
+                            ×
+                          </button>
+                        </div>
+                        {openProcedure === procedure.id && (
+                          <pre className="px-2.5 pb-2 max-h-56 overflow-auto text-[11px] font-mono text-zinc-300 whitespace-pre-wrap">{procedure.steps}</pre>
+                        )}
+                      </div>
+                    ))}
+                    {!procedures.length && <span className="text-[11px] text-zinc-600">None yet.</span>}
+                  </div>
                 </div>
               )}
             </div>

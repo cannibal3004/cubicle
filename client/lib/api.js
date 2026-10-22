@@ -276,7 +276,7 @@ export async function fetchChatHistory(threadId) {
   }
 }
 
-export async function sendMessage(threadId, botId, text, model = null, imageUrl = null, attachments = null) {
+export async function sendMessage(threadId, botId, text, model = null, imageUrl = null, attachments = null, recordingId = null) {
   try {
     const res = await apiFetch(`${API_BASE_URL}/chat/send`, {
       method: 'POST',
@@ -288,6 +288,7 @@ export async function sendMessage(threadId, botId, text, model = null, imageUrl 
         model,
         image_url: imageUrl,
         attachments: attachments && attachments.length ? attachments : null,
+        recording_id: recordingId || null,
       }),
     });
     if (!res.ok) throw new Error('Failed to send message');
@@ -648,6 +649,28 @@ export async function setComputerControl(botId, owner) {
 }
 
 // WebSocket URL for the live desktop (noVNC). Same origin and cookie as the API.
+// Demonstrations: record what you do in the bot's browser, then hand the
+// recording to the bot with a message. Starting gives you control.
+export async function startComputerRecording(botId) {
+  const res = await apiFetch(`${API_BASE_URL}/computers/${encodeURIComponent(botId)}/record/start`, { method: 'POST' });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.detail || 'Could not start recording');
+  return payload;
+}
+
+export async function stopComputerRecording(botId) {
+  const res = await apiFetch(`${API_BASE_URL}/computers/${encodeURIComponent(botId)}/record/stop`, { method: 'POST' });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.detail || 'Could not stop recording');
+  return payload;
+}
+
+export async function fetchComputerRecording(botId) {
+  const res = await apiFetch(`${API_BASE_URL}/computers/${encodeURIComponent(botId)}/record`);
+  if (!res.ok) throw new Error('Could not read the recording state');
+  return res.json();
+}
+
 export function computerVncUrl(botId) {
   if (typeof window === 'undefined') return '';
   const base = API_BASE_URL.startsWith('http') ? new URL(API_BASE_URL) : new URL(API_BASE_URL, window.location.origin);

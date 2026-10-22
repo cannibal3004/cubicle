@@ -342,6 +342,11 @@ export default function Dashboard() {
             bot={activeBot}
             initial={computerView}
             onBackToChat={() => setActiveTab('chat')}
+            onDemonstrated={({ recordingId, text }) => {
+              // The user's words plus the recording; the server adds the steps and the bot's turn starts.
+              setChatPrefill({ text, recordingId, nonce: Date.now(), send: true });
+              setActiveTab('chat');
+            }}
             onHandBack={() => {
               // Sent as a message, so the bot's next turn starts without a click.
               setChatPrefill({

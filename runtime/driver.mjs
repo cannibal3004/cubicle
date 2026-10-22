@@ -19,6 +19,7 @@ import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { WebSocketServer } from 'ws';
+import { createRecorder } from './recorder.mjs';
 
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 3000);
@@ -443,6 +444,16 @@ async function raiseBrowser() {
   }
 }
 
+// The demonstration recorder: steps the person at the desk performs in the
+// browser, with a frame of the screen before each click (recorder.mjs).
+const recorder = createRecorder({
+  ensureBrowser,
+  getContext: () => context,
+  captureDesktop,
+  raiseBrowser,
+  screen: { width, height },
+});
+
 
 // ---- MCP servers in the computer -------------------------------------------
 // A bot can run MCP servers here, next to its files and packages, instead of
@@ -705,7 +716,13 @@ async function handle(request, response) {
         height,
         desktop: true,
         vnc: true,
+        recording: recorder.status().active,
       });
+      return;
+    }
+
+    if (request.method === 'GET' && request.url === '/record') {
+      json(response, 200, { computer_id: computerId, operation: 'record.status', ...recorder.status() });
       return;
     }
 
@@ -723,6 +740,14 @@ async function handle(request, response) {
         await raiseBrowser();
         await target.goto(url, { waitUntil: 'domcontentloaded', timeout: NAVIGATE_TIMEOUT_MS });
         return { operation: 'browser.navigate', url: target.url(), title: await target.title() };
+      }
+
+      if (request.method === 'POST' && request.url === '/record/start') {
+        return { operation: 'record.start', ...(await recorder.start()) };
+      }
+
+      if (request.method === 'POST' && request.url === '/record/stop') {
+        return { operation: 'record.stop', ...(await recorder.stop()) };
       }
 
       if (request.method === 'POST' && request.url === '/screenshot') {

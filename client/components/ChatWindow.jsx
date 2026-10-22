@@ -117,7 +117,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
   useEffect(() => {
     if (!prefill?.text) return;
     if (prefill.send) {
-      submitText(prefill.text).catch((err) => console.error('Could not send the hand-back message:', err));
+      submitText(prefill.text, { recordingId: prefill.recordingId || null }).catch((err) => console.error('Could not send the hand-back message:', err));
     } else {
       setInputPrompt(prefill.text);
     }
@@ -678,7 +678,9 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     await submitText(inputPrompt);
   };
 
-  const submitText = async (rawText) => {
+  // `options.recordingId` names a demonstration the user just recorded on the
+  // bot's computer; the server adds its steps to the message.
+  const submitText = async (rawText, options = {}) => {
     const name = commandNameOf(rawText);
     if (name) {
       const spec = commands.find((c) => c.name === name);
@@ -701,7 +703,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     }
     if (pendingFiles.some((item) => item.status === 'uploading')) return; // still uploading: Enter again in a moment
     const readyFiles = pendingFiles.filter((item) => item.status === 'ready' && item.attachment);
-    if ((!rawText.trim() && !selectedImage && readyFiles.length === 0) || isStreaming) return;
+    if ((!rawText.trim() && !selectedImage && readyFiles.length === 0 && !options.recordingId) || isStreaming) return;
 
     const botId = bot?.id;
     if (!botId) return;
@@ -744,13 +746,14 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
         userText,
         activeModel,
         finalImageUrl,
-        readyFiles.map((item) => ({ source: item.attachment.source, path: item.attachment.path }))
+        readyFiles.map((item) => ({ source: item.attachment.source, path: item.attachment.path })),
+        options.recordingId || null
       );
       // Take the server's id for the message, so a later history merge (a
       // turn seen through the poll, a reload) recognises it as the same one.
       if (sent?.message?.id) {
         updateMessages((prev) =>
-          prev.map((msg) => (msg.id === userMsgObj.id ? { ...msg, id: sent.message.id, created_at: sent.message.created_at || msg.created_at } : msg))
+          prev.map((msg) => (msg.id === userMsgObj.id ? { ...msg, id: sent.message.id, created_at: sent.message.created_at || msg.created_at, text: sent.message.text ?? msg.text, raw_payload: sent.message.raw_payload || msg.raw_payload } : msg))
         );
       }
       const started = await startTurn(botId, activeModel);

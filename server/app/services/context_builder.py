@@ -212,6 +212,11 @@ def build_history_messages(history: List[Dict[str, Any]], *, replay_tools: bool)
             delegated = (message.get("raw_payload") or {}).get("delegated")
             if isinstance(delegated, dict):
                 text = f"{DELEGATED_LEAD.format(name=delegated.get('from_name') or 'the orchestrator')}\n\n{text}"
+            demonstration = (message.get("raw_payload") or {}).get("demonstration")
+            if isinstance(demonstration, dict) and demonstration.get("text"):
+                from app.services.demonstrations import LEAD as DEMONSTRATION_LEAD
+
+                text = f"{text}\n\n{DEMONSTRATION_LEAD}\n{demonstration['text']}"
             # Attached files follow the user's words: a header saying where
             # each one is, then its text (capped at upload time).
             blocks = [attachment_for_model(a) for a in (message.get("attachments") or []) if isinstance(a, dict)]

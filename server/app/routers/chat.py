@@ -35,6 +35,7 @@ from app.services.mcp_tools import mcp_tool_specs
 from app.services.secrets_service import names_for, redactor_for
 from app.services import attachments as attachment_service
 from app.services import recall, retrieval
+from app.services import demonstrations, procedures
 from app.services.tool_selection import select_tools
 from app.services import orchestrator as _orchestrator  # noqa: F401 - registers bots.* actions
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
@@ -211,6 +212,13 @@ async def send_message(req: TurnRequest):
                 raise HTTPException(status_code=400, detail=f"Attachment {ref.path}: {exc}")
             attached.append(await attachment_service.attach(shared, req.bot_id))
         user_msg["attachments"] = attached
+    if req.recording_id:
+        record = demonstrations.load_recording(req.bot_id, req.recording_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="That recording does not exist.")
+        if not user_msg["text"].strip():
+            user_msg["text"] = "I showed you how to do something on your computer."
+        user_msg["raw_payload"] = {"demonstration": demonstrations.summary(record)}
 
     current_storage().add_message(user_msg)
     recall.schedule_index(req.bot_id, user_msg)
@@ -370,6 +378,15 @@ async def retrieved_context(bot_id: str, query: str) -> str:
     )
 
 
+async def procedure_context(bot_id: str, query: str) -> str:
+    """The bot's procedures that match the message, in full; "" when none."""
+    try:
+        return await procedures.procedure_context(bot_id, query)
+    except Exception as exc:  # never let it fail a turn
+        logger.warning("Procedure retrieval failed for %s: %s", bot_id, exc)
+        return ""
+
+
 async def recalled_context(bot_id: str, query: str, history: List[Dict[str, Any]]) -> str:
     """Earlier exchanges of this bot that match the message and are no longer in the context; "" when none."""
     try:
@@ -474,6 +491,10 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
     tool_definitions = openai_tool_definitions(tool_specs) if tool_specs else None
     # The names of the user's secrets (set in the bot's computer), never the values.
     tools_prompt = describe_tools(tool_specs, secret_names=names_for(thread_id), selection_note=selection.note() if selection else "")
+    # The titles of what the user has shown this bot; procedure_read brings one back.
+    shown = procedures.prompt_block(current_bot) if tool_specs else ""
+    if shown:
+        tools_prompt = f"{tools_prompt}\n{shown}"
     # The bot's auto-approval mode is fixed for the whole turn, like its tools.
     gate_mode = approval_gate.mode_for(current_bot)
     gate_threshold = approval_gate.threshold_for(current_bot)
@@ -607,6 +628,11 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             if retrieved:
                 turn.emit({"type": "retrieval.used", "botMsgId": bot_msg_id, "count": retrieved.count("--- from ")})
                 turn_system_prompt = f"{turn_system_prompt}\n\n{retrieved}"
+            # Procedures the user showed the bot that match this message, in full.
+            known = await procedure_context(thread_id, last_user_text)
+            if known:
+                turn.emit({"type": "procedure.used", "botMsgId": bot_msg_id, "count": known.count("\n--- ")})
+                turn_system_prompt = f"{turn_system_prompt}\n\n{known}"
             # Past exchanges that the compaction folded away but that match this message.
             recalled = await recalled_context(thread_id, last_user_text, history)
             if recalled:
@@ -615,6 +641,14 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
 
             # --- model turn, looping while it calls tools ------------------------
             messages: List[Dict[str, Any]] = list(formatted_history)
+            # A demonstration the user just recorded: its steps are in the
+            # message; the frames come once, on the turn that answers it.
+            demonstration = demonstrations.pending_demonstration(history)
+            if demonstration and _model_accepts_images(selected_model, llm_config):
+                frames = demonstrations.keyframe_message(thread_id, demonstration)
+                if frames:
+                    messages.append(frames)
+                    turn.emit({"type": "demonstration.frames", "botMsgId": bot_msg_id, "count": sum(1 for p in frames["content"] if p.get("type") == "image_url")})
             # Where the stored history ends and this turn's own rounds begin.
             prefix_len = len(messages)
             max_rounds = max(1, settings.LLM_MAX_TOOL_ROUNDS)

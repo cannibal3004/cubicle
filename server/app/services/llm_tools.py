@@ -324,6 +324,35 @@ MEMORY_TOOLS: List[ToolSpec] = [
 ]
 
 
+PROCEDURE_TOOLS: List[ToolSpec] = [
+    ToolSpec(
+        name="procedure_save",
+        description=(
+            "Keep a procedure: how to do a task on your computer, written from what the user showed you (or what you worked out). "
+            "Numbered steps in your own words, each naming the page or URL and the exact label of the control, with what to type or "
+            "choose; leave out passwords. Saving under an existing title replaces that procedure. The titles are listed in your tools "
+            "prompt on every turn; procedure_read brings one back."
+        ),
+        parameters=_obj(
+            {
+                "title": {"type": "string", "description": "Short, says what the procedure achieves (e.g. 'File a PTO request in Workday')"},
+                "steps": {"type": "string", "description": "The numbered steps"},
+            },
+            ["title", "steps"],
+        ),
+        group="procedures",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="procedure_read",
+        description="Show one of your procedures in full, by title (a unique part of the title is enough). Read it before doing a task it covers.",
+        parameters=_obj({"title": {"type": "string", "description": "The procedure's title"}}, ["title"]),
+        group="procedures",
+        needs_approval=False,
+    ),
+]
+
+
 TODO_TOOLS: List[ToolSpec] = [
     ToolSpec(
         name="todo_list",
@@ -592,6 +621,7 @@ def available_tools(
     specs = list(SHARED_FOLDER_TOOLS)
     if computer:
         specs.extend(COMPUTER_TOOLS)
+        specs.extend(PROCEDURE_TOOLS)
     specs.extend(SHARE_TOOLS)
     specs.extend(MEMORY_TOOLS)
     specs.extend(TODO_TOOLS)
@@ -736,6 +766,12 @@ def describe_tools(
             "appear as notes, and after a compaction the current notes come with the summary, so you do not need to read them at the start "
             "of every turn. Update them when something durable changes (the goal, a decision, where things are, how to run things), not for "
             "transient state, and change the passage concerned with memory_edit rather than rewriting everything."
+        )
+    if "procedures" in groups:
+        lines.append(
+            "- Procedures: the user can show you how to do something in your computer's browser (their clicks and typing arrive as a "
+            "recorded list of steps with screens). Write what they showed you up as a procedure and keep it with procedure_save; before a "
+            "task one of your procedures covers, procedure_read it and follow it with your computer tools, adapting when a page has changed."
         )
     if "todo" in groups:
         lines.append(
@@ -1211,6 +1247,21 @@ def build_invocation(
             arguments={"bot_id": bot_id, "old_text": old_text, "new_text": new_text},
             target={"bot_id": bot_id},
             preview=f"Edit the notes of {bot_id} ({len(old_text)} characters become {len(new_text)})",
+        )
+
+    if name == "procedure_save":
+        title = _string(arguments, "title", required=True, max_len=200)
+        steps = _string(arguments, "steps", required=True, max_len=20_000)
+        return ActionInvocation(
+            name="procedure.save",
+            arguments={"bot_id": bot_id, "title": title, "steps": steps},
+            target={"bot_id": bot_id},
+            preview=f"Save the procedure {title!r} for {bot_id} ({len(steps)} characters)",
+        )
+    if name == "procedure_read":
+        title = _string(arguments, "title", required=True, max_len=200)
+        return ActionInvocation(
+            name="procedure.read", arguments={"bot_id": bot_id, "title": title}, target={"bot_id": bot_id}, preview=f"Read the procedure {title!r} of {bot_id}"
         )
 
     if name in {"github_list_issues", "github_create_issue"}:
