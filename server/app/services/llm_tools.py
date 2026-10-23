@@ -742,7 +742,10 @@ def describe_tools(
                 else ""
             )
             +
-            "Software: computer_install_packages installs apt packages (the shell has no sudo); pip in a venv, npm, cargo and the like work from the shell. "
+            "Software: Ubuntu with Node and Python, and git, curl, jq, file, strings, xxd, less, nano, tree, rsync, zip/7z/xz/zstd, rg, fd, sqlite3, "
+            "ImageMagick, ffmpeg, tesseract (OCR), qpdf, exiftool, pdftotext and markitdown, dig, ping and nc are already installed. "
+            "computer_install_packages installs other apt packages (the shell has no sudo), e.g. build-essential for a C compiler, or pandoc; "
+            "pip in a venv, npm, cargo and the like work from the shell. "
             "/workspace and the home directory persist between starts, so installed tools and venvs stay; /tmp is wiped. "
             "The user can watch the same desktop live and take control of it; when a step needs a human, call computer_request_takeover."
         )

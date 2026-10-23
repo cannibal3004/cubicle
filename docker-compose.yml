@@ -83,7 +83,7 @@ services:
       DECIDER_TIMEOUT_SECONDS: ${DECIDER_TIMEOUT_SECONDS:-15}
       # Computer provider: fake (default) or docker (needs the `computer` profile).
       COMPUTER_PROVIDER: ${COMPUTER_PROVIDER:-fake}
-      COMPUTER_DOCKER_IMAGE: ${COMPUTER_DOCKER_IMAGE:-cubicle-computer:2.10.0}
+      COMPUTER_DOCKER_IMAGE: ${COMPUTER_DOCKER_IMAGE:-cubicle-computer:2.11.0}
       COMPUTER_DOCKER_COMMAND_TIMEOUT: ${COMPUTER_DOCKER_COMMAND_TIMEOUT:-60}
       COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX: ${COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX:-600}
       COMPUTER_DOCKER_SCREEN: ${COMPUTER_DOCKER_SCREEN:-1920x1200}
@@ -165,7 +165,7 @@ services:
   # as a service. The API starts one container per bot from this image.
   computer-runtime:
     build: ./runtime
-    image: ${COMPUTER_DOCKER_IMAGE:-cubicle-computer:2.10.0}
+    image: ${COMPUTER_DOCKER_IMAGE:-cubicle-computer:2.11.0}
     profiles:
       - computer
     deploy:
