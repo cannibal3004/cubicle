@@ -183,6 +183,17 @@ SCHEMA_MIGRATIONS = {
         );
         CREATE INDEX IF NOT EXISTS vectors_owner_kind_ref ON vectors(owner_id, kind, ref);
     """,
+    # Undo/redo in a conversation: each row is one rewound span (services/rewind.py).
+    10: """
+        CREATE TABLE IF NOT EXISTS rewinds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS rewinds_owner_thread ON rewinds(owner_id, thread_id);
+    """,
 }
 
 OWNER_TABLES = (

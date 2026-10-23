@@ -26,6 +26,9 @@ MEMORY_EDIT_LEAD = "The user edited your notes (memory). They now read:"
 TODO_ITEM_TYPE = "todo"
 TODO_LEAD = "Your to-do list at this point:"
 TODO_EDIT_LEAD = "The user edited your to-do list. It is now:"
+# After the user rewound the conversation past a change: the state as it stands.
+REWIND_NOTES_LEAD = "The user rewound the conversation; messages after this point were removed. Your notes (memory) as they stand now:"
+REWIND_TODO_LEAD = "The user rewound the conversation; messages after this point were removed. Your to-do list as it stands now:"
 # A user message a schedule posted; the model is told so it reports rather than converses.
 SCHEDULED_LEAD = "[Scheduled task '{name}', run automatically at {at}. Nobody is reading live: do the job and reply with a report.]"
 # A task handed over by the orchestrator bot: the reply goes back to it.
@@ -176,7 +179,10 @@ def summary_messages(compaction: Dict[str, Any]) -> List[Dict[str, Any]]:
 def memory_note_messages(note: Dict[str, Any]) -> List[Dict[str, Any]]:
     """How a user edit of the notes is shown to the model, in place."""
     text = note.get("text") or ""
-    body = f"{MEMORY_EDIT_LEAD}\n\n{text}" if text else "The user cleared your notes (memory)."
+    if (note.get("raw_payload") or {}).get("by") == "rewind":
+        body = f"{REWIND_NOTES_LEAD}\n\n{text}" if text else REWIND_NOTES_LEAD + "\n\n(empty)"
+    else:
+        body = f"{MEMORY_EDIT_LEAD}\n\n{text}" if text else "The user cleared your notes (memory)."
     return [
         {"role": "user", "content": body, "image_url": None},
         {"role": "assistant", "content": "Noted.", "image_url": None},
@@ -186,8 +192,9 @@ def memory_note_messages(note: Dict[str, Any]) -> List[Dict[str, Any]]:
 def todo_note_messages(note: Dict[str, Any]) -> List[Dict[str, Any]]:
     """How a user edit of the to-do list is shown to the model, in place."""
     text = note.get("text") or "(empty)"
+    lead = REWIND_TODO_LEAD if (note.get("raw_payload") or {}).get("by") == "rewind" else TODO_EDIT_LEAD
     return [
-        {"role": "user", "content": f"{TODO_EDIT_LEAD}\n\n{text}", "image_url": None},
+        {"role": "user", "content": f"{lead}\n\n{text}", "image_url": None},
         {"role": "assistant", "content": "Noted.", "image_url": None},
     ]
 
