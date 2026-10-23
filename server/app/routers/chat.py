@@ -900,6 +900,8 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         # (a malformed one is quoted inside a JSON object instead).
                         "raw_arguments": safe_arguments(call.get("arguments")),
                     }
+                    if call.get("called_as"):
+                        record["called_as"] = call["called_as"]  # the name the model used
                     tool_records.append(record)
 
                     try:
