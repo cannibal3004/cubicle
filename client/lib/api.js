@@ -531,6 +531,36 @@ export async function fetchCommands() {
   return res.json();
 }
 
+// Undo and redo. A rewind removes one of the user's messages and everything
+// after it (stopping a reply in progress); redo puts the last one back.
+async function rewindCall(path, options = {}) {
+  const res = await apiFetch(`${API_BASE_URL}${path}`, options);
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.detail || 'The conversation could not be changed');
+  return payload;
+}
+
+export function previewRewind(threadId, messageId = null) {
+  const query = messageId ? `?message_id=${encodeURIComponent(messageId)}` : '';
+  return rewindCall(`/chat/rewind/${encodeURIComponent(threadId)}${query}`);
+}
+
+export function rewindThread(threadId, messageId = null) {
+  return rewindCall(`/chat/rewind/${encodeURIComponent(threadId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message_id: messageId }),
+  });
+}
+
+export function fetchRedoState(threadId) {
+  return rewindCall(`/chat/redo/${encodeURIComponent(threadId)}`);
+}
+
+export function redoThread(threadId) {
+  return rewindCall(`/chat/redo/${encodeURIComponent(threadId)}`, { method: 'POST' });
+}
+
 export async function clearChatHistory(threadId) {
   const res = await apiFetch(`${API_BASE_URL}/chat/history/${encodeURIComponent(threadId)}`, { method: 'DELETE' });
   if (!res.ok) {

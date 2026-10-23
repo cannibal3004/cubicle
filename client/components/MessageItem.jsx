@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { FiX, FiChevronRight, FiTool, FiZap, FiShield } from 'react-icons/fi';
+import { FiX, FiChevronRight, FiTool, FiZap, FiShield, FiEdit2 } from 'react-icons/fi';
 import FileCard from './FileCard';
 
 // The steps a user message carries after a demonstration on the bot's computer.
@@ -118,7 +118,7 @@ function formatTokenCount(n) {
   return n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`;
 }
 
-function MessageItem({ message, botId }) {
+function MessageItem({ message, botId, onEdit }) {
   const isUser = message.sender === 'user';
   const isError = message.isError || message.text?.toLowerCase().startsWith('error:');
   const formattedTime = formatMsgTime(message.created_at);
@@ -130,7 +130,18 @@ function MessageItem({ message, botId }) {
 
   if (isUser) {
     return (
-      <div className="flex justify-end my-1.5">
+      <div className="group flex justify-end items-start gap-1.5 my-1.5">
+        {onEdit && (
+          <button
+            type="button"
+            onClick={() => onEdit(message)}
+            className="mt-1.5 p-1 rounded-md text-zinc-500 hover:text-white hover:bg-[#1f1f23] opacity-0 group-hover:opacity-100 focus:opacity-100 transition"
+            title="Edit: take this message back (and everything after it) to change and resend it. /redo undoes this."
+            aria-label="Edit this message"
+          >
+            <FiEdit2 className="text-xs" />
+          </button>
+        )}
         <div className="dark-bubble-user px-3.5 py-2 text-xs font-sans max-w-md shadow-md">
           {message.image_url && (
             <img
@@ -206,12 +217,13 @@ function MessageItem({ message, botId }) {
   }
 
   // The user edited the bot's notes from the bot editor; the model sees the
-  // new notes from this point of the conversation.
+  // new notes from this point of the conversation. After a rewind past a
+  // change, the same row shows the bot its notes as they stand.
   if (message.sender === 'system' && message.item_type === 'memory') {
     return (
       <details className="my-3 mx-auto max-w-xl rounded-xl border border-amber-500/20 bg-amber-500/5 text-[11px] text-zinc-300 shadow-sm">
         <summary className="cursor-pointer select-none px-3 py-1.5 font-mono text-amber-300/90">
-          Notes edited{message.text ? ` · ${message.text.length} characters` : ' · cleared'}{formattedTime ? ` · ${formattedTime}` : ''}
+          {message.raw_payload?.by === 'rewind' ? 'Current notes shown to the bot after a rewind' : 'Notes edited'}{message.text ? ` · ${message.text.length} characters` : ' · cleared'}{formattedTime ? ` · ${formattedTime}` : ''}
         </summary>
         <div className="px-3 pb-3 leading-relaxed whitespace-pre-wrap break-words">{message.text || 'The notes are empty.'}</div>
       </details>
@@ -225,7 +237,7 @@ function MessageItem({ message, botId }) {
     return (
       <details className="my-3 mx-auto max-w-xl rounded-xl border border-cyan-500/20 bg-cyan-500/5 text-[11px] text-zinc-300 shadow-sm">
         <summary className="cursor-pointer select-none px-3 py-1.5 font-mono text-cyan-300/90">
-          To-do list edited{items.length ? ` · ${done} of ${items.length} done` : ' · cleared'}{formattedTime ? ` · ${formattedTime}` : ''}
+          {message.raw_payload?.by === 'rewind' ? 'Current to-do list shown to the bot after a rewind' : 'To-do list edited'}{items.length ? ` · ${done} of ${items.length} done` : ' · cleared'}{formattedTime ? ` · ${formattedTime}` : ''}
         </summary>
         <div className="px-3 pb-3 leading-relaxed whitespace-pre-wrap break-words font-mono">{message.text || '(empty)'}</div>
       </details>

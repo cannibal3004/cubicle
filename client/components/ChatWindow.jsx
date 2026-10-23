@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import MessageItem from './MessageItem';
 import ApprovalCard from './ApprovalCard';
 import QuestionCard from './QuestionCard';
@@ -10,7 +10,7 @@ import ToolsPopover from './ToolsPopover';
 import ContextMeter from './ContextMeter';
 import TodoCard from './TodoCard';
 import MascotAvatar from './MascotAvatar';
-import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiEdit2, FiArrowDown, FiFile, FiFolder } from 'react-icons/fi';
+import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiEdit2, FiArrowDown, FiFile, FiFolder, FiRotateCw, FiVideo, FiAlertTriangle } from 'react-icons/fi';
 import ComputerStatusButton from './ComputerStatusButton';
 import {
   sendMessage,
@@ -27,6 +27,10 @@ import {
   compactThread,
   fetchChatHistory,
   fetchBot,
+  previewRewind,
+  rewindThread,
+  fetchRedoState,
+  redoThread,
 } from '../lib/api';
 
 const AUTO_APPROVAL_MODES = ['off', 'shadow', 'on', 'inherit'];
@@ -94,6 +98,15 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
   const [selectedImage, setSelectedImage] = useState(null);
   // Files for the next message: uploaded as they are picked, sent as cards.
   const [pendingFiles, setPendingFiles] = useState([]);
+  // Undo/redo: whether the server can redo for this bot ({ available, messages }),
+  // the text an undo put back (a redo clears it again if it is unchanged), a
+  // demonstration recording carried by an edited message, and the confirm
+  // dialog for a rewind that passes actions which stay done.
+  const [redoInfo, setRedoInfo] = useState(null);
+  const rewoundTextRef = useRef(null);
+  const [pendingRecording, setPendingRecording] = useState(null);
+  const [rewindConfirm, setRewindConfirm] = useState(null);
+  const [rewinding, setRewinding] = useState(false);
   const [pendingApprovals, setPendingApprovals] = useState([]);
   // Cards shown when the bot asks the user to take over its computer.
   const [takeoverRequests, setTakeoverRequests] = useState([]);
@@ -545,6 +558,131 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [inputPrompt]);
 
+  // ---- undo and redo ------------------------------------------------------------
+
+  // The user's own messages after the latest compaction can be edited.
+  const editableIds = (() => {
+    const list = messages || [];
+    let start = 0;
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      if (list[i].sender === 'system' && list[i].item_type === 'compaction') { start = i + 1; break; }
+    }
+    return list.slice(start)
+      .filter((m) => m.sender === 'user' && m.id && !String(m.id).startsWith('temp-') && !m.raw_payload?.scheduled && !m.raw_payload?.delegated)
+      .map((m) => m.id);
+  })();
+  const editableKey = editableIds.join(',');
+  const editableSet = useMemo(() => new Set(editableKey ? editableKey.split(',') : []), [editableKey]);
+
+  useEffect(() => {
+    const botId = bot?.id;
+    setRedoInfo(null);
+    setRewindConfirm(null);
+    setPendingRecording(null);
+    rewoundTextRef.current = null;
+    if (!botId) return undefined;
+    let cancelled = false;
+    fetchRedoState(botId).then((state) => { if (!cancelled) setRedoInfo(state); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [bot?.id]);
+
+  // The message comes back into the composer: its text, files, image and demonstration.
+  const restoreToComposer = (message) => {
+    const text = message?.text || '';
+    setInputPrompt(text);
+    rewoundTextRef.current = text;
+    const files = Array.isArray(message?.attachments) ? message.attachments : [];
+    setPendingFiles(files.map((attachment, index) => ({
+      key: `restored-${Date.now()}-${index}`,
+      name: attachment.name || String(attachment.path || '').split('/').pop() || 'file',
+      size: attachment.size,
+      status: 'ready',
+      attachment,
+      error: null,
+    })));
+    setSelectedImage(message?.image_url ? { file: null, previewUrl: message.image_url, isUploading: false, uploadedUrl: message.image_url, error: null } : null);
+    setPendingRecording(message?.raw_payload?.demonstration || null);
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  };
+
+  const performRewind = async (messageId) => {
+    const botId = bot?.id;
+    if (!botId || rewinding) return;
+    setRewinding(true);
+    setRewindConfirm(null);
+    try {
+      // A reply in progress is stopped by the server; stop following it here.
+      const attached = attachmentsRef.current[botId];
+      if (attached) {
+        attached.close();
+        delete attachmentsRef.current[botId];
+      }
+      const result = await rewindThread(botId, messageId);
+      setStreamingFor(botId, false);
+      const history = await fetchChatHistory(botId);
+      setMessagesFor(botId, () => history || []);
+      restoreToComposer(result.message);
+      setRedoInfo(result.redo || null);
+    } catch (err) {
+      addLocalMessage(`Could not undo: ${err.message}`, true);
+    } finally {
+      setRewinding(false);
+    }
+  };
+
+  // Edit (and /undo, and the up arrow): rewind at once, unless the bot did
+  // something since that the rewind cannot take back; then ask first.
+  const editMessage = async (message) => {
+    const botId = bot?.id;
+    if (!botId || !message?.id || rewinding) return;
+    try {
+      const preview = await previewRewind(botId, message.id);
+      if (preview.actions && preview.actions.length) {
+        setRewindConfirm({ messageId: message.id, preview });
+        return;
+      }
+    } catch (err) {
+      addLocalMessage(`Could not undo: ${err.message}`, true);
+      return;
+    }
+    await performRewind(message.id);
+  };
+  const editRef = useRef(editMessage);
+  editRef.current = editMessage;
+  const onEditMessage = useCallback((message) => editRef.current(message), []);
+
+  const undoLast = () => {
+    const lastId = editableIds[editableIds.length - 1];
+    const last = lastId ? (messages || []).find((m) => m.id === lastId) : null;
+    if (!last) {
+      addLocalMessage('There is nothing to undo since the last compaction.');
+      return;
+    }
+    editMessage(last);
+  };
+
+  const redoLast = async () => {
+    const botId = bot?.id;
+    if (!botId) return;
+    try {
+      const result = await redoThread(botId);
+      const history = await fetchChatHistory(botId);
+      setMessagesFor(botId, () => history || []);
+      // The text the undo put back is now in the thread again.
+      if (rewoundTextRef.current !== null && inputPrompt === rewoundTextRef.current) {
+        setInputPrompt('');
+        setPendingFiles([]);
+        setSelectedImage(null);
+        setPendingRecording(null);
+      }
+      rewoundTextRef.current = null;
+      setRedoInfo(result.redo || null);
+    } catch (err) {
+      setRedoInfo(null);
+      addLocalMessage(`Could not redo: ${err.message}`, true);
+    }
+  };
+
   const addLocalMessage = (text, isError = false) => {
     if (!bot?.id) return;
     setMessagesFor(bot.id, (prev) => [
@@ -638,6 +776,16 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
         }
         return;
       }
+      case 'undo':
+        undoLast();
+        return;
+      case 'redo':
+        if (!redoInfo?.available) {
+          addLocalMessage('There is nothing to redo.');
+          return;
+        }
+        await redoLast();
+        return;
       case 'computer':
         if (onToggleComputer) onToggleComputer(); else addLocalMessage('The computer is not available here.', true);
         return;
@@ -674,6 +822,12 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent?.isComposing) {
       e.preventDefault();
       submitText(inputPrompt);
+      return;
+    }
+    // Up arrow in an empty composer edits your last message.
+    if (e.key === 'ArrowUp' && !inputPrompt && !pendingFiles.length && !selectedImage && editableIds.length) {
+      e.preventDefault();
+      undoLast();
     }
   };
 
@@ -707,7 +861,8 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     }
     if (pendingFiles.some((item) => item.status === 'uploading')) return; // still uploading: Enter again in a moment
     const readyFiles = pendingFiles.filter((item) => item.status === 'ready' && item.attachment);
-    if ((!rawText.trim() && !selectedImage && readyFiles.length === 0 && !options.recordingId) || isStreaming) return;
+    const recordingId = options.recordingId || pendingRecording?.id || null;
+    if ((!rawText.trim() && !selectedImage && readyFiles.length === 0 && !recordingId) || isStreaming) return;
 
     const botId = bot?.id;
     if (!botId) return;
@@ -718,6 +873,10 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     setInputPrompt('');
     setSelectedImage(null);
     setPendingFiles([]);
+    setPendingRecording(null);
+    // Sending starts a new branch: the server forgets the redo history.
+    setRedoInfo(null);
+    rewoundTextRef.current = null;
     followRef.current = true;
     setShowJumpPill(false);
 
@@ -751,7 +910,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
         activeModel,
         finalImageUrl,
         readyFiles.map((item) => ({ source: item.attachment.source, path: item.attachment.path })),
-        options.recordingId || null
+        recordingId
       );
       // Take the server's id for the message, so a later history merge (a
       // turn seen through the poll, a reload) recognises it as the same one.
@@ -875,7 +1034,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
 
           {/* Message Items List */}
           {activeMessages.map((msg) => (
-            <MessageItem key={msg.id} message={msg} botId={bot?.id} />
+            <MessageItem key={msg.id} message={msg} botId={bot?.id} onEdit={editableSet.has(msg.id) ? onEditMessage : null} />
           ))}
 
           {/* Approval and takeover cards sit where the conversation currently is, not at the top. */}
@@ -1000,7 +1159,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
               />
               <div className="flex flex-col">
                 <span className="text-zinc-200 font-semibold text-[11px] truncate max-w-[180px]">
-                  {selectedImage.file.name}
+                  {selectedImage.file?.name || 'image'}
                 </span>
                 <span className="text-[10px] text-zinc-400">
                   {selectedImage.isUploading
@@ -1021,6 +1180,30 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             >
               <FiX className="text-sm" />
             </button>
+          </div>
+        )}
+
+        {/* After an undo: what came out can go back until something new is sent. */}
+        {redoInfo?.available && (
+          <div className="w-full max-w-2xl flex items-center justify-between gap-2 mb-2 px-3 py-1.5 rounded-xl border border-[#2b2b32] bg-[#141417] text-[11px] text-zinc-400">
+            <span>
+              Undone · {redoInfo.messages} message{redoInfo.messages === 1 ? '' : 's'} taken out{redoInfo.depth > 1 ? ` (${redoInfo.depth} undos)` : ''}. Sending something new makes this permanent.
+            </span>
+            <button type="button" onClick={redoLast} disabled={isStreaming} className="flex items-center gap-1 px-2 py-1 rounded-lg text-zinc-200 hover:text-white hover:bg-[#1f1f23] disabled:opacity-50 transition" title="/redo">
+              <FiRotateCw className="text-xs" /> Redo
+            </button>
+          </div>
+        )}
+
+        {pendingRecording && (
+          <div className="w-full max-w-2xl flex flex-wrap gap-1.5 mb-2">
+            <div className="flex items-center gap-2 bg-[#1c1c20] border border-red-500/30 px-2.5 py-1.5 rounded-xl text-[11px] shadow-md">
+              <FiVideo className="text-red-300 flex-shrink-0" />
+              <span className="text-zinc-200">Demonstration · {pendingRecording.steps || 0} steps</span>
+              <button type="button" onClick={() => setPendingRecording(null)} className="text-zinc-500 hover:text-white" title="Send without the demonstration">
+                <FiX className="text-xs" />
+              </button>
+            </div>
           </div>
         )}
 
@@ -1111,6 +1294,40 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
 
       {bot && <TodoCard bot={bot} onSave={onUpdateBot ? (items) => onUpdateBot(bot.id, { todo: items }) : null} />}
       </div>
+
+      {/* A rewind that passes things the bot did: they stay done, so ask first. */}
+      {rewindConfirm && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setRewindConfirm(null); }}>
+          <div className="w-full max-w-lg rounded-2xl border border-[#2b2b32] bg-[#111113] p-5 flex flex-col gap-3 shadow-2xl">
+            <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
+              <FiAlertTriangle className="text-amber-300" /> Take back {rewindConfirm.preview.messages} message{rewindConfirm.preview.messages === 1 ? '' : 's'}?
+            </div>
+            <p className="text-xs text-zinc-400">
+              The conversation goes back to before your message, and the message returns to the box. What {botTitle} did in the meantime is not undone:
+            </p>
+            <ul className="max-h-56 overflow-auto rounded-xl border border-[#26262b] bg-[#0b0b0d] p-3 space-y-1 text-[11px] font-mono text-zinc-300">
+              {rewindConfirm.preview.actions.map((action, index) => (
+                <li key={index} className="break-words">
+                  <span className="text-zinc-500">{action.tool}</span>{action.summary ? ` · ${action.summary}` : ''}
+                </li>
+              ))}
+            </ul>
+            {(rewindConfirm.preview.notes_changed || rewindConfirm.preview.todo_changed) && (
+              <p className="text-[11px] text-zinc-500">
+                Its {rewindConfirm.preview.notes_changed ? 'notes' : ''}{rewindConfirm.preview.notes_changed && rewindConfirm.preview.todo_changed ? ' and ' : ''}{rewindConfirm.preview.todo_changed ? 'to-do list' : ''} changed too; they stay as they are and the bot is shown them again.
+              </p>
+            )}
+            <div className="flex items-center justify-end gap-2">
+              <button type="button" onClick={() => setRewindConfirm(null)} className="px-3 py-1.5 rounded-xl text-xs font-semibold border bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700 transition">
+                Cancel
+              </button>
+              <button type="button" onClick={() => performRewind(rewindConfirm.messageId)} disabled={rewinding} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white disabled:opacity-50 transition">
+                {rewinding ? 'Taking back…' : 'Take back anyway'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

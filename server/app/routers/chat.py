@@ -36,6 +36,7 @@ from app.services.secrets_service import names_for, redactor_for
 from app.services import attachments as attachment_service
 from app.services import recall, retrieval
 from app.services import demonstrations, procedures
+from app.services import rewind as rewind_service
 from app.services.tool_selection import select_tools
 from app.services import orchestrator as _orchestrator  # noqa: F401 - registers bots.* actions
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
@@ -183,7 +184,77 @@ async def clear_history(thread_id: str):
     if current is not None and not current.finished:
         raise HTTPException(status_code=409, detail="A reply is still in progress; stop it first.")
     deleted = current_storage().delete_messages(thread_id)
+    current_storage().clear_rewinds(thread_id)
     return {"status": "ok", "deleted": deleted}
+
+
+# ---- undo and redo (services/rewind.py) ---------------------------------------------
+
+
+class RewindRequest(BaseModel):
+    message_id: Optional[str] = None
+
+
+async def _stop_running_turn(thread_id: str, wait_seconds: float = 15.0) -> None:
+    """Cancel the thread's reply in progress and wait until it has stored what it had."""
+    current = turn_manager.current(thread_id)
+    if current is None or current.finished:
+        return
+    turn_manager.cancel(thread_id)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + wait_seconds
+    while not current.finished and loop.time() < deadline:
+        await asyncio.sleep(0.1)
+    if not current.finished:
+        raise HTTPException(status_code=409, detail="The reply did not stop in time; try again in a moment.")
+
+
+def _for_client(message: Dict[str, Any]) -> Dict[str, Any]:
+    if message.get("attachments"):
+        return {**message, "attachments": attachment_service.without_text(message["attachments"])}
+    return message
+
+
+@router.get("/rewind/{thread_id}")
+async def rewind_preview(thread_id: str, message_id: Optional[str] = None):
+    """What rewinding to just before a message removes, and which of the bot's actions stay done."""
+    _ensure_thread(thread_id)
+    try:
+        return rewind_service.preview(thread_id, message_id)
+    except rewind_service.RewindError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/rewind/{thread_id}")
+async def rewind_thread(thread_id: str, body: Optional[RewindRequest] = None):
+    """Edit or /undo: remove a message of the user's and everything after it (stopping a reply in progress)."""
+    _ensure_thread(thread_id)
+    await _stop_running_turn(thread_id)
+    try:
+        result = rewind_service.rewind(thread_id, body.message_id if body else None)
+    except rewind_service.RewindError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "ok", **result, "message": _for_client(result["message"])}
+
+
+@router.get("/redo/{thread_id}")
+async def redo_status(thread_id: str):
+    _ensure_thread(thread_id)
+    return rewind_service.redo_state(thread_id)
+
+
+@router.post("/redo/{thread_id}")
+async def redo_thread(thread_id: str):
+    """/redo: put back what the last undo removed, while nothing new has been added."""
+    _ensure_thread(thread_id)
+    current = turn_manager.current(thread_id)
+    if current is not None and not current.finished:
+        raise HTTPException(status_code=409, detail="A reply is in progress; stop it first.")
+    try:
+        result = rewind_service.redo(thread_id)
+    except rewind_service.RewindError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "ok", **result}
 
 
 @router.post("/send")
@@ -222,6 +293,8 @@ async def send_message(req: TurnRequest):
 
     current_storage().add_message(user_msg)
     recall.schedule_index(req.bot_id, user_msg)
+    # A new message starts a new branch: what was undone can no longer be redone.
+    rewind_service.forget(req.thread_id)
     if user_msg.get("attachments"):
         user_msg = {**user_msg, "attachments": attachment_service.without_text(user_msg["attachments"])}
     return {"status": "ok", "message": user_msg}

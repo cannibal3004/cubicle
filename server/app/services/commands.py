@@ -36,6 +36,8 @@ COMMANDS: Tuple[CommandSpec, ...] = (
     CommandSpec("model", "/model <model>", "Switch this bot's model. A unique part of the id is enough.", "client", args="<model>"),
     CommandSpec("auto", "/auto off|shadow|on|inherit", "Set this bot's auto-approval mode.", "client", args="off|shadow|on|inherit"),
     CommandSpec("stop", "/stop", "Stop the reply that is streaming.", "client", while_streaming=True),
+    CommandSpec("undo", "/undo", "Take back your last message and the reply to it; the message returns to the box to edit.", "client", while_streaming=True),
+    CommandSpec("redo", "/redo", "Bring back what /undo or Edit removed, until you send something new.", "client"),
     CommandSpec("computer", "/computer", "Open this bot's computer.", "client"),
     CommandSpec("audit", "/audit", "Open the audit trail.", "client"),
     CommandSpec("settings", "/settings", "Open App Settings.", "client"),

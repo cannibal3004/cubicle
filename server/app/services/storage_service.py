@@ -451,6 +451,68 @@ class StorageService:
             )
             return cursor.rowcount if cursor.rowcount is not None else 0
 
+    def delete_message_ids(self, thread_id: str, message_ids: List[str]) -> int:
+        """Remove the given messages of one thread; returns how many were deleted."""
+        if not message_ids:
+            return 0
+        deleted = 0
+        with self.database.connect() as connection:
+            for message_id in message_ids:
+                cursor = connection.execute(
+                    "DELETE FROM messages WHERE owner_id = ? AND thread_id = ? AND id = ?",
+                    (self.owner_id, thread_id, str(message_id)),
+                )
+                deleted += cursor.rowcount or 0
+        return deleted
+
+    # ---- the redo stack of a conversation (services/rewind.py) -----------
+
+    def push_rewind(self, thread_id: str, entry: Dict[str, Any], keep: int = 20) -> None:
+        with self.database.connect() as connection:
+            connection.execute(
+                "INSERT INTO rewinds(owner_id, thread_id, created_at, payload) VALUES (?, ?, ?, ?)",
+                (self.owner_id, thread_id, _now(), json.dumps(entry)),
+            )
+            # Only the newest `keep` spans can be redone.
+            connection.execute(
+                "DELETE FROM rewinds WHERE owner_id = ? AND thread_id = ? AND id NOT IN "
+                "(SELECT id FROM rewinds WHERE owner_id = ? AND thread_id = ? ORDER BY id DESC LIMIT ?)",
+                (self.owner_id, thread_id, self.owner_id, thread_id, int(keep)),
+            )
+
+    def peek_rewind(self, thread_id: str) -> Optional[Dict[str, Any]]:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT payload FROM rewinds WHERE owner_id = ? AND thread_id = ? ORDER BY id DESC LIMIT 1",
+                (self.owner_id, thread_id),
+            ).fetchone()
+        payload = self._decode_payload(row[0]) if row else None
+        return payload if isinstance(payload, dict) else None
+
+    def pop_rewind(self, thread_id: str) -> Optional[Dict[str, Any]]:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT id, payload FROM rewinds WHERE owner_id = ? AND thread_id = ? ORDER BY id DESC LIMIT 1",
+                (self.owner_id, thread_id),
+            ).fetchone()
+            if not row:
+                return None
+            connection.execute("DELETE FROM rewinds WHERE id = ?", (row[0],))
+        payload = self._decode_payload(row[1])
+        return payload if isinstance(payload, dict) else None
+
+    def count_rewinds(self, thread_id: str) -> int:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) FROM rewinds WHERE owner_id = ? AND thread_id = ?", (self.owner_id, thread_id)
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def clear_rewinds(self, thread_id: str) -> int:
+        with self.database.connect() as connection:
+            cursor = connection.execute("DELETE FROM rewinds WHERE owner_id = ? AND thread_id = ?", (self.owner_id, thread_id))
+        return cursor.rowcount or 0
+
     def save_messages(self, messages: List[Dict[str, Any]]):
         with self.database.connect() as connection:
             connection.execute("DELETE FROM messages WHERE owner_id = ?", (self.owner_id,))
