@@ -43,7 +43,7 @@ TODO_TOOLS = {"todo_add", "todo_update"}
 # Built-in tools that only look; anything else that completed may have changed something.
 READ_ONLY_TOOLS = {
     "shared_folder_list", "shared_folder_read", "computer_start", "computer_screenshot", "computer_files_list",
-    "computer_read_file", "github_list_issues", "memory_read", "procedure_read", "todo_list", "schedule_list",
+    "computer_read_file", "list_files", "read_file", "github_list_issues", "memory_read", "procedure_read", "todo_list", "schedule_list",
     "ask_user", "bots_list", "bots_status", "bots_reply", "connector_status", "mcp_list_servers", "mcp_test_server",
     "computer_request_takeover", "composio_search_tools",
 }

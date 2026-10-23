@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Union
 
 from app.config import settings
+from app.services.tool_names import RENAMED, current_name, current_names, unknown_message
 from app.services.action_gateway import ActionInvocation
 from app.services.computer_provider import (
     FILE_CONTENT_MAX_CHARS,
@@ -151,22 +152,22 @@ COMPUTER_TOOLS: List[ToolSpec] = [
         needs_approval=True,
     ),
     ToolSpec(
-        name="computer_files_list",
-        description="List files inside the sandbox at a path (default /workspace).",
+        name="list_files",
+        description="List the files and folders in your computer at a path (default /workspace).",
         parameters=_obj({"path": {"type": "string", "description": _PATH_HINT}}),
         group="computer",
         needs_approval=False,
     ),
     ToolSpec(
-        name="computer_read_file",
-        description=f"Read a UTF-8 text file inside the sandbox (under {_FILE_ROOTS}, at most 512 KB).",
+        name="read_file",
+        description=f"Read a UTF-8 text file in your computer (under {_FILE_ROOTS}, at most 512 KB).",
         parameters=_obj({"path": {"type": "string", "description": _PATH_HINT}}, ["path"]),
         group="computer",
         needs_approval=False,
     ),
     ToolSpec(
-        name="computer_write_file",
-        description=f"Create or replace a UTF-8 text file inside the sandbox (under {_FILE_ROOTS}). Missing parent directories are created. Give the complete file contents; for a change to an existing file use computer_edit_file.",
+        name="write_file",
+        description=f"Create or replace a UTF-8 text file in your computer (under {_FILE_ROOTS}). Missing parent directories are created. Give the complete file contents; for a change to an existing file use edit_file.",
         parameters=_obj(
             {
                 "path": {"type": "string", "description": _PATH_HINT},
@@ -178,8 +179,8 @@ COMPUTER_TOOLS: List[ToolSpec] = [
         needs_approval=True,
     ),
     ToolSpec(
-        name="computer_edit_file",
-        description="Change one passage of a text file inside the sandbox: old_text is replaced by new_text. old_text must match the file exactly and only once, so copy it verbatim (computer_read_file shows the file) and include enough surrounding lines to be unique; an empty new_text removes the passage.",
+        name="edit_file",
+        description="Change one passage of a text file in your computer: old_text is replaced by new_text. old_text must match the file exactly and only once, so copy it verbatim (read_file shows the file) and include enough surrounding lines to be unique; an empty new_text removes the passage.",
         parameters=_obj(
             {
                 "path": {"type": "string", "description": _PATH_HINT},
@@ -665,7 +666,7 @@ def filter_tools(
                 continue
         elif groups.get(spec.group) is False:
             continue
-        if tools.get(spec.name) is False:
+        if tools.get(spec.name) is False or any(tools.get(old) is False for old, new in RENAMED.items() if new == spec.name):
             continue
         kept.append(spec)
     return kept
@@ -677,7 +678,7 @@ def trust_tools(specs: List[ToolSpec], trusted: Optional[List[str]]) -> List[Too
     Names that match nothing offered are ignored, so a tool that is switched
     off or no longer exists cannot be reached through its trust entry.
     """
-    names = {str(name) for name in (trusted or []) if isinstance(name, str)}
+    names = set(current_names(trusted or []))
     if not names:
         return specs
     return [replace(spec, needs_approval=False, trusted=True) if spec.name in names and spec.needs_approval else spec for spec in specs]
@@ -733,7 +734,7 @@ def describe_tools(
             "- Your computer: a sandboxed Linux container with a Chromium browser and a shell, with internet access. "
             "Navigate with computer_browser_navigate, then computer_screenshot to see the page, computer_send_input to click or type, "
             "and computer_terminal_execute for commands. The computer starts itself the first time you use it (that first call can take a little longer); computer_start only warms it up. "
-            f"Files: computer_read_file, computer_write_file and computer_edit_file handle files under {_file_roots(shared_in_computer)}; "
+            f"Files: read_file, write_file, edit_file and list_files handle files under {_file_roots(shared_in_computer)}; "
             "use them instead of heredocs or sed in the terminal; a relative path means under /workspace, so 'report.md' is /workspace/report.md. "
             + (
                 "/workspace is your own project space. /shared is the user's shared folder: a directory on the host that the user "
@@ -930,6 +931,7 @@ def build_invocation(
     specs: Optional[List[ToolSpec]] = None,
 ) -> Union[WorkspaceToolCall, ActionInvocation]:
     """Validate a model tool call and build the gateway input for it."""
+    name = current_name(name)  # a former name still works
     if name == "shared_folder_list":
         return WorkspaceToolCall("workspace.list", _string(arguments, "path", default=".", max_len=1000))
     if name == "shared_folder_read":
@@ -970,16 +972,16 @@ def build_invocation(
             if limit != float(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT):
                 preview += f" (up to {_duration(limit)})"
         return _computer_invocation("terminal_execute", bot_id, args, f"{preview}: {command[:120]}")
-    if name == "computer_read_file":
+    if name == "read_file":
         path = _computer_file_path(arguments)
         return _computer_invocation("files_read", bot_id, {"path": path}, f"Read {path} from the computer for {bot_id}")
-    if name == "computer_write_file":
+    if name == "write_file":
         path = _computer_file_path(arguments)
         content = _string(arguments, "content", required=True, max_len=FILE_CONTENT_MAX_CHARS)
         return _computer_invocation(
             "files_write", bot_id, {"path": path, "content": content}, f"Write {len(content)} characters to {path} in the computer for {bot_id}"
         )
-    if name == "computer_edit_file":
+    if name == "edit_file":
         path = _computer_file_path(arguments)
         old_text = _string(arguments, "old_text", required=True, max_len=FILE_CONTENT_MAX_CHARS)
         new_text = _string(arguments, "new_text", default="", max_len=FILE_CONTENT_MAX_CHARS)
@@ -989,7 +991,7 @@ def build_invocation(
             {"path": path, "old_text": old_text, "new_text": new_text},
             f"Edit {path} in the computer for {bot_id} ({len(old_text)} characters become {len(new_text)})",
         )
-    if name == "computer_files_list":
+    if name == "list_files":
         path = _string(arguments, "path", default="/workspace", max_len=512)
         try:
             path = check_file_path(path or "/workspace")
@@ -1299,7 +1301,7 @@ def build_invocation(
         if spec is not None:
             return connector_invocation(spec, arguments)
 
-    raise ToolCallError(f"Unknown tool: {name}")
+    raise ToolCallError(unknown_message(name, [s.name for s in specs or []]))
 
 
 def connector_invocation(spec: ToolSpec, arguments: Dict[str, Any]) -> ActionInvocation:

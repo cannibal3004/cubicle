@@ -356,8 +356,8 @@ With an OpenAI-compatible provider the model is offered these functions. The gat
 | `connector_connect`, `connector_status` | `connector.connect` / `connector.status` | connect yes; status no (start a Composio connection for the user and confirm it) |
 | `mcp_list_servers`, `mcp_add_server`, `mcp_test_server`, `mcp_remove_server` | `mcp.servers.*` | add and remove yes; list and test no (MCP servers, see below) |
 | `<server>_<tool>` (each tool of a connected MCP server) | `mcp.read` / `mcp.call` | no when the server marks the tool read-only (or is trusted read-only), otherwise yes |
-| `computer_start`, `computer_screenshot`, `computer_files_list`, `computer_read_file`, `computer_request_takeover` | `computer.*` | no |
-| `computer_browser_navigate`, `computer_terminal_execute`, `computer_write_file`, `computer_edit_file`, `computer_send_input`, `computer_install_packages` | `computer.*` | yes |
+| `computer_start`, `computer_screenshot`, `list_files`, `read_file`, `computer_request_takeover` | `computer.*` | no |
+| `computer_browser_navigate`, `computer_terminal_execute`, `write_file`, `edit_file`, `computer_send_input`, `computer_install_packages` | `computer.*` | yes |
 | `<app>_<action>` for every app connected through Composio, e.g. `gmail_fetch_emails`, `github_create_a_pull_request` | `connector.composio_read` or `connector.composio_action` | no for tools Composio marks read-only, yes for everything else |
 | `github_list_issues`, `github_create_issue` | `connector.github_*` | no / yes (fallback when the Composio catalog cannot be fetched) |
 

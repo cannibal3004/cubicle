@@ -37,6 +37,7 @@ from app.services import attachments as attachment_service
 from app.services import recall, retrieval
 from app.services import demonstrations, procedures
 from app.services import rewind as rewind_service
+from app.services import tool_names
 from app.services.tool_selection import select_tools
 from app.services import orchestrator as _orchestrator  # noqa: F401 - registers bots.* actions
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
@@ -73,7 +74,7 @@ _CUT_NOTE = "[The reply was cut off at the model's output limit.]"
 # Told to the model with a tool call its cut output left unreadable.
 _CUT_HINT = (
     " Your output was cut off at the completion token limit before this call was complete. Make the call much shorter: "
-    "write long scripts or data to a file with computer_write_file (in pieces if needed) and run the file, instead of "
+    "write long scripts or data to a file with write_file (in pieces if needed) and run the file, instead of "
     "putting them in one command."
 )
 _STOP_NOTES = {
@@ -424,6 +425,14 @@ async def _context_window_for(llm_config, model: str) -> Optional[int]:
 
 logger = logging.getLogger(__name__)
 
+def parse_arguments_quietly(raw: Any) -> Any:
+    """A call's arguments for comparing two calls; unparsable text compares as itself."""
+    try:
+        return parse_arguments(raw)
+    except Exception:
+        return str(raw)
+
+
 def command_trusted(bot: Optional[Dict[str, Any]], call_name: str, arguments: Dict[str, Any]) -> Union[bool, str]:
     """"allowed_command" when the bot's rules cover every command this terminal call runs."""
     if call_name != "computer_terminal_execute" or not bot:
@@ -530,6 +539,9 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
     # takes a single prompt, so there the slash commands remain the only tools.
     tools_enabled = settings.LLM_TOOLS_ENABLED and llm_config.provider != "muapi"
     tool_specs: List[Any] = []
+    # Everything the bot may call this turn, including app tools that tool
+    # selection did not list: a call to one of those still runs.
+    callable_specs: List[Any] = []
     selection = None
     if tools_enabled:
         # Every app connected through Composio becomes a set of tools. If the
@@ -554,6 +566,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         tool_specs = without_duplicate_routes(tool_specs)
         # The user's standing approvals for this bot.
         tool_specs = trust_tools(tool_specs, current_bot.get("trusted_tools") if current_bot else None)
+        callable_specs = list(tool_specs)
         # Too many app tools for one round: keep the ones that match the message.
         latest_user = next((m for m in reversed(history) if m.get("sender") == "user" and m.get("text")), None)
         try:
@@ -584,6 +597,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         "formatted_history": formatted_history,
         "context_window": context_window,
         "tool_specs": tool_specs,
+        "callable_specs": callable_specs or tool_specs,
         "tool_definitions": tool_definitions,
         "tools_prompt": tools_prompt,
         "gate_mode": gate_mode,
@@ -607,6 +621,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
     formatted_history = setup["formatted_history"]
     context_window = setup["context_window"]
     tool_specs = setup["tool_specs"]
+    callable_specs = setup.get("callable_specs") or tool_specs
     tool_definitions = setup["tool_definitions"]
     tools_prompt = setup["tools_prompt"]
     gate_mode = setup["gate_mode"]
@@ -792,7 +807,14 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         accumulated_reasoning += event["delta"]
                         turn.emit({"type": "reasoning.delta", "botMsgId": bot_msg_id, "delta": event["delta"]})
                     elif event["type"] == "tool_calls":
-                        pending_calls = list(event.get("calls") or [])
+                        # A former or habitual name (computer_write_file, write_to_file) is
+                        # the tool it means, so the transcript names the real tool.
+                        offered_names = [spec.name for spec in tool_specs]
+                        callable_names = [spec.name for spec in callable_specs]
+                        pending_calls = []
+                        for raw_call in event.get("calls") or []:
+                            resolved = tool_names.resolve(raw_call.get("name"), offered_names, callable_names)
+                            pending_calls.append(raw_call if resolved == raw_call.get("name") else {**raw_call, "name": resolved, "called_as": raw_call.get("name")})
                     elif event["type"] == "usage":
                         usage_rounds += 1
                         usage_prompt = int(event.get("prompt_tokens") or 0)
@@ -857,9 +879,19 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
 
                 image_messages: List[Dict[str, Any]] = []
                 replies_start = len(messages)
+                # The same call twice in one round (a model hedging) runs once.
+                ran_this_round: Dict[tuple, str] = {}
                 for call in pending_calls:
                     call_id = call["id"]
                     call_name = call["name"]
+                    same_key = (call_name, json.dumps(parse_arguments_quietly(call.get("arguments")), sort_keys=True))
+                    if same_key in ran_this_round:
+                        note = f"Not run: the same call as {ran_this_round[same_key]} earlier in this round, which ran once; see its result."
+                        tool_records.append({"id": call_id, "name": call_name, "status": "skipped", "raw_arguments": safe_arguments(call.get("arguments")), "error": note})
+                        turn.emit({"type": "tool.failed", "tool": call_name, "callName": call_name, "error": note})
+                        messages.append({"role": "tool", "tool_call_id": call_id, "content": _tool_result_text({"status": "skipped", "error": note})})
+                        continue
+                    ran_this_round[same_key] = call_id
                     record: Dict[str, Any] = {
                         "id": call_id,
                         "name": call_name,
@@ -872,7 +904,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
 
                     try:
                         arguments = parse_arguments(call.get("arguments"))
-                        invocation = build_invocation(call_name, arguments, thread_id, specs=tool_specs)
+                        invocation = build_invocation(call_name, arguments, thread_id, specs=callable_specs)
                     except ToolCallError as exc:
                         error = str(exc)
                         if round_cut:
@@ -883,7 +915,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         continue
 
                     record["summary"] = getattr(invocation, "summary", None) or getattr(invocation, "preview", call_name)
-                    trusted = any(spec.name == call_name and spec.trusted for spec in tool_specs) or command_trusted(current_bot, call_name, arguments)
+                    trusted = any(spec.name == call_name and spec.trusted for spec in callable_specs) or command_trusted(current_bot, call_name, arguments)
                     outcome = await _perform_action(
                         turn, thread_id, invocation, call_name=call_name, gate_mode=gate_mode, user_request=last_user_text,
                         gate_threshold=gate_threshold, trusted=trusted,
