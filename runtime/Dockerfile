@@ -21,7 +21,7 @@ COPY package.json ./
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm install --omit=dev --ignore-scripts
 
-COPY driver.mjs start.sh desktop.sh install-packages.sh chromium-browser make_wallpaper.py ./
+COPY driver.mjs recorder.mjs start.sh desktop.sh install-packages.sh chromium-browser make_wallpaper.py ./
 COPY skel ./skel
 COPY applications ./applications
 # The dock's Chromium launcher reuses the browser Playwright started, so the

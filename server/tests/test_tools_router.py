@@ -49,7 +49,7 @@ class ToolCatalogTests(unittest.TestCase):
         ):
             catalog = asyncio.run(tools_router.tool_catalog())
 
-        self.assertEqual([g["id"] for g in catalog["groups"]], ["workspace", "computer", "share", "memory", "todo", "schedule", "questions", "orchestration", "connectors", "mcp"])
+        self.assertEqual([g["id"] for g in catalog["groups"]], ["workspace", "computer", "procedures", "share", "memory", "todo", "schedule", "questions", "orchestration", "connectors", "mcp"])
         self.assertEqual(catalog["groups"][0]["label"], "Shared folder")
         self.assertIn("shared_folder_write", [t["name"] for t in catalog["groups"][0]["tools"]])
         self.assertEqual([t["slug"] for t in catalog["toolkits"]], ["gmail", "exa"])

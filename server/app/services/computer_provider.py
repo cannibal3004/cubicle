@@ -236,6 +236,15 @@ class ComputerProvider(Protocol):
     async def install_packages(self, computer_id: str, packages: Any) -> Dict[str, Any]:
         ...
 
+    async def record_start(self, computer_id: str) -> Dict[str, Any]:
+        ...
+
+    async def record_stop(self, computer_id: str) -> Dict[str, Any]:
+        ...
+
+    async def record_status(self, computer_id: str) -> Dict[str, Any]:
+        ...
+
     def vnc_target(self, computer_id: str) -> Optional[Dict[str, Any]]:
         """Where the API can bridge a live VNC session, or None if unavailable."""
         ...
@@ -277,6 +286,8 @@ class FakeComputerProvider:
         self._frame_counts: Dict[str, int] = {}
         # Files the fake computer "holds": {computer_id: {path: content}}.
         self._files: Dict[str, Dict[str, str]] = {}
+        # Demonstrations in progress: {computer_id: {started_at, steps, keyframes}}; tests append steps.
+        self.recordings: Dict[str, Dict[str, Any]] = {}
 
     def get_or_create(self, bot_id: str) -> ComputerStatus:
         computer_id = _computer_id(bot_id)
@@ -591,6 +602,35 @@ class FakeComputerProvider:
             "controlled_by": status.controlled_by,
             "next": "Tell the user what to do and end your turn; they will message you when they hand control back.",
         }
+
+    async def record_start(self, computer_id: str) -> Dict[str, Any]:
+        self._require_active(computer_id)
+        existing = self.recordings.get(computer_id)
+        if existing is None:
+            existing = self.recordings[computer_id] = {"started_at": _now(), "steps": [], "keyframes": []}
+        return {"computer_id": computer_id, "provider": self.provider_name, "operation": "record.start", "started_at": existing["started_at"]}
+
+    async def record_stop(self, computer_id: str) -> Dict[str, Any]:
+        recording = self.recordings.pop(computer_id, None)
+        if recording is None:
+            raise ComputerProviderError("Nothing is being recorded.")
+        status = self._get(computer_id)
+        return {
+            "computer_id": computer_id,
+            "provider": self.provider_name,
+            "operation": "record.stop",
+            "started_at": recording["started_at"],
+            "duration_ms": 0,
+            "width": status.width,
+            "height": status.height,
+            "steps": list(recording["steps"]),
+            "keyframes": list(recording["keyframes"]),
+            "dropped_steps": 0,
+        }
+
+    async def record_status(self, computer_id: str) -> Dict[str, Any]:
+        recording = self.recordings.get(computer_id)
+        return {"computer_id": computer_id, "provider": self.provider_name, "active": recording is not None, "steps": len(recording["steps"]) if recording else 0}
 
     def vnc_target(self, computer_id: str) -> Optional[Dict[str, Any]]:
         return None

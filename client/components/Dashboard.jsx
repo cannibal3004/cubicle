@@ -39,6 +39,19 @@ export default function Dashboard() {
   // The server's view of running turns and pending approvals, by bot.
   const [turnStates, setTurnStates] = useState({});
   const lastTurnStates = useRef({});
+  // Bots that appeared on the server (an orchestrator's bots_create, another
+  // device) join the list; known ones keep their loaded state.
+  const adoptNewBots = useCallback(() => {
+    fetchBots()
+      .then((all) =>
+        setBots((prev) => {
+          const known = new Set(prev.map((b) => b.id));
+          const added = (all || []).filter((b) => !known.has(b.id));
+          return added.length ? [...prev, ...added] : prev;
+        })
+      )
+      .catch(() => {});
+  }, []);
   // Text to drop into the chat input, e.g. after handing a computer back.
   const [chatPrefill, setChatPrefill] = useState(null);
   // How the computer page should open: which tab, and whether maximized (a takeover).
@@ -87,14 +100,17 @@ export default function Dashboard() {
       // device) may have changed the bot's notes or to-do list: refresh that bot.
       const previous = lastTurnStates.current;
       lastTurnStates.current = next;
+      let finished = false;
       for (const [threadId, turn] of Object.entries(previous)) {
         const now = next[threadId];
         if (turn.status === 'running' && (!now || now.status !== 'running')) {
+          finished = true;
           fetchBot(threadId)
             .then((fresh) => setBots((prev) => prev.map((b) => (b.id === threadId ? { ...b, ...fresh } : b))))
             .catch(() => {});
         }
       }
+      if (finished) adoptNewBots(); // a turn may have created a bot
       setTurnStates((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
     };
     poll();
@@ -327,6 +343,7 @@ export default function Dashboard() {
             onEditBot={() => activeBot && setBotEditor({ mode: 'edit', bot: activeBot })}
             onUpdateBot={handleUpdateBot}
             onBotPatched={(botId, patch) => setBots((prev) => prev.map((b) => (b.id === botId ? { ...b, ...patch } : b)))}
+            onBotsChanged={adoptNewBots}
             onToggleComputer={() => openComputer('display')}
             onOpenFiles={() => openComputer('files')}
             onOpenTakeover={() => openComputer('display', true)}
@@ -342,6 +359,11 @@ export default function Dashboard() {
             bot={activeBot}
             initial={computerView}
             onBackToChat={() => setActiveTab('chat')}
+            onDemonstrated={({ recordingId, text }) => {
+              // The user's words plus the recording; the server adds the steps and the bot's turn starts.
+              setChatPrefill({ text, recordingId, nonce: Date.now(), send: true });
+              setActiveTab('chat');
+            }}
             onHandBack={() => {
               // Sent as a message, so the bot's next turn starts without a click.
               setChatPrefill({

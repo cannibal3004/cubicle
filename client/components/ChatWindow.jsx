@@ -68,7 +68,7 @@ function formatHeaderDate(msgs) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-export default function ChatWindow({ bot, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onBotPatched, onToggleComputer, onOpenFiles, onOpenTakeover, onOpenAudit, onOpenSettings, defaultModel, prefill }) {
+export default function ChatWindow({ bot, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onBotPatched, onToggleComputer, onOpenFiles, onOpenTakeover, onOpenAudit, onOpenSettings, defaultModel, prefill, onBotsChanged }) {
   const [inputPrompt, setInputPrompt] = useState('');
   // Streaming is tracked per bot by the Dashboard so a reply keeps going
   // while another bot or tab is shown.
@@ -117,7 +117,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
   useEffect(() => {
     if (!prefill?.text) return;
     if (prefill.send) {
-      submitText(prefill.text).catch((err) => console.error('Could not send the hand-back message:', err));
+      submitText(prefill.text, { recordingId: prefill.recordingId || null }).catch((err) => console.error('Could not send the hand-back message:', err));
     } else {
       setInputPrompt(prefill.text);
     }
@@ -418,6 +418,10 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             // A todo result carries the whole list: show it without a refetch.
             onBotPatched(botId, { todo: event.result.items });
           }
+          if (event.type === 'tool.completed' && String(event.callName || '') === 'bots_create' && onBotsChanged) {
+            // An orchestrator made a bot: the list shows it without a reload.
+            onBotsChanged();
+          }
           if (event.type === 'tool.completed' && ['memory_write', 'memory_edit'].includes(String(event.callName || '')) && onBotPatched) {
             // The notes changed: fetch them so the editor shows the new text without a reload.
             fetchBot(botId)
@@ -678,7 +682,9 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     await submitText(inputPrompt);
   };
 
-  const submitText = async (rawText) => {
+  // `options.recordingId` names a demonstration the user just recorded on the
+  // bot's computer; the server adds its steps to the message.
+  const submitText = async (rawText, options = {}) => {
     const name = commandNameOf(rawText);
     if (name) {
       const spec = commands.find((c) => c.name === name);
@@ -701,7 +707,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     }
     if (pendingFiles.some((item) => item.status === 'uploading')) return; // still uploading: Enter again in a moment
     const readyFiles = pendingFiles.filter((item) => item.status === 'ready' && item.attachment);
-    if ((!rawText.trim() && !selectedImage && readyFiles.length === 0) || isStreaming) return;
+    if ((!rawText.trim() && !selectedImage && readyFiles.length === 0 && !options.recordingId) || isStreaming) return;
 
     const botId = bot?.id;
     if (!botId) return;
@@ -744,13 +750,14 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
         userText,
         activeModel,
         finalImageUrl,
-        readyFiles.map((item) => ({ source: item.attachment.source, path: item.attachment.path }))
+        readyFiles.map((item) => ({ source: item.attachment.source, path: item.attachment.path })),
+        options.recordingId || null
       );
       // Take the server's id for the message, so a later history merge (a
       // turn seen through the poll, a reload) recognises it as the same one.
       if (sent?.message?.id) {
         updateMessages((prev) =>
-          prev.map((msg) => (msg.id === userMsgObj.id ? { ...msg, id: sent.message.id, created_at: sent.message.created_at || msg.created_at } : msg))
+          prev.map((msg) => (msg.id === userMsgObj.id ? { ...msg, id: sent.message.id, created_at: sent.message.created_at || msg.created_at, text: sent.message.text ?? msg.text, raw_payload: sent.message.raw_payload || msg.raw_payload } : msg))
         );
       }
       const started = await startTurn(botId, activeModel);
@@ -853,8 +860,9 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
         </div>
       </header>
 
-      {bot && <TodoCard bot={bot} onSave={onUpdateBot ? (items) => onUpdateBot(bot.id, { todo: items }) : null} />}
-
+      {/* The thread and the composer, with the bot's to-do list in a panel on the right. */}
+      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
       {/* Main Canvas Scrollable Chat Thread */}
       <div ref={scrollContainerRef} onScroll={handleThreadScroll} className="flex-1 overflow-y-auto px-6 py-4 relative">
         <div className="max-w-4xl mx-auto w-full space-y-3 px-12 md:px-20">
@@ -1098,6 +1106,10 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
           </button>
 
         </form>
+      </div>
+      </div>
+
+      {bot && <TodoCard bot={bot} onSave={onUpdateBot ? (items) => onUpdateBot(bot.id, { todo: items }) : null} />}
       </div>
 
     </div>

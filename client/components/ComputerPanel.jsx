@@ -13,20 +13,25 @@ import {
   FiPause,
   FiPlay,
   FiRefreshCw,
+  FiSend,
   FiSquare,
   FiUserCheck,
+  FiVideo,
   FiX,
 } from 'react-icons/fi';
 
 import {
   computerVncUrl,
+  fetchComputerRecording,
   fetchComputerScreenshot,
   fetchComputerStatus,
   pauseComputer,
   resetComputer,
   setComputerControl,
   startComputer,
+  startComputerRecording,
   stopComputer,
+  stopComputerRecording,
 } from '../lib/api';
 import VncViewer from './VncViewer';
 import ComputerFiles from './ComputerFiles';
@@ -54,7 +59,7 @@ const TABS = [
 // desktop, the file browser or the activity log. Clicking the desktop (or
 // the maximize button) fills the window with it, with the control buttons
 // underneath; a takeover request from the chat opens straight into that.
-export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }) {
+export default function ComputerPanel({ bot, onBackToChat, onHandBack, onDemonstrated, initial }) {
   const [computer, setComputer] = useState(null);
   const [screen, setScreen] = useState(null);
   const [activeTab, setActiveTab] = useState(initial?.tab || 'display');
@@ -63,6 +68,11 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
   const [loadingAction, setLoadingAction] = useState('');
   const [error, setError] = useState('');
   const [vncStatus, setVncStatus] = useState('connecting');
+  // A demonstration: `recording` while the user's actions are being recorded
+  // ({ steps }), then `finished` (the saved recording) until it is sent.
+  const [recording, setRecording] = useState(null);
+  const [finished, setFinished] = useState(null);
+  const [note, setNote] = useState('');
 
   const botId = bot?.id;
   const state = computer?.state || 'stopped';
@@ -121,6 +131,26 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
     };
   }, [botId, refresh]);
 
+  // The step count while recording, and a recording in progress found again after a reload.
+  useEffect(() => {
+    if (!botId || !isActive) return undefined;
+    let disposed = false;
+    const check = async () => {
+      try {
+        const status = await fetchComputerRecording(botId);
+        if (!disposed) setRecording(status.active ? { steps: status.steps || 0 } : null);
+      } catch {
+        // the runtime may still be starting
+      }
+    };
+    check();
+    const interval = recording ? window.setInterval(check, 2000) : null;
+    return () => {
+      disposed = true;
+      if (interval) window.clearInterval(interval);
+    };
+  }, [botId, isActive, Boolean(recording)]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Escape leaves the maximized view.
   useEffect(() => {
     if (!maximized) return undefined;
@@ -157,6 +187,51 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
     }
   };
 
+  // Show the bot: take control and record what you do in the browser.
+  const showTheBot = async () => {
+    if (!botId) return;
+    setLoadingAction('record');
+    setError('');
+    try {
+      await startComputerRecording(botId);
+      setRecording({ steps: 0 });
+      setMaximized(true);
+      await refresh();
+    } catch (err) {
+      setError(err.message || 'Could not start recording.');
+    } finally {
+      setLoadingAction('');
+    }
+  };
+
+  // Done showing: the recording is saved, the bot gets the desktop back, and
+  // the user says what it was before it goes to the bot as a message.
+  const finishShowing = async () => {
+    if (!botId) return;
+    setLoadingAction('record');
+    setError('');
+    try {
+      const result = await stopComputerRecording(botId);
+      setRecording(null);
+      await setComputerControl(botId, 'bot');
+      await refresh();
+      setMaximized(false);
+      setNote('');
+      setFinished(result.recording || null);
+    } catch (err) {
+      setError(err.message || 'Could not finish the recording.');
+    } finally {
+      setLoadingAction('');
+    }
+  };
+
+  const sendDemonstration = () => {
+    if (!finished) return;
+    const text = note.trim() || 'I showed you how to do something on your computer.';
+    setFinished(null);
+    if (onDemonstrated) onDemonstrated({ recordingId: finished.id, text });
+  };
+
   if (!bot) {
     return (
       <div className="flex-1 flex items-center justify-center bg-zinc-950/80 p-6 text-sm text-zinc-400">
@@ -171,7 +246,16 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
 
   const controlButton = (large = false) =>
     hasVnc ? (
-      userHasControl ? (
+      recording ? (
+        <button
+          onClick={finishShowing}
+          disabled={actionBusy}
+          className={`flex items-center gap-1.5 rounded-xl font-semibold border bg-red-600 text-white border-red-500 hover:bg-red-500 disabled:opacity-50 transition ${large ? 'px-4 py-2 text-sm' : 'px-3 py-1.5 text-xs'}`}
+          title="Stop recording, hand the desktop back and send what you showed to the bot"
+        >
+          <FiVideo /> {loadingAction === 'record' ? 'Finishing…' : `I'm done showing${recording.steps ? ` (${recording.steps} step${recording.steps === 1 ? '' : 's'})` : ''}`}
+        </button>
+      ) : userHasControl ? (
         <button
           onClick={handBack}
           disabled={actionBusy}
@@ -190,6 +274,19 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
       )
     ) : null;
 
+  // Only offered while the bot has the desktop: recording starts by taking control.
+  const showButton = (large = false) =>
+    hasVnc && !userHasControl && !recording ? (
+      <button
+        onClick={showTheBot}
+        disabled={actionBusy}
+        className={`flex items-center gap-1.5 rounded-xl font-semibold border bg-red-500/15 text-red-200 border-red-500/30 hover:bg-red-500/25 disabled:opacity-50 transition ${large ? 'px-4 py-2 text-sm' : 'px-3 py-1.5 text-xs'}`}
+        title="Take control and record what you do in the browser; the bot learns the steps"
+      >
+        <FiVideo /> {loadingAction === 'record' ? 'Starting…' : 'Show the bot'}
+      </button>
+    ) : null;
+
   // `enlarge` is the click handler while the bot has control: inline, a click
   // on the desktop opens the large view; in the large view there is none.
   const liveDesktop = (enlarge) => (
@@ -199,8 +296,9 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
       }`}
     >
       <VncViewer key={viewerKey} url={vncUrl} viewOnly={!userHasControl} onStatus={setVncStatus} onClick={enlarge} />
-      <span className="absolute top-3 right-3 rounded bg-black/70 px-2 py-1 text-[10px] font-mono text-zinc-300 pointer-events-none">
-        {userHasControl ? 'you have control' : 'watching · bot has control'}
+      <span className={`absolute top-3 right-3 rounded px-2 py-1 text-[10px] font-mono pointer-events-none flex items-center gap-1.5 ${recording ? 'bg-red-600/90 text-white' : 'bg-black/70 text-zinc-300'}`}>
+        {recording && <span className="w-2 h-2 rounded-full bg-white animate-pulse" />}
+        {recording ? `recording · ${recording.steps} step${recording.steps === 1 ? '' : 's'}` : userHasControl ? 'you have control' : 'watching · bot has control'}
       </span>
     </div>
   );
@@ -287,6 +385,7 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {showButton()}
           {controlButton()}
           {isActive ? (
             <button onClick={() => runAction('pause', pauseComputer)} disabled={actionBusy} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border bg-amber-500/20 text-amber-300 border-amber-500/30 hover:bg-amber-500/30 disabled:opacity-50 transition">
@@ -363,6 +462,39 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
         <FiHardDrive /> Sandbox has internet access; do not sign in to anything you would not type into a shared machine.
       </div>
 
+      {/* A finished demonstration: say what it was, then it goes to the bot with the steps. */}
+      {finished && (
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4">
+          <div className="w-full max-w-lg glass-panel rounded-2xl border border-zinc-700 p-5 flex flex-col gap-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
+              <FiVideo className="text-red-300" /> Tell {bot.name || 'the bot'} what you showed
+            </div>
+            <p className="text-xs text-zinc-400">
+              {finished.steps} step{finished.steps === 1 ? '' : 's'} and {finished.keyframes} screen{finished.keyframes === 1 ? '' : 's'} were recorded. They go to the bot with your message, and it writes the procedure up so it can do it next time.
+            </p>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              autoFocus
+              placeholder="What it was, e.g. 'This is how to file a PTO request in Workday'"
+              className="w-full bg-[#0f0f12] border border-[#2a2a2f] rounded-xl px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-500 resize-none"
+            />
+            {finished.text && (
+              <pre className="max-h-40 overflow-auto rounded-xl border border-zinc-800 bg-zinc-950 p-3 text-[10px] font-mono text-zinc-400 whitespace-pre-wrap">{finished.text}</pre>
+            )}
+            <div className="flex items-center justify-end gap-2">
+              <button onClick={() => setFinished(null)} className="px-3 py-1.5 rounded-xl text-xs font-semibold border bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700 transition">
+                Discard
+              </button>
+              <button onClick={sendDemonstration} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-purple-600 text-white hover:bg-purple-500 transition">
+                <FiSend /> Send to the bot
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* The large view: the desktop at up to 95% of the window, aspect kept, controls underneath. */}
       {maximized && hasVnc && (
         <div className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center gap-3 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setMaximized(false); }}>
@@ -373,6 +505,7 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, initial }
             {takeover && !userHasControl && (
               <span className="text-xs text-purple-200 max-w-md truncate" title={takeover.reason}>{bot.name || 'The bot'} asked: {takeover.reason}</span>
             )}
+            {showButton(true)}
             {controlButton(true)}
             <button onClick={() => setMaximized(false)} className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700 transition" title="Escape">
               <FiX /> Close

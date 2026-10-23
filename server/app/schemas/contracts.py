@@ -33,6 +33,8 @@ class Bot(BaseModel):
     allowed_commands: List[str] = Field(default_factory=list)
     # An orchestrator sees the user's other bots, creates new ones and hands them work.
     orchestrator: bool = False
+    # How-tos the bot wrote from what the user showed it (services/procedures).
+    procedures: List[Dict[str, Any]] = Field(default_factory=list)
     # The bot's own notes, kept across conversations and compactions. The
     # bot writes them with memory_write; the user can edit them too.
     memory: str = ""
@@ -73,6 +75,8 @@ class TurnRequest(BaseModel):
     model: Optional[str] = None
     image_url: Optional[str] = None
     attachments: Optional[List[AttachmentRef]] = None
+    # A demonstration the user just recorded on the bot's computer (services/demonstrations).
+    recording_id: Optional[str] = None
 
 
 class ApprovalDecision(BaseModel):

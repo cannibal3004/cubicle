@@ -891,6 +891,26 @@ class DockerComputerProvider:
             "next": "Tell the user what to do and end your turn; they will message you when they hand control back.",
         }
 
+    async def record_start(self, computer_id: str) -> Dict[str, Any]:
+        record = self._active_record(computer_id)
+        result = await self._request(record, "POST", "/record/start", timeout=self.navigate_timeout)
+        self._touch(record.status, "record.start")
+        return {"computer_id": computer_id, "provider": self.provider_name, **result}
+
+    async def record_stop(self, computer_id: str) -> Dict[str, Any]:
+        record = self._active_record(computer_id)
+        # The reply carries the keyframes; a long demonstration is a few megabytes.
+        result = await self._request(record, "POST", "/record/stop", timeout=self.navigate_timeout)
+        self._touch(record.status, "record.stop")
+        return {"computer_id": computer_id, "provider": self.provider_name, **result}
+
+    async def record_status(self, computer_id: str) -> Dict[str, Any]:
+        record = self._record_for(computer_id)
+        if record.status.state not in {"running", "paused"} or not record.port:
+            return {"computer_id": computer_id, "provider": self.provider_name, "active": False, "steps": 0}
+        result = await self._request(record, "GET", "/record", timeout=5.0)
+        return {"computer_id": computer_id, "provider": self.provider_name, **result}
+
     async def install_packages(self, computer_id: str, packages: Any) -> Dict[str, Any]:
         """Install Ubuntu packages into the running sandbox and remember them.
 

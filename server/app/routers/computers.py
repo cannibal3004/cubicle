@@ -24,6 +24,7 @@ from app.services.secrets_service import redactor_for
 from app.services.identity import owner_context
 from app.services.storage_service import current_storage
 from app.services import computer_actions as _computer_actions  # noqa: F401 - registers actions
+from app.services import demonstrations
 
 
 router = APIRouter(prefix="/api/v1/computers", tags=["computers"])
@@ -192,6 +193,47 @@ async def screenshot_computer(bot_id: str):
 async def set_computer_control(bot_id: str, request: ControlRequest):
     """Hand the desktop to the user (view + input) or back to the bot."""
     return await _run_action(bot_id, "set_control", {"owner": request.owner})
+
+
+# ---- demonstrations: the user shows the bot how to do something ----------------
+# Recording is the user's own act on their own bot, like taking control, so it
+# does not go through the approval gateway. Starting hands the desktop to the
+# user; stopping saves the recording and leaves control where it is (the
+# client hands back and sends the recording with its message).
+
+
+@router.post("/{bot_id}/record/start")
+async def start_recording(bot_id: str):
+    _ensure_bot(bot_id)
+    status = computer_provider.describe(bot_id)
+    try:
+        await computer_provider.set_control(status.computer_id, "user")
+        result = await computer_provider.record_start(status.computer_id)
+    except ComputerProviderError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "recording", "result": result, "computer": computer_provider.describe(bot_id).to_dict()}
+
+
+@router.post("/{bot_id}/record/stop")
+async def stop_recording(bot_id: str):
+    _ensure_bot(bot_id)
+    status = computer_provider.describe(bot_id)
+    try:
+        payload = await computer_provider.record_stop(status.computer_id)
+    except ComputerProviderError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    record = demonstrations.save_recording(bot_id, payload)
+    return {"status": "saved", "recording": demonstrations.summary(record)}
+
+
+@router.get("/{bot_id}/record")
+async def recording_status(bot_id: str):
+    _ensure_bot(bot_id)
+    status = computer_provider.describe(bot_id)
+    try:
+        return await computer_provider.record_status(status.computer_id)
+    except ComputerProviderError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def websocket_is_authenticated(websocket: WebSocket) -> bool:
