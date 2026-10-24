@@ -20,6 +20,8 @@ import {
 } from 'react-icons/fi';
 import { deleteBrowsedFile, fetchSharedFile, listBrowsedFiles, makeBrowsedFolder, uploadBrowsedFiles } from '../lib/api';
 import Markdown from './Markdown';
+import CodeView from './CodeView';
+import { hasNoExtension, isTextName, looksBinary } from '../lib/codeLanguages';
 
 const ROOTS = [
   { id: 'computer', label: '/workspace', hint: "The bot's computer" },
@@ -44,9 +46,15 @@ function formatWhen(iso) {
 function kindOf(mime = '', name = '') {
   if (mime.startsWith('image/')) return 'image';
   if (mime === 'application/pdf') return 'pdf';
-  if (mime.startsWith('text/') || /\.(md|json|csv|yaml|yml|toml|log|py|js|ts|jsx|tsx|sh|html?|css|txt|env|ini|cfg)$/i.test(name)) return 'text';
+  if (mime.startsWith('text/') || isTextName(name) || /(json|xml|javascript|x-sh|x-python|yaml|toml|sql)/.test(mime)) return 'text';
+  if (hasNoExtension(name) && !mime.startsWith('application/x-executable')) return 'text';
   if (/zip|tar|gzip|x-7z|rar/.test(mime) || /\.(zip|tar|gz|tgz|7z|rar)$/i.test(name)) return 'archive';
   return 'file';
+}
+
+// A text preview, or a note that the file is binary after all.
+function readText(text) {
+  return looksBinary(text) ? { text: '', binary: true } : { text };
 }
 
 const ICONS = { image: FiImage, pdf: FiFileText, text: FiFileText, archive: FiArchive, file: FiFile };
@@ -177,7 +185,7 @@ export default function ComputerFiles({ bot }) {
       const blob = await fetchSharedFile(attachmentFor(entry), source === 'computer' ? botId : '', { inline: true });
       if (kind === 'text') {
         setShowSource(false);
-        setPreview({ name: entry.name, kind, text: await blob.text() });
+        setPreview({ name: entry.name, kind, ...readText(await blob.text()) });
       } else {
         const typed = blob.type ? blob : blob.slice(0, blob.size, entry.mime || 'application/octet-stream');
         setPreview({ name: entry.name, kind, url: URL.createObjectURL(typed) });
@@ -382,7 +390,11 @@ export default function ComputerFiles({ bot }) {
                 (isMarkdown && !showSource ? (
                   <div className="w-full text-xs text-zinc-100"><Markdown text={preview.text} /></div>
                 ) : (
-                  <pre className="w-full text-[11px] leading-relaxed font-mono text-zinc-100 whitespace-pre-wrap break-words">{preview.text}</pre>
+                  preview.binary ? (
+                    <p className="text-xs text-zinc-400 py-10">This is a binary file, not text. Download it to open it with the right program.</p>
+                  ) : (
+                    <CodeView text={preview.text} name={preview.name} />
+                  )
                 ))}
             </div>
           </div>

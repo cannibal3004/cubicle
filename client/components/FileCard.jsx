@@ -4,6 +4,8 @@ import React, { useEffect, useState } from 'react';
 import { FiDownload, FiEye, FiFile, FiFileText, FiImage, FiArchive, FiAlertCircle, FiX } from 'react-icons/fi';
 import { fetchSharedFile } from '../lib/api';
 import Markdown from './Markdown';
+import CodeView from './CodeView';
+import { hasNoExtension, isTextName, looksBinary } from '../lib/codeLanguages';
 
 function formatSize(bytes) {
   if (!Number.isFinite(bytes)) return '';
@@ -16,9 +18,15 @@ function formatSize(bytes) {
 function kindOf(mime = '', name = '') {
   if (mime.startsWith('image/')) return 'image';
   if (mime === 'application/pdf') return 'pdf';
-  if (mime.startsWith('text/') || /\.(md|json|csv|yaml|yml|toml|log|py|js|ts|sh|html?)$/i.test(name)) return 'text';
+  if (mime.startsWith('text/') || isTextName(name) || /(json|xml|javascript|x-sh|x-python|yaml|toml|sql)/.test(mime)) return 'text';
+  if (hasNoExtension(name) && !mime.startsWith('application/x-executable')) return 'text';
   if (/zip|tar|gzip|x-7z|rar/.test(mime) || /\.(zip|tar|gz|tgz|7z|rar)$/i.test(name)) return 'archive';
   return 'file';
+}
+
+// A text preview, or a note that the file is binary after all.
+function readText(text) {
+  return looksBinary(text) ? { text: '', binary: true } : { text };
 }
 
 const ICONS = { image: FiImage, pdf: FiFileText, text: FiFileText, archive: FiArchive, file: FiFile };
@@ -67,7 +75,7 @@ export default function FileCard({ attachment, botId }) {
       const blob = await fetchSharedFile(attachment, botId, { inline: true });
       if (kind === 'text') {
         setShowSource(false);
-        setPreview({ kind, text: await blob.text() });
+        setPreview({ kind, ...readText(await blob.text()) });
       } else {
         const typed = blob.type ? blob : blob.slice(0, blob.size, attachment.mime);
         setPreview({ kind, url: URL.createObjectURL(typed) });
@@ -174,7 +182,13 @@ export default function FileCard({ attachment, botId }) {
                   <Markdown text={preview.text} />
                 </div>
               ) : (
-                <pre className="overflow-auto p-4 text-[11px] font-mono text-zinc-200 whitespace-pre-wrap select-text">{preview.text}</pre>
+                <div className="overflow-auto p-3 min-h-0">
+                  {preview.binary ? (
+                    <p className="text-xs text-zinc-400 p-6">This is a binary file, not text. Download it to open it with the right program.</p>
+                  ) : (
+                    <CodeView text={preview.text} name={attachment.name} />
+                  )}
+                </div>
               )}
             </div>
           )}
