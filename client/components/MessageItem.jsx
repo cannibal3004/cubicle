@@ -162,6 +162,15 @@ function BotText({ text }) {
   );
 }
 
+// The action's description without the bot id the server adds for the audit
+// trail ("Run in the computer for bot-1a2b3c: ls" reads "Run: ls").
+function stepSummary(summary) {
+  return String(summary || '')
+    .replace(/\s+(?:in|from|on|to|of)\s+the computer for bot-[\w-]+/g, '')
+    .replace(/\s+(?:for|of)\s+bot-[\w-]+/g, '')
+    .trim();
+}
+
 // One step the bot took: the tool, what it did, how it went.
 function ToolStep({ call }) {
   const how = call.trusted
@@ -174,7 +183,7 @@ function ToolStep({ call }) {
     >
       <FiTool className="flex-shrink-0 text-[10px] text-zinc-600" />
       <span className="flex-shrink-0 text-zinc-300">{call.name}</span>
-      {call.summary && <span className="min-w-0 truncate text-zinc-500">{call.summary}</span>}
+      {call.summary && <span className="min-w-0 truncate text-zinc-500">{stepSummary(call.summary)}</span>}
       <span className={`flex-shrink-0 ml-auto ${TOOL_STATUS_STYLES[call.status] || 'text-zinc-500'}`}>{call.status}</span>
       {call.gate?.outcome === 'auto_approved' && <FiZap className="flex-shrink-0 text-[10px] text-emerald-400" aria-label="auto-approved" />}
       {call.trusted && <FiShield className="flex-shrink-0 text-[10px] text-emerald-400" aria-label="trusted" />}
