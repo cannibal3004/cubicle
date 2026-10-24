@@ -244,6 +244,11 @@ async def update_bot(bot_id: str, updates: BotUpdate):
             # An archived bot should not keep working in the background.
             turn_manager.cancel(bot_id)
     current_storage().save_bots(bots)
+    if {"trusted_tools", "allowed_commands", "auto_approval", "gate_threshold"} & set(changes):
+        # A card waiting in a running turn may be covered by the new settings.
+        from app.routers.chat import schedule_recheck
+
+        schedule_recheck(bot_id)
     if procedures_before is not None:
         procedure_service.sync_index(bot_id, procedures_before, bots[index].get("procedures") or [])
     if memory_note is not None:

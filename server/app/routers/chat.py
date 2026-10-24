@@ -310,6 +310,7 @@ async def _perform_action(
     user_request: str = "",
     gate_threshold: Optional[float] = None,
     trusted: Union[bool, str] = False,
+    specs: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
     """Run one governed action through the gateway, emitting events on the turn.
 
@@ -361,6 +362,14 @@ async def _perform_action(
     # The auto-approval gate scores the action while the card is up. In "on"
     # mode a low-risk action is approved here on the user's behalf; otherwise
     # (shadow, a risky score, or any error) the card stays and the user decides.
+    card: Optional[Dict[str, Any]] = None
+    if approval:
+        card = {
+            "request": action_request, "call": action_call, "call_name": call_name, "user_request": user_request,
+            "gate_mode": gate_mode, "specs": specs or [], "turn": turn, "base": base, "owner": get_current_owner(), "resolved_by": None,
+        }
+        _open_cards.setdefault(thread_id, {})[action_request.request_id] = card
+
     verdict = None
     if approval and gate_mode in ("shadow", "on"):
         verdict = await approval_gate.evaluate(
@@ -375,9 +384,20 @@ async def _perform_action(
         decision = await action_gateway.wait_for_decision(action_request)
     finally:
         turn.set_pending_approval(None)
+        if card is not None:
+            (_open_cards.get(thread_id) or {}).pop(action_request.request_id, None)
+            if not _open_cards.get(thread_id):
+                _open_cards.pop(thread_id, None)
+    rechecked_by = card.get("resolved_by") if card is not None and decision == "allow" else None
+    if card is not None and card.get("verdict") is not None and verdict is None:
+        verdict = card["verdict"]  # scored after auto-approval was switched on mid-wait
+    if rechecked_by in ("trusted", "allowed_command"):
+        # The user's new settings allowed the card while it waited.
+        base["trusted"] = True
+        base["trustedBy"] = rechecked_by
 
     if verdict is not None:
-        decided_by = verdict.decided_by if verdict.auto_approved and decision == "allow" else "user"
+        decided_by = verdict.decided_by if verdict.auto_approved and decision == "allow" and rechecked_by in (None, verdict.decided_by) else "user"
         approval_gate.record_final(action_request.request_id, decision, decided_by)
         base["gate"] = verdict.to_event()
 
@@ -402,7 +422,8 @@ async def _perform_action(
     if action_result.status == "completed":
         result = redact.apply(action_result.result or {})
         turn.emit({"type": "tool.completed", **base, "result": _compact_result(result)})
-        return {"status": "completed", "result": result, "request": action_request, "gate": verdict}
+        return {"status": "completed", "result": result, "request": action_request, "gate": verdict,
+                **({"trusted_by": rechecked_by} if rechecked_by in ("trusted", "allowed_command") else {})}
 
     error = redact(action_result.error or "The action failed.")
     turn.emit({"type": "tool.failed", **base, "error": error})
@@ -424,6 +445,88 @@ async def _context_window_for(llm_config, model: str) -> Optional[int]:
 
 
 logger = logging.getLogger(__name__)
+
+# ---- approval settings that change during a turn ------------------------------------
+# A turn used to fix the bot's auto-approval mode, trusted tools and allowed
+# commands when it started. Now each call reads them fresh (live_bot), and an
+# approval card already waiting is looked at again when they are saved
+# (recheck_pending): a card the new settings cover is allowed on the user's
+# behalf, the way the auto-approval gate allows one.
+
+# thread id -> request id -> what is needed to judge the card again
+_open_cards: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+
+def live_bot(thread_id: str, fallback: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The bot record as it is now (settings may have changed since the turn began)."""
+    try:
+        return next((b for b in current_storage().get_bots() if b.get("id") == thread_id), None) or fallback
+    except Exception:
+        return fallback
+
+
+def trusted_for(bot: Optional[Dict[str, Any]], call_name: Optional[str], arguments: Dict[str, Any], specs: List[Any]) -> Union[bool, str]:
+    """Whether the bot's current settings let this call run without a card: "trusted", "allowed_command" or False."""
+    if not bot or not call_name:
+        return False
+    if call_name in set(tool_names.current_names(bot.get("trusted_tools") or [])) and any(spec.name == call_name for spec in specs):
+        return "trusted"
+    return command_trusted(bot, call_name, arguments)
+
+
+async def recheck_pending(thread_id: str) -> int:
+    """Look at the thread's open cards again under the bot's current settings. Returns how many were allowed."""
+    owner = get_current_owner()
+    entries = [e for e in (_open_cards.get(thread_id) or {}).values() if e.get("owner") == owner and not e.get("resolved_by")]
+    if not entries:
+        return 0
+    bot = live_bot(thread_id)
+    if bot is None:
+        return 0
+    allowed = 0
+    for entry in entries:
+        arguments = dict(getattr(entry["call"], "arguments", {}) or {})
+        by = trusted_for(bot, entry.get("call_name"), arguments, entry.get("specs") or [])
+        if not by and approval_gate.mode_for(bot) == "on" and entry.get("gate_mode") != "on":
+            # Auto-approval was switched on while the card waited: score it now.
+            entry["gate_mode"] = "on"
+            try:
+                verdict = await approval_gate.evaluate(
+                    entry["request"], entry["call"], mode="on", user_request=entry.get("user_request") or "", threshold=approval_gate.threshold_for(bot)
+                )
+            except Exception as exc:
+                logger.warning("Re-scoring an open card failed: %s", exc)
+                continue
+            approval_gate.record(entry["request"], verdict)
+            entry["verdict"] = verdict
+            turn = entry.get("turn")
+            if turn is not None:
+                turn.emit({"type": "gate.scored", **entry["base"], "verdict": verdict.to_event()})
+            if verdict.auto_approved:
+                by = verdict.decided_by
+        if by and not entry.get("resolved_by"):
+            entry["resolved_by"] = by
+            if action_gateway.resolve_approval(entry["request"], "allow", decided_by=by):
+                allowed += 1
+    return allowed
+
+
+async def recheck_all_pending() -> int:
+    """After an app-wide change (auto-approval for every bot): every open card of this account."""
+    total = 0
+    for thread_id in list(_open_cards):
+        total += await recheck_pending(thread_id)
+    return total
+
+
+def schedule_recheck(thread_id: Optional[str] = None) -> None:
+    """Re-check open cards in the background (from a settings save)."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(recheck_pending(thread_id) if thread_id else recheck_all_pending())
+
 
 def parse_arguments_quietly(raw: Any) -> Any:
     """A call's arguments for comparing two calls; unparsable text compares as itself."""
@@ -697,8 +800,10 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                 turn.emit({"type": "tool.failed", "tool": exc.tool, "error": str(exc)})
 
             if action_call:
+                bot_now = live_bot(thread_id, current_bot)
                 outcome = await _perform_action(
-                    turn, thread_id, action_call, gate_mode=gate_mode, user_request=last_user_text, gate_threshold=gate_threshold
+                    turn, thread_id, action_call, gate_mode=approval_gate.mode_for(bot_now), user_request=last_user_text,
+                    gate_threshold=approval_gate.threshold_for(bot_now),
                 )
                 if outcome.get("status") == "completed":
                     tool_context = f"Action result ({action_call.name}): {_tool_result_text(_compact_result(outcome['result']))}"
@@ -917,10 +1022,14 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         continue
 
                     record["summary"] = getattr(invocation, "summary", None) or getattr(invocation, "preview", call_name)
-                    trusted = any(spec.name == call_name and spec.trusted for spec in callable_specs) or command_trusted(current_bot, call_name, arguments)
+                    # The approval settings as they are now: the user may have
+                    # trusted a tool, allowed a command or changed auto-approval
+                    # since the turn began.
+                    bot_now = live_bot(thread_id, current_bot)
+                    trusted = trusted_for(bot_now, call_name, arguments, callable_specs)
                     outcome = await _perform_action(
-                        turn, thread_id, invocation, call_name=call_name, gate_mode=gate_mode, user_request=last_user_text,
-                        gate_threshold=gate_threshold, trusted=trusted,
+                        turn, thread_id, invocation, call_name=call_name, gate_mode=approval_gate.mode_for(bot_now), user_request=last_user_text,
+                        gate_threshold=approval_gate.threshold_for(bot_now), trusted=trusted, specs=callable_specs,
                     )
 
                     status = outcome.get("status", "failed")
@@ -928,6 +1037,9 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     if trusted and status != "rejected":
                         record["trusted"] = True
                         record["trusted_by"] = trusted if isinstance(trusted, str) else "trusted"
+                    elif outcome.get("trusted_by"):
+                        record["trusted"] = True
+                        record["trusted_by"] = outcome["trusted_by"]
                     request_obj = outcome.get("request")
                     if request_obj is not None:
                         record["requestId"] = request_obj.request_id
