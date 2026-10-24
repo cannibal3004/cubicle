@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.services.attachments import for_model as attachment_for_model
+from app.services.tool_names import current_name
 
 COMPACTION_ITEM_TYPE = "compaction"
 # A user edit of the bot's notes, recorded in the thread where it happened.
@@ -154,7 +155,8 @@ def _call_entries(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         arguments = record.get("raw_arguments")
         if not isinstance(arguments, str):
             arguments = record.get("arguments") or {}
-        entries.append({"id": str(record["id"]), "name": str(record.get("name") or "tool"), "arguments": safe_arguments(arguments)})
+        # A former tool name is replayed as today's, so old turns teach the current names.
+        entries.append({"id": str(record["id"]), "name": current_name(record.get("name") or "tool"), "arguments": safe_arguments(arguments)})
     return entries
 
 

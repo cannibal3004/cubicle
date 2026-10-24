@@ -37,6 +37,8 @@ from app.services import attachments as attachment_service
 from app.services import recall, retrieval
 from app.services import demonstrations, procedures
 from app.services import rewind as rewind_service
+from app.services import tool_names
+from app.services.repetition import RepetitionGuard, TAIL_CHARS as _LOOP_TAIL
 from app.services.tool_selection import select_tools
 from app.services import orchestrator as _orchestrator  # noqa: F401 - registers bots.* actions
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
@@ -73,7 +75,7 @@ _CUT_NOTE = "[The reply was cut off at the model's output limit.]"
 # Told to the model with a tool call its cut output left unreadable.
 _CUT_HINT = (
     " Your output was cut off at the completion token limit before this call was complete. Make the call much shorter: "
-    "write long scripts or data to a file with computer_write_file (in pieces if needed) and run the file, instead of "
+    "write long scripts or data to a file with write_file (in pieces if needed) and run the file, instead of "
     "putting them in one command."
 )
 _STOP_NOTES = {
@@ -309,6 +311,7 @@ async def _perform_action(
     user_request: str = "",
     gate_threshold: Optional[float] = None,
     trusted: Union[bool, str] = False,
+    specs: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
     """Run one governed action through the gateway, emitting events on the turn.
 
@@ -360,6 +363,14 @@ async def _perform_action(
     # The auto-approval gate scores the action while the card is up. In "on"
     # mode a low-risk action is approved here on the user's behalf; otherwise
     # (shadow, a risky score, or any error) the card stays and the user decides.
+    card: Optional[Dict[str, Any]] = None
+    if approval:
+        card = {
+            "request": action_request, "call": action_call, "call_name": call_name, "user_request": user_request,
+            "gate_mode": gate_mode, "specs": specs or [], "turn": turn, "base": base, "owner": get_current_owner(), "resolved_by": None,
+        }
+        _open_cards.setdefault(thread_id, {})[action_request.request_id] = card
+
     verdict = None
     if approval and gate_mode in ("shadow", "on"):
         verdict = await approval_gate.evaluate(
@@ -374,9 +385,20 @@ async def _perform_action(
         decision = await action_gateway.wait_for_decision(action_request)
     finally:
         turn.set_pending_approval(None)
+        if card is not None:
+            (_open_cards.get(thread_id) or {}).pop(action_request.request_id, None)
+            if not _open_cards.get(thread_id):
+                _open_cards.pop(thread_id, None)
+    rechecked_by = card.get("resolved_by") if card is not None and decision == "allow" else None
+    if card is not None and card.get("verdict") is not None and verdict is None:
+        verdict = card["verdict"]  # scored after auto-approval was switched on mid-wait
+    if rechecked_by in ("trusted", "allowed_command"):
+        # The user's new settings allowed the card while it waited.
+        base["trusted"] = True
+        base["trustedBy"] = rechecked_by
 
     if verdict is not None:
-        decided_by = verdict.decided_by if verdict.auto_approved and decision == "allow" else "user"
+        decided_by = verdict.decided_by if verdict.auto_approved and decision == "allow" and rechecked_by in (None, verdict.decided_by) else "user"
         approval_gate.record_final(action_request.request_id, decision, decided_by)
         base["gate"] = verdict.to_event()
 
@@ -401,7 +423,8 @@ async def _perform_action(
     if action_result.status == "completed":
         result = redact.apply(action_result.result or {})
         turn.emit({"type": "tool.completed", **base, "result": _compact_result(result)})
-        return {"status": "completed", "result": result, "request": action_request, "gate": verdict}
+        return {"status": "completed", "result": result, "request": action_request, "gate": verdict,
+                **({"trusted_by": rechecked_by} if rechecked_by in ("trusted", "allowed_command") else {})}
 
     error = redact(action_result.error or "The action failed.")
     turn.emit({"type": "tool.failed", **base, "error": error})
@@ -423,6 +446,125 @@ async def _context_window_for(llm_config, model: str) -> Optional[int]:
 
 
 logger = logging.getLogger(__name__)
+
+# ---- approval settings that change during a turn ------------------------------------
+# A turn used to fix the bot's auto-approval mode, trusted tools and allowed
+# commands when it started. Now each call reads them fresh (live_bot), and an
+# approval card already waiting is looked at again when they are saved
+# (recheck_pending): a card the new settings cover is allowed on the user's
+# behalf, the way the auto-approval gate allows one.
+
+# thread id -> request id -> what is needed to judge the card again
+_open_cards: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+
+def live_bot(thread_id: str, fallback: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The bot record as it is now (settings may have changed since the turn began)."""
+    try:
+        return next((b for b in current_storage().get_bots() if b.get("id") == thread_id), None) or fallback
+    except Exception:
+        return fallback
+
+
+def trusted_for(bot: Optional[Dict[str, Any]], call_name: Optional[str], arguments: Dict[str, Any], specs: List[Any]) -> Union[bool, str]:
+    """Whether the bot's current settings let this call run without a card: "trusted", "allowed_command" or False."""
+    if not bot or not call_name:
+        return False
+    if call_name in set(tool_names.current_names(bot.get("trusted_tools") or [])) and any(spec.name == call_name for spec in specs):
+        return "trusted"
+    return command_trusted(bot, call_name, arguments)
+
+
+async def recheck_pending(thread_id: str) -> int:
+    """Look at the thread's open cards again under the bot's current settings. Returns how many were allowed."""
+    owner = get_current_owner()
+    entries = [e for e in (_open_cards.get(thread_id) or {}).values() if e.get("owner") == owner and not e.get("resolved_by")]
+    if not entries:
+        return 0
+    bot = live_bot(thread_id)
+    if bot is None:
+        return 0
+    allowed = 0
+    for entry in entries:
+        arguments = dict(getattr(entry["call"], "arguments", {}) or {})
+        by = trusted_for(bot, entry.get("call_name"), arguments, entry.get("specs") or [])
+        if not by and approval_gate.mode_for(bot) == "on" and entry.get("gate_mode") != "on":
+            # Auto-approval was switched on while the card waited: score it now.
+            entry["gate_mode"] = "on"
+            try:
+                verdict = await approval_gate.evaluate(
+                    entry["request"], entry["call"], mode="on", user_request=entry.get("user_request") or "", threshold=approval_gate.threshold_for(bot)
+                )
+            except Exception as exc:
+                logger.warning("Re-scoring an open card failed: %s", exc)
+                continue
+            approval_gate.record(entry["request"], verdict)
+            entry["verdict"] = verdict
+            turn = entry.get("turn")
+            if turn is not None:
+                turn.emit({"type": "gate.scored", **entry["base"], "verdict": verdict.to_event()})
+            if verdict.auto_approved:
+                by = verdict.decided_by
+        if by and not entry.get("resolved_by"):
+            entry["resolved_by"] = by
+            if action_gateway.resolve_approval(entry["request"], "allow", decided_by=by):
+                allowed += 1
+    return allowed
+
+
+async def recheck_all_pending() -> int:
+    """After an app-wide change (auto-approval for every bot): every open card of this account."""
+    total = 0
+    for thread_id in list(_open_cards):
+        total += await recheck_pending(thread_id)
+    return total
+
+
+def schedule_recheck(thread_id: Optional[str] = None) -> None:
+    """Re-check open cards in the background (from a settings save)."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(recheck_pending(thread_id) if thread_id else recheck_all_pending())
+
+
+_LOOP_NUDGE = (
+    "[Your last output fell into a loop: it kept repeating \"{sample}\" and was cut off there. Do not repeat it. "
+    "Step back, decide the next concrete step, and continue the task, or answer the user if you are done.]"
+)
+_LOOP_STOP_NOTE = "[Stopped: the model kept repeating itself. Send a message to steer it.]"
+
+
+def _cut_loop(text: str, sample: str) -> str:
+    """The text up to the first time the repeated part appears in its tail (one copy kept)."""
+    if not sample:
+        return text
+    window_start = max(0, len(text) - _LOOP_TAIL)
+    flat = text
+    at = flat.find(sample, window_start)
+    if at < 0:
+        # The sample is whitespace-normalised; fall back to the first line of it.
+        head = sample.split(" ")[0]
+        at = flat.find(head, window_start) if head else -1
+        if at < 0:
+            return text
+        return text[: at + len(head)]
+    return text[: at + len(sample)]
+
+
+def _reply_text(pieces: List[str]) -> str:
+    """The stored reply: each round's text, separated by a blank line."""
+    return "\n\n".join(piece.strip("\n") for piece in pieces if piece.strip())
+
+
+def parse_arguments_quietly(raw: Any) -> Any:
+    """A call's arguments for comparing two calls; unparsable text compares as itself."""
+    try:
+        return parse_arguments(raw)
+    except Exception:
+        return str(raw)
+
 
 def command_trusted(bot: Optional[Dict[str, Any]], call_name: str, arguments: Dict[str, Any]) -> Union[bool, str]:
     """"allowed_command" when the bot's rules cover every command this terminal call runs."""
@@ -530,6 +672,9 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
     # takes a single prompt, so there the slash commands remain the only tools.
     tools_enabled = settings.LLM_TOOLS_ENABLED and llm_config.provider != "muapi"
     tool_specs: List[Any] = []
+    # Everything the bot may call this turn, including app tools that tool
+    # selection did not list: a call to one of those still runs.
+    callable_specs: List[Any] = []
     selection = None
     if tools_enabled:
         # Every app connected through Composio becomes a set of tools. If the
@@ -554,6 +699,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         tool_specs = without_duplicate_routes(tool_specs)
         # The user's standing approvals for this bot.
         tool_specs = trust_tools(tool_specs, current_bot.get("trusted_tools") if current_bot else None)
+        callable_specs = list(tool_specs)
         # Too many app tools for one round: keep the ones that match the message.
         latest_user = next((m for m in reversed(history) if m.get("sender") == "user" and m.get("text")), None)
         try:
@@ -584,6 +730,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         "formatted_history": formatted_history,
         "context_window": context_window,
         "tool_specs": tool_specs,
+        "callable_specs": callable_specs or tool_specs,
         "tool_definitions": tool_definitions,
         "tools_prompt": tools_prompt,
         "gate_mode": gate_mode,
@@ -607,6 +754,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
     formatted_history = setup["formatted_history"]
     context_window = setup["context_window"]
     tool_specs = setup["tool_specs"]
+    callable_specs = setup.get("callable_specs") or tool_specs
     tool_definitions = setup["tool_definitions"]
     tools_prompt = setup["tools_prompt"]
     gate_mode = setup["gate_mode"]
@@ -617,6 +765,8 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         nonlocal formatted_history, history
         bot_msg_id = f"msg-{uuid.uuid4().hex[:6]}"
         text_pieces: List[str] = []
+        # Rounds cut because the model fell into a loop (see services/repetition).
+        loop_cuts = 0
         # Thinking is shown to the user and kept with the message for display,
         # but it is never part of `text`, so it is not replayed to the model.
         accumulated_reasoning = ""
@@ -682,8 +832,10 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                 turn.emit({"type": "tool.failed", "tool": exc.tool, "error": str(exc)})
 
             if action_call:
+                bot_now = live_bot(thread_id, current_bot)
                 outcome = await _perform_action(
-                    turn, thread_id, action_call, gate_mode=gate_mode, user_request=last_user_text, gate_threshold=gate_threshold
+                    turn, thread_id, action_call, gate_mode=approval_gate.mode_for(bot_now), user_request=last_user_text,
+                    gate_threshold=approval_gate.threshold_for(bot_now),
                 )
                 if outcome.get("status") == "completed":
                     tool_context = f"Action result ({action_call.name}): {_tool_result_text(_compact_result(outcome['result']))}"
@@ -778,21 +930,38 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     if left:
                         round_prompt += f" Your to-do list still has {len(left)} unfinished item(s); say which they are so the next turn can pick them up."
 
-                async for event in llm_service.stream_chat_completion(
+                round_stream = llm_service.stream_chat_completion(
                     model=selected_model,
                     messages=messages,
                     system_prompt=round_prompt,
                     config=llm_config,
                     tools=round_tools,
-                ):
+                )
+                reply_guard = RepetitionGuard()
+                thinking_guard = RepetitionGuard()
+                looped: Optional[tuple] = None  # ("reply" | "thinking", what repeats)
+                async for event in round_stream:
                     if event["type"] == "content.delta":
                         round_text += event["delta"]
                         turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": event["delta"]})
+                        if reply_guard.feed(event["delta"]):
+                            looped = ("reply", reply_guard.loop)
+                            break
                     elif event["type"] == "reasoning.delta":
                         accumulated_reasoning += event["delta"]
                         turn.emit({"type": "reasoning.delta", "botMsgId": bot_msg_id, "delta": event["delta"]})
+                        if thinking_guard.feed(event["delta"]):
+                            looped = ("thinking", thinking_guard.loop)
+                            break
                     elif event["type"] == "tool_calls":
-                        pending_calls = list(event.get("calls") or [])
+                        # A former or habitual name (computer_write_file, write_to_file) is
+                        # the tool it means, so the transcript names the real tool.
+                        offered_names = [spec.name for spec in tool_specs]
+                        callable_names = [spec.name for spec in callable_specs]
+                        pending_calls = []
+                        for raw_call in event.get("calls") or []:
+                            resolved = tool_names.resolve(raw_call.get("name"), offered_names, callable_names)
+                            pending_calls.append(raw_call if resolved == raw_call.get("name") else {**raw_call, "name": resolved, "called_as": raw_call.get("name")})
                     elif event["type"] == "usage":
                         usage_rounds += 1
                         usage_prompt = int(event.get("prompt_tokens") or 0)
@@ -809,8 +978,38 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     elif event["type"] == "turn.completed":
                         round_ok = bool(event.get("ok", True))
 
+                if looped is not None:
+                    # Stop the model generating (and free its slot), keep one copy
+                    # of what repeated, and tell it so. A second loop ends the turn.
+                    closer = getattr(round_stream, "aclose", None)
+                    if closer is not None:
+                        with contextlib.suppress(Exception):
+                            await closer()
+                    where, sample = looped
+                    loop_cuts += 1
+                    pending_calls = []
+                    if where == "reply":
+                        round_text = _cut_loop(round_text, sample)
+                    else:
+                        accumulated_reasoning = _cut_loop(accumulated_reasoning, sample)
+                    turn.emit({"type": "turn.loop", "botMsgId": bot_msg_id, "where": where, "sample": sample, "count": loop_cuts})
+                    if round_text.strip():
+                        text_pieces.append(round_text)
+                    if loop_cuts >= 2 or final_answer_only:
+                        text_pieces.append(_LOOP_STOP_NOTE)
+                        turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": f"\n\n{_LOOP_STOP_NOTE}"})
+                        break
+                    messages.append({"role": "assistant", "content": round_text if round_text.strip() else "(cut off)"})
+                    messages.append({"role": "user", "content": _LOOP_NUDGE.format(sample=sample)})
+                    if round_text.strip():
+                        turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": "\n\n"})
+                    continue
+
                 if round_text.strip():
                     text_pieces.append(round_text)
+                # Where this round's calls sit in the reply: after the text so
+                # far. The chat draws them there instead of above the reply.
+                calls_at = len(_reply_text(text_pieces))
                 if round_cut and not pending_calls:
                     # A text reply stopped at the output limit: say so rather
                     # than leave a sentence hanging as if it were the answer.
@@ -842,7 +1041,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     # Budget spent: answer the pending calls without running
                     # them, then ask for a text-only reply.
                     for call in pending_calls:
-                        tool_records.append({"id": call["id"], "name": call["name"], "status": "skipped",
+                        tool_records.append({"id": call["id"], "name": call["name"], "status": "skipped", "at": calls_at,
                                              "raw_arguments": call.get("arguments") or "{}",
                                              "error": "Tool budget for this turn was used up."})
                         turn.emit({"type": "tool.failed", "tool": call["name"], "callName": call["name"],
@@ -857,22 +1056,35 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
 
                 image_messages: List[Dict[str, Any]] = []
                 replies_start = len(messages)
+                # The same call twice in one round (a model hedging) runs once.
+                ran_this_round: Dict[tuple, str] = {}
                 for call in pending_calls:
                     call_id = call["id"]
                     call_name = call["name"]
+                    same_key = (call_name, json.dumps(parse_arguments_quietly(call.get("arguments")), sort_keys=True))
+                    if same_key in ran_this_round:
+                        note = f"Not run: the same call as {ran_this_round[same_key]} earlier in this round, which ran once; see its result."
+                        tool_records.append({"id": call_id, "name": call_name, "status": "skipped", "at": calls_at, "raw_arguments": safe_arguments(call.get("arguments")), "error": note})
+                        turn.emit({"type": "tool.failed", "tool": call_name, "callName": call_name, "error": note})
+                        messages.append({"role": "tool", "tool_call_id": call_id, "content": _tool_result_text({"status": "skipped", "error": note})})
+                        continue
+                    ran_this_round[same_key] = call_id
                     record: Dict[str, Any] = {
                         "id": call_id,
                         "name": call_name,
                         "status": "running",
+                        "at": calls_at,
                         # The model's own argument text, replayed verbatim in later turns
                         # (a malformed one is quoted inside a JSON object instead).
                         "raw_arguments": safe_arguments(call.get("arguments")),
                     }
+                    if call.get("called_as"):
+                        record["called_as"] = call["called_as"]  # the name the model used
                     tool_records.append(record)
 
                     try:
                         arguments = parse_arguments(call.get("arguments"))
-                        invocation = build_invocation(call_name, arguments, thread_id, specs=tool_specs)
+                        invocation = build_invocation(call_name, arguments, thread_id, specs=callable_specs)
                     except ToolCallError as exc:
                         error = str(exc)
                         if round_cut:
@@ -883,10 +1095,14 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         continue
 
                     record["summary"] = getattr(invocation, "summary", None) or getattr(invocation, "preview", call_name)
-                    trusted = any(spec.name == call_name and spec.trusted for spec in tool_specs) or command_trusted(current_bot, call_name, arguments)
+                    # The approval settings as they are now: the user may have
+                    # trusted a tool, allowed a command or changed auto-approval
+                    # since the turn began.
+                    bot_now = live_bot(thread_id, current_bot)
+                    trusted = trusted_for(bot_now, call_name, arguments, callable_specs)
                     outcome = await _perform_action(
-                        turn, thread_id, invocation, call_name=call_name, gate_mode=gate_mode, user_request=last_user_text,
-                        gate_threshold=gate_threshold, trusted=trusted,
+                        turn, thread_id, invocation, call_name=call_name, gate_mode=approval_gate.mode_for(bot_now), user_request=last_user_text,
+                        gate_threshold=approval_gate.threshold_for(bot_now), trusted=trusted, specs=callable_specs,
                     )
 
                     status = outcome.get("status", "failed")
@@ -894,6 +1110,9 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     if trusted and status != "rejected":
                         record["trusted"] = True
                         record["trusted_by"] = trusted if isinstance(trusted, str) else "trusted"
+                    elif outcome.get("trusted_by"):
+                        record["trusted"] = True
+                        record["trusted_by"] = outcome["trusted_by"]
                     request_obj = outcome.get("request")
                     if request_obj is not None:
                         record["requestId"] = request_obj.request_id
@@ -965,6 +1184,8 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             raw_payload["tool_calls"] = tool_records
         if usage_rounds:
             raw_payload["usage"] = usage_payload()
+        if loop_cuts:
+            raw_payload["loop_cuts"] = loop_cuts
         if attachments:
             raw_payload["attachments"] = attachments
 
@@ -973,7 +1194,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             "thread_id": thread_id,
             "bot_id": thread_id,
             "sender": "bot",
-            "text": "\n\n".join(piece.strip("\n") for piece in text_pieces if piece.strip()),
+            "text": _reply_text(text_pieces),
             "created_at": datetime.now().isoformat(),
             "model": selected_model,
             "item_type": "assistant_text",

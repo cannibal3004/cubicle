@@ -17,6 +17,7 @@ from app.config import settings
 from app.services.action_gateway import ActionDefinition, ActionGateway, ActionInvocation, action_gateway
 from app.services.identity import get_current_owner
 from app.services.turn_manager import turn_manager
+from app.services.approval_broker import card_timeout
 
 ASK_ACTION = "user.ask"
 CALL_NAME = "ask_user"
@@ -54,7 +55,7 @@ class QuestionBroker:
         future.set_result({"answer": answer, "option_index": option_index})
         return True
 
-    async def wait(self, request_id: str, timeout: float) -> Optional[Dict[str, Any]]:
+    async def wait(self, request_id: str, timeout: Optional[float]) -> Optional[Dict[str, Any]]:
         future = self.pending.get(request_id)
         if future is None:
             return None
@@ -124,13 +125,15 @@ async def execute_ask(call: ActionInvocation) -> Dict[str, Any]:
         "created_at": _now(),
     })
     try:
-        reply = await question_broker.wait(request_id, settings.QUESTION_TIMEOUT_SECONDS)
+        # Questions wait as long as approval cards do (the user's setting; 0 = until answered).
+        timeout = card_timeout()
+        reply = await question_broker.wait(request_id, timeout)
     finally:
         turn.set_pending_approval(None)
 
     if reply is None:
         turn.emit({"type": "request.expired", "requestId": request_id})
-        minutes = max(1, round(settings.QUESTION_TIMEOUT_SECONDS / 60))
+        minutes = max(1, round((timeout or 0) / 60))
         return {
             "answered": False,
             "note": f"The user did not answer within {minutes} minute(s). Go on without the answer if you reasonably can; otherwise stop and say what you need.",

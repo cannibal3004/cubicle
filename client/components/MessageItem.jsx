@@ -113,6 +113,142 @@ function ToolCallList({ calls }) {
   );
 }
 
+// The markdown styling of a bot reply, shared by every text segment of it.
+const BOT_MARKDOWN = {
+  p: ({ node, ...props }) => <div className="mb-2 last:mb-0 leading-relaxed" {...props} />,
+  h1: ({ node, ...props }) => <h1 className="text-sm font-bold text-white mt-3 mb-1.5 first:mt-0" {...props} />,
+  h2: ({ node, ...props }) => <h2 className="text-sm font-bold text-white mt-3 mb-1.5 first:mt-0" {...props} />,
+  h3: ({ node, ...props }) => <h3 className="text-xs font-semibold text-zinc-100 mt-2.5 mb-1 first:mt-0" {...props} />,
+  h4: ({ node, ...props }) => <h4 className="text-xs font-semibold text-zinc-100 mt-2 mb-1" {...props} />,
+  a: ({ node, ...props }) => <a className="text-cyan-300 underline underline-offset-2 hover:text-cyan-200" target="_blank" rel="noreferrer" {...props} />,
+  del: ({ node, ...props }) => <del className="text-zinc-500" {...props} />,
+  blockquote: ({ node, ...props }) => <blockquote className="border-l-2 border-[#3f3f46] pl-3 my-2 text-zinc-400 italic" {...props} />,
+  hr: ({ node, ...props }) => <hr className="my-3 border-[#26262b]" {...props} />,
+  table: ({ node, ...props }) => (
+    <div className="my-2 overflow-x-auto rounded-lg border border-[#2b2b32]">
+      <table className="w-full text-left text-[11px] border-collapse" {...props} />
+    </div>
+  ),
+  thead: ({ node, ...props }) => <thead className="bg-[#1a1a1e] text-zinc-100" {...props} />,
+  th: ({ node, ...props }) => <th className="px-2.5 py-1.5 font-semibold border-b border-[#2b2b32] whitespace-nowrap" {...props} />,
+  td: ({ node, ...props }) => <td className="px-2.5 py-1 border-b border-[#1f1f23] align-top text-zinc-200" {...props} />,
+  input: ({ node, ...props }) => <input className="mr-1.5 accent-cyan-400 align-middle" {...props} />,
+  strong: ({ node, ...props }) => <strong className="font-bold text-white" {...props} />,
+  code: ({ node, inline, className, children, ...props }) => {
+    const isInline = inline || (!className && typeof children === 'string' && !children.includes('\n'));
+    if (isInline) {
+      return (
+        <code className="bg-[#2a2a30] text-cyan-300 px-1.5 py-0.5 rounded font-mono text-[11px]" {...props}>
+          {children}
+        </code>
+      );
+    }
+    return (
+      <pre className="bg-[#141416] p-3 rounded-xl border border-[#2b2b32] text-zinc-300 font-mono text-[11px] overflow-x-auto my-2">
+        <code {...props}>{children}</code>
+      </pre>
+    );
+  },
+  ul: ({ node, ...props }) => <ul className="list-disc list-inside space-y-1 my-1 text-zinc-300" {...props} />,
+  ol: ({ node, ...props }) => <ol className="list-decimal list-inside space-y-1 my-1 text-zinc-300" {...props} />,
+};
+
+function BotText({ text }) {
+  if (!text || !String(text).trim()) return null;
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={BOT_MARKDOWN}>
+      {text}
+    </ReactMarkdown>
+  );
+}
+
+// The action's description without the bot id the server adds for the audit
+// trail ("Run in the computer for bot-1a2b3c: ls" reads "Run: ls").
+function stepSummary(summary) {
+  return String(summary || '')
+    .replace(/\s+(?:in|from|on|to|of)\s+the computer for bot-[\w-]+/g, '')
+    .replace(/\s+(?:for|of)\s+bot-[\w-]+/g, '')
+    .trim();
+}
+
+// One step the bot took: the tool, what it did, how it went.
+function ToolStep({ call }) {
+  const how = call.trusted
+    ? (call.trusted_by === 'allowed_command' || call.trustedBy === 'allowed_command' ? 'An always-allowed command: ran without asking' : 'Trusted for this bot: ran without asking')
+    : '';
+  return (
+    <div
+      className="flex items-center gap-2 min-w-0 text-[10.5px] font-mono leading-5"
+      title={[call.error || call.summary || call.name, gateTitle(call.gate), how].filter(Boolean).join('\n')}
+    >
+      <FiTool className="flex-shrink-0 text-[10px] text-zinc-600" />
+      <span className="flex-shrink-0 text-zinc-300">{call.name}</span>
+      {call.summary && <span className="min-w-0 truncate text-zinc-500">{stepSummary(call.summary)}</span>}
+      <span className={`flex-shrink-0 ml-auto ${TOOL_STATUS_STYLES[call.status] || 'text-zinc-500'}`}>{call.status}</span>
+      {call.gate?.outcome === 'auto_approved' && <FiZap className="flex-shrink-0 text-[10px] text-emerald-400" aria-label="auto-approved" />}
+      {call.trusted && <FiShield className="flex-shrink-0 text-[10px] text-emerald-400" aria-label="trusted" />}
+    </div>
+  );
+}
+
+// The steps between two pieces of the reply. A long run shows its last few
+// until opened, so the reply around it stays in view.
+const STEPS_SHOWN = 4;
+function ToolSteps({ calls }) {
+  const [open, setOpen] = useState(false);
+  const hidden = open ? 0 : Math.max(0, calls.length - STEPS_SHOWN);
+  return (
+    <div className="my-2.5 rounded-lg border border-[#26262b] bg-[#111113]/80 px-2.5 py-1.5">
+      {hidden > 0 && (
+        <button type="button" onClick={() => setOpen(true)} className="w-full text-left text-[10.5px] font-mono text-zinc-500 hover:text-zinc-300 leading-5">
+          … {hidden} earlier step{hidden === 1 ? '' : 's'}
+        </button>
+      )}
+      {calls.slice(hidden).map((call, index) => (
+        <ToolStep key={call.id || `${call.name}-${index}`} call={call} />
+      ))}
+      {open && calls.length > STEPS_SHOWN && (
+        <button type="button" onClick={() => setOpen(false)} className="text-[10.5px] font-mono text-zinc-500 hover:text-zinc-300 leading-5">
+          show fewer
+        </button>
+      )}
+    </div>
+  );
+}
+
+// The reply in the order it happened: text, the steps taken, more text.
+// Each call carries `at`, how much of the reply text came before it; calls
+// with nothing written between them share one block.
+function InlineReply({ text, calls }) {
+  const ordered = calls
+    .map((call, index) => ({ call, index, at: Math.max(0, Math.min(text.length, Number(call.at) || 0)) }))
+    .sort((a, b) => a.at - b.at || a.index - b.index);
+  const parts = [];
+  let position = 0;
+  for (const { call, at } of ordered) {
+    const between = text.slice(position, at);
+    const last = parts[parts.length - 1];
+    if (between.trim()) {
+      parts.push({ kind: 'text', text: between });
+      parts.push({ kind: 'steps', calls: [call] });
+    } else if (last && last.kind === 'steps') {
+      last.calls.push(call);
+    } else {
+      parts.push({ kind: 'steps', calls: [call] });
+    }
+    position = Math.max(position, at);
+  }
+  const rest = text.slice(position);
+  if (rest.trim()) parts.push({ kind: 'text', text: rest });
+  return (
+    <>
+      {parts.map((part, index) =>
+        part.kind === 'text' ? <BotText key={`t${index}`} text={part.text} /> : <ToolSteps key={`s${index}`} calls={part.calls} />
+      )}
+    </>
+  );
+}
+
 function formatTokenCount(n) {
   if (!Number.isFinite(n)) return '?';
   return n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`;
@@ -125,6 +261,9 @@ function MessageItem({ message, botId, onEdit }) {
   // Live streams carry `reasoning`; persisted history carries it in raw_payload.
   const reasoning = message.reasoning || message.raw_payload?.reasoning || '';
   const toolCalls = message.toolCalls || message.raw_payload?.tool_calls || [];
+  // Calls that know where in the reply they came are drawn there; older
+  // messages (stored before positions were kept) list them on top.
+  const placed = toolCalls.length > 0 && toolCalls.every((call) => Number.isFinite(call.at));
   const attachments = message.attachments || message.raw_payload?.attachments || [];
   const usage = message.usage || message.raw_payload?.usage || null;
 
@@ -272,50 +411,8 @@ function MessageItem({ message, botId, onEdit }) {
             isStreaming={Boolean(message.isStreaming)}
           />
         )}
-        {toolCalls.length > 0 && <ToolCallList calls={toolCalls} />}
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            p: ({ node, ...props }) => <div className="mb-2 last:mb-0 leading-relaxed" {...props} />,
-            h1: ({ node, ...props }) => <h1 className="text-sm font-bold text-white mt-3 mb-1.5 first:mt-0" {...props} />,
-            h2: ({ node, ...props }) => <h2 className="text-sm font-bold text-white mt-3 mb-1.5 first:mt-0" {...props} />,
-            h3: ({ node, ...props }) => <h3 className="text-xs font-semibold text-zinc-100 mt-2.5 mb-1 first:mt-0" {...props} />,
-            h4: ({ node, ...props }) => <h4 className="text-xs font-semibold text-zinc-100 mt-2 mb-1" {...props} />,
-            a: ({ node, ...props }) => <a className="text-cyan-300 underline underline-offset-2 hover:text-cyan-200" target="_blank" rel="noreferrer" {...props} />,
-            del: ({ node, ...props }) => <del className="text-zinc-500" {...props} />,
-            blockquote: ({ node, ...props }) => <blockquote className="border-l-2 border-[#3f3f46] pl-3 my-2 text-zinc-400 italic" {...props} />,
-            hr: ({ node, ...props }) => <hr className="my-3 border-[#26262b]" {...props} />,
-            table: ({ node, ...props }) => (
-              <div className="my-2 overflow-x-auto rounded-lg border border-[#2b2b32]">
-                <table className="w-full text-left text-[11px] border-collapse" {...props} />
-              </div>
-            ),
-            thead: ({ node, ...props }) => <thead className="bg-[#1a1a1e] text-zinc-100" {...props} />,
-            th: ({ node, ...props }) => <th className="px-2.5 py-1.5 font-semibold border-b border-[#2b2b32] whitespace-nowrap" {...props} />,
-            td: ({ node, ...props }) => <td className="px-2.5 py-1 border-b border-[#1f1f23] align-top text-zinc-200" {...props} />,
-            input: ({ node, ...props }) => <input className="mr-1.5 accent-cyan-400 align-middle" {...props} />,
-            strong: ({ node, ...props }) => <strong className="font-bold text-white" {...props} />,
-            code: ({ node, inline, className, children, ...props }) => {
-              const isInline = inline || (!className && typeof children === 'string' && !children.includes('\n'));
-              if (isInline) {
-                return (
-                  <code className="bg-[#2a2a30] text-cyan-300 px-1.5 py-0.5 rounded font-mono text-[11px]" {...props}>
-                    {children}
-                  </code>
-                );
-              }
-              return (
-                <pre className="bg-[#141416] p-3 rounded-xl border border-[#2b2b32] text-zinc-300 font-mono text-[11px] overflow-x-auto my-2">
-                  <code {...props}>{children}</code>
-                </pre>
-              );
-            },
-            ul: ({ node, ...props }) => <ul className="list-disc list-inside space-y-1 my-1 text-zinc-300" {...props} />,
-            ol: ({ node, ...props }) => <ol className="list-decimal list-inside space-y-1 my-1 text-zinc-300" {...props} />,
-          }}
-        >
-          {message.text}
-        </ReactMarkdown>
+        {toolCalls.length > 0 && !placed && <ToolCallList calls={toolCalls} />}
+        {placed ? <InlineReply text={message.text || ''} calls={toolCalls} /> : <BotText text={message.text} />}
         {attachments.length > 0 && (
           <div className="mt-3 space-y-2">
             {attachments.map((attachment) => (

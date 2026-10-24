@@ -3,6 +3,11 @@
 FROM mcr.microsoft.com/playwright:v1.62.1-noble
 
 ENV DEBIAN_FRONTEND=noninteractive
+# Besides the desktop: everyday command-line tools the bot would otherwise
+# stop to install (inspecting files, archives, search, editors, processes,
+# a database), network checks, and media and document tools (images,
+# audio/video, OCR, PDF repair, metadata). About 140 MB in all; the big
+# ones (build-essential, pandoc) are left to computer_install_packages.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         tigervnc-standalone-server \
@@ -10,6 +15,11 @@ RUN apt-get update \
         dbus-x11 x11-utils x11-xserver-utils xdotool scrot feh \
         adwaita-icon-theme librsvg2-common \
         python3-pip python3-venv jq unzip poppler-utils \
+        file binutils xxd bsdextrautils less nano tree rsync zip bzip2 xz-utils zstd p7zip-full \
+        ripgrep fd-find patch bc dos2unix psmisc lsof htop libxml2-utils sqlite3 git-lfs \
+        dnsutils iputils-ping netcat-openbsd iproute2 traceroute \
+        imagemagick ffmpeg tesseract-ocr qpdf libimage-exiftool-perl \
+    && ln -s /usr/bin/fdfind /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/*
 # Document converters for attached files: markitdown (PDF, Word, Excel,
 # PowerPoint to Markdown) for the bot's own use, and pdftotext above.

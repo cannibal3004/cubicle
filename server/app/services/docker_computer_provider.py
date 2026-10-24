@@ -95,6 +95,8 @@ class _RuntimeRecord:
     host: Optional[str] = None
     port: Optional[int] = None
     volume: Optional[str] = None
+    # The secrets the container was started with; a later deleted one is unset per command.
+    secret_names: Optional[set] = None
 
 
 def parse_screen(value: str) -> Tuple[int, int]:
@@ -364,15 +366,29 @@ class DockerComputerProvider:
     # Names the runtime sets itself; a secret may not replace them.
     _OWN_ENV = frozenset({"COMPUTER_TOKEN", "COMMAND_TIMEOUT_MS", "COMMAND_TIMEOUT_MAX_MS", "NAVIGATE_TIMEOUT_MS", "COMPUTER_ID", "PORT", "WORKSPACE", "SHARED", "CUBICLE_PACKAGES", "HOME", "PATH", "DISPLAY"})
 
-    def _secret_env_args(self, record: _RuntimeRecord) -> list:
+    def _secrets_now(self, record: _RuntimeRecord) -> Dict[str, str]:
         if self._environment is None:
-            return []
+            return {}
+        return {name: value for name, value in self._environment(record.status.bot_id).items() if name not in self._OWN_ENV and isinstance(value, str)}
+
+    def _secret_env_args(self, record: _RuntimeRecord) -> list:
         args = []
-        for name, value in sorted(self._environment(record.status.bot_id).items()):
-            if name in self._OWN_ENV or not isinstance(value, str):
-                continue
+        secrets_now = self._secrets_now(record)
+        # Remembered so a secret deleted later can be taken out of each command's environment.
+        record.secret_names = set(secrets_now)
+        for name, value in sorted(secrets_now.items()):
             args.extend(["--env", f"{name}={value}"])
         return args
+
+    def _live_secrets(self, record: _RuntimeRecord) -> Dict[str, Any]:
+        """The user's secrets as they are now, for one terminal command: a secret added or
+        changed since the computer started works without a restart, a deleted one is gone."""
+        try:
+            current = self._secrets_now(record)
+        except Exception:  # the secret store is unavailable: the container's own environment stands
+            return {}
+        gone = sorted((getattr(record, "secret_names", None) or set()) - set(current))
+        return {"env": current, **({"unset": gone} if gone else {})}
 
     async def _remove_stale_container(self, record: _RuntimeRecord) -> None:
         """Remove a leftover container that still holds this computer's name.
@@ -800,13 +816,14 @@ class DockerComputerProvider:
         self._touch(record.status, "browser.navigate")
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
 
-    async def terminal_execute(self, computer_id: str, command: str, timeout_seconds: Any = None) -> Dict[str, Any]:
+    async def terminal_execute(self, computer_id: str, command: str, timeout_seconds: Any = None, background: bool = False) -> Dict[str, Any]:
         record = self._active_record(computer_id)
         command = check_command(command)
         limit = min(check_timeout(timeout_seconds), self.command_timeout_max)
-        result = await self._request(
-            record, "POST", "/terminal", {"command": command, "timeout_ms": int(limit * 1000)}, timeout=limit
-        )
+        payload: Dict[str, Any] = {"command": command, "timeout_ms": int(limit * 1000), **self._live_secrets(record)}
+        if background:
+            payload["background"] = True
+        result = await self._request(record, "POST", "/terminal", payload, timeout=10.0 if background else limit)
         self._touch(record.status, "terminal.exec")
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
 

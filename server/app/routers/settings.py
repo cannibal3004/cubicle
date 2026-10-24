@@ -23,4 +23,9 @@ async def save_settings(new_settings: AppSettingsSchema, request: Request):
     if app_keys and not is_admin(getattr(request.state, "user", None)):
         raise HTTPException(status_code=403, detail=f"Only an admin can change app-wide settings ({', '.join(app_keys)}).")
     current_storage().save_settings(changes)
+    if {"auto_approval", "decider_threshold"} & set(changes):
+        # Bots that follow the app's auto-approval may have a card waiting.
+        from app.routers.chat import schedule_recheck
+
+        schedule_recheck()
     return AppSettingsSchema(**current_storage().get_public_settings())

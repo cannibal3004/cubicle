@@ -11,6 +11,7 @@ from app.config import settings
 from app.services.identity import LOCAL_USER_ID, SYSTEM_OWNER, get_current_owner
 from app.services.database import Database
 from app.services.secret_store import SecretStore, SecretStoreError
+from app.services.tool_names import migrate_bot
 
 
 # `muapi_*` keys are the pre-provider-abstraction names. They are still
@@ -37,6 +38,7 @@ SETTING_KEYS = {
     "auto_approval",
     "decider_url",
     "decider_threshold",
+    "approval_timeout_seconds",
     "llm_max_concurrent",
     "computer_screenshot_max_width",
     "retrieval_enabled",
@@ -140,6 +142,7 @@ class StorageService:
             "auto_approval": settings.AUTO_APPROVAL if settings.AUTO_APPROVAL in {"off", "shadow", "on"} else "off",
             "decider_url": settings.DECIDER_URL,
             "decider_threshold": settings.DECIDER_THRESHOLD,
+            "approval_timeout_seconds": settings.APPROVAL_TIMEOUT_SECONDS,
             "llm_max_concurrent": settings.LLM_MAX_CONCURRENT_REQUESTS,
             "computer_screenshot_max_width": settings.COMPUTER_SCREENSHOT_MAX_WIDTH,
             "retrieval_enabled": "on" if settings.RETRIEVAL_ENABLED.lower() in {"1", "true", "on", "yes"} else "off",
@@ -314,7 +317,8 @@ class StorageService:
                 "SELECT payload FROM bots WHERE owner_id = ? ORDER BY rowid",
                 (self.owner_id,),
             ).fetchall()
-        return [payload for row in rows if isinstance((payload := self._decode_payload(row[0])), dict)]
+        # Settings that still name a former tool name are read with today's names.
+        return [migrate_bot(payload) for row in rows if isinstance((payload := self._decode_payload(row[0])), dict)]
 
     def save_bots(self, bots: List[Dict[str, Any]]):
         with self.database.connect() as connection:

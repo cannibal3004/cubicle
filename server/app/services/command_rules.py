@@ -18,6 +18,13 @@ always asks.
 A rule is a word prefix: "git status" matches `git status -sb`, "npm test"
 matches `npm test -- --watch`, "cat" matches any cat. A script is allowed
 only when every simple command in it matches some rule.
+
+Loops and conditionals are read as such: in `for h in a b; do ssh $h uptime;
+done` the commands are ssh (and uptime is its argument), not for/do/done.
+A few shell builtins that change nothing outside the shell (cd, pwd, test,
+read, true, sleep...) need no rule. Setting PATH, LD_PRELOAD and the like
+anywhere in a script always asks: it changes which program a name runs,
+so `PATH=/tmp ls` must not pass a rule for ls.
 """
 
 from __future__ import annotations
@@ -44,6 +51,23 @@ _SUBCOMMAND_PROGRAMS = {
 # Never looked through, never matched by a broad rule by accident.
 _UNSUPPORTED_PROGRAMS = {"eval", "sudo", "su", "doas", "source", "."}
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# Variables that decide which program or code a name runs.
+_PROGRAM_VARIABLES = {
+    "PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "BASH_ENV", "ENV", "IFS", "SHELLOPTS", "BASHOPTS",
+    "PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "NODE_OPTIONS", "NODE_PATH", "PERL5LIB", "PERL5OPT", "RUBYLIB", "RUBYOPT",
+    "GIT_EXEC_PATH", "GIT_SSH", "GIT_SSH_COMMAND", "PROMPT_COMMAND",
+}
+# Shell words that open or continue a loop or conditional; what follows them
+# is a command (`then rm x`). The closing ones stand alone. `for`/`select`
+# take a list of words, which are data, not commands.
+_LEADING_KEYWORDS = {"if", "then", "else", "elif", "while", "until", "do", "!", "{"}
+_CLOSING_KEYWORDS = {"done", "fi", "}"}
+_LIST_KEYWORDS = {"for", "select"}
+# Builtins that change nothing outside the shell: no rule needed.
+_HARMLESS_BUILTINS = {
+    "cd", "pwd", "true", "false", ":", "[", "[[", "test", "read", "sleep", "break", "continue", "exit",
+    "return", "wait", "shift", "set", "export", "local", "declare", "typeset", "readonly", "unset",
+}
 # A bare redirection operator takes the next word as its target; one with the
 # target attached (">file", "2>&1") is complete on its own.
 _REDIRECT_NEEDS_TARGET = re.compile(r"^(\d*>>?|<|&>>?|<<<)$")
@@ -57,6 +81,8 @@ class ScriptError(ValueError):
 @dataclass
 class SimpleCommand:
     argv: List[str]
+    # A harmless builtin (cd, test, read...): allowed without a rule, never offered as one.
+    implicit: bool = False
 
     @property
     def program(self) -> str:
@@ -82,6 +108,8 @@ class ParsedScript:
     def shapes(self) -> List[str]:
         seen: List[str] = []
         for command in self.commands:
+            if command.implicit:
+                continue
             if command.shape and command.shape not in seen:
                 seen.append(command.shape)
         return seen
@@ -296,8 +324,29 @@ def parse_script(script: str, *, _depth: int = 0) -> ParsedScript:
     return parsed
 
 
+def _check_assignment(word: str) -> None:
+    name = word.split("=", 1)[0]
+    if name in _PROGRAM_VARIABLES:
+        raise ScriptError(f"it sets {name}, which changes what programs run")
+
+
 def _simple_commands(words: List[str], depth: int) -> Iterable[SimpleCommand]:
     """One simple command's words, with wrappers looked through."""
+    words = list(words)
+    # Loop and conditional syntax: keep the command a keyword introduces.
+    while words and words[0] in _LEADING_KEYWORDS:
+        words = words[1:]
+    if not words:
+        return []
+    if words[0] == "case" or words[0] == "esac" or words[0] == "function":
+        raise ScriptError(f"{words[0]} statements are not read by the rules")
+    if words[0] in _CLOSING_KEYWORDS:
+        return []  # done, fi, } (and any redirection of the whole block)
+    if words[0] in _LIST_KEYWORDS:
+        return []  # for NAME in WORDS: the words are data (substitutions are parsed apart)
+    for word in words:
+        if _ENV_ASSIGNMENT.match(word):
+            _check_assignment(word)
     argv: List[str] = []
     skip_next = False
     for word in words:
@@ -317,7 +366,7 @@ def _simple_commands(words: List[str], depth: int) -> Iterable[SimpleCommand]:
     if not argv:
         return []
     program = argv[0]
-    if "\x00SUBST" in program or program.startswith("$") or any(ch in program for ch in "*?[") or "~" in program:
+    if program not in ("[", "[[") and ("\x00SUBST" in program or program.startswith("$") or any(ch in program for ch in "*?[") or "~" in program):
         raise ScriptError(f"the program is not a plain name ({program[:40]})")
     if program in _UNSUPPORTED_PROGRAMS:
         raise ScriptError(f"{program} is never allowed by rule")
@@ -332,6 +381,8 @@ def _simple_commands(words: List[str], depth: int) -> Iterable[SimpleCommand]:
     if base == "env":
         rest = argv[1:]
         while rest and (rest[0].startswith("-") or _ENV_ASSIGNMENT.match(rest[0])):
+            if _ENV_ASSIGNMENT.match(rest[0]):
+                _check_assignment(rest[0])
             rest = rest[1:]
         return _simple_commands(rest, depth) if rest else []
     if base == "timeout":
@@ -360,6 +411,8 @@ def _simple_commands(words: List[str], depth: int) -> Iterable[SimpleCommand]:
         if rest:
             raise ScriptError(f"{base} running a script file")
         return [SimpleCommand(argv=[program])]
+    if base in _HARMLESS_BUILTINS and "/" not in program:
+        return [SimpleCommand(argv=argv, implicit=True)]
     return [SimpleCommand(argv=argv)]
 
 
@@ -395,7 +448,7 @@ def script_allowed(script: str, rules: Iterable[str]) -> Tuple[bool, ParsedScrip
     rules = [r for r in rules if isinstance(r, str) and r.strip()]
     if parsed.unsupported or not parsed.commands or not rules:
         return False, parsed
-    return all(any(rule_matches(command, rule) for rule in rules) for command in parsed.commands), parsed
+    return all(command.implicit or any(rule_matches(command, rule) for rule in rules) for command in parsed.commands), parsed
 
 
 def describe_for_card(script: str) -> Dict[str, Any]:

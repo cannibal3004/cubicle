@@ -16,10 +16,10 @@ def argvs(script):
 class ParsingTests(unittest.TestCase):
     def test_simple_commands_and_operators(self):
         self.assertEqual(argvs("git status -sb"), [["git", "status", "-sb"]])
-        self.assertEqual(shapes("cd /workspace/app && npm test; ls -la | head -5 || echo no"), ["cd", "npm test", "ls", "head", "echo"])
+        self.assertEqual(shapes("cd /workspace/app && npm test; ls -la | head -5 || echo no"), ["npm test", "ls", "head", "echo"])  # cd is a harmless builtin: no rule
         self.assertEqual(shapes("make\nmake install"), ["make", "make install"])
-        self.assertEqual(shapes("(cd x && cargo build) && echo done"), ["cd", "cargo build", "echo"])
-        self.assertEqual(shapes("{ ls; pwd; }"), ["ls", "pwd"])
+        self.assertEqual(shapes("(cd x && cargo build) && echo done"), ["cargo build", "echo"])
+        self.assertEqual(shapes("{ ls; pwd; }"), ["ls"])
         self.assertEqual(shapes("! grep -q x file"), ["grep"])
 
     def test_quotes_keep_separators_inside_strings(self):
@@ -31,7 +31,7 @@ class ParsingTests(unittest.TestCase):
 
     def test_wrappers_are_looked_through(self):
         self.assertEqual(shapes('bash -c "npm test && git status"'), ["npm test", "git status"])
-        self.assertEqual(shapes("sh -lc 'cd /app; pytest -q'"), ["cd", "pytest"])
+        self.assertEqual(shapes("sh -lc 'cd /app; pytest -q'"), ["pytest"])
         self.assertEqual(shapes("/bin/bash -lc 'ls'"), ["ls"])
         self.assertEqual(shapes("nohup .venv/bin/uvicorn app:app > uvicorn.log 2>&1 &"), [".venv/bin/uvicorn"])
         self.assertEqual(shapes("env FOO=1 BAR=2 python script.py"), ["python"])
@@ -45,7 +45,7 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(shapes("echo $(git rev-parse HEAD)"), ["echo", "git rev-parse"])
         self.assertEqual(shapes('echo "today: $(date)"'), ["echo", "date"])
         self.assertEqual(shapes("kill `pgrep -f uvicorn`"), ["kill", "pgrep"])
-        self.assertEqual(shapes("echo $(ls $(pwd))"), ["echo", "ls", "pwd"])
+        self.assertEqual(shapes("echo $(ls $(pwd))"), ["echo", "ls"])
 
     def test_what_cannot_be_read_is_unsupported(self):
         for script, reason in (
@@ -92,10 +92,48 @@ class RuleTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 clean_rules(bad)
         card = describe_for_card("cd x && pytest -q")
-        self.assertEqual((card["command_shapes"], card["command_parse_error"]), (["cd", "pytest"], None))
+        self.assertEqual((card["command_shapes"], card["command_parse_error"]), (["pytest"], None))
         card = describe_for_card("cat <<EOF\nx\nEOF")
         self.assertEqual(card["command_shapes"], [])
         self.assertIn("heredoc", card["command_parse_error"])
+
+
+class ShellSyntaxTests(unittest.TestCase):
+    """Loops and conditionals are read as syntax; the commands inside them are what rules see."""
+
+    RULES = ["echo", "cat", "ls", "ssh-keyscan", "base64", "sha256sum", "cut", "curl"]
+
+    def test_loop_and_conditional_keywords_are_not_commands(self):
+        self.assertEqual(shapes("for h in a b c; do echo $h; done"), ["echo"])
+        self.assertEqual(shapes("ls | while read -r x; do echo $x; done > out.txt"), ["ls", "echo"])
+        self.assertEqual(shapes("until curl -s localhost; do sleep 1; done"), ["curl"])
+        self.assertEqual(shapes("if [ -f x ]; then cat x; elif test -d x; then ls x; else echo no; fi"), ["cat", "ls", "echo"])
+        self.assertEqual(shapes("for p in 88 389; do timeout 3 bash -c \"echo >/dev/tcp/h/$p\" && echo open; done"), ["echo"])
+        script = "ssh-keyscan h | while read -r a t k; do echo \"$t $(echo \"$k\" | base64 -d | sha256sum | cut -d' ' -f1)\"; done"
+        self.assertTrue(script_allowed(script, self.RULES)[0])
+        # A command inside a loop still needs its rule.
+        self.assertFalse(script_allowed("for f in *; do rm $f; done", self.RULES)[0])
+        # The list of a for loop is data, but a substitution in it runs.
+        self.assertFalse(script_allowed("for f in $(rm -rf x); do echo $f; done", self.RULES)[0])
+
+    def test_harmless_builtins_need_no_rule(self):
+        self.assertTrue(script_allowed("cd /workspace && pwd && ls", ["ls"])[0])
+        self.assertTrue(script_allowed("[[ -d x ]] && sleep 1 && echo ok", ["echo"])[0])
+        self.assertEqual(shapes("cd x; true; test -f y; read -r z"), [])
+        # A program that only shares a builtin's name is not a builtin.
+        self.assertEqual(shapes("/tmp/cd x"), ["/tmp/cd"])
+
+    def test_setting_program_variables_always_asks(self):
+        for script in ("PATH=/tmp ls", "export PATH=/tmp:$PATH; ls", "env LD_PRELOAD=/tmp/x.so ls", "PATH=/tmp; ls", "NODE_OPTIONS=--require=/tmp/x node a.js"):
+            allowed, parsed = script_allowed(script, ["ls", "node"])
+            self.assertFalse(allowed, script)
+            self.assertIn("changes what programs run", parsed.unsupported or "")
+        self.assertTrue(script_allowed("FOO=1 LANG=C ls", ["ls"])[0])
+
+    def test_case_statements_ask(self):
+        allowed, parsed = script_allowed("case $x in a) echo a;; esac", ["echo"])
+        self.assertFalse(allowed)
+        self.assertIn("case", parsed.unsupported)
 
 
 if __name__ == "__main__":

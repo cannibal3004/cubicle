@@ -203,7 +203,7 @@ class ComputerProvider(Protocol):
     async def browser_navigate(self, computer_id: str, url: str) -> Dict[str, Any]:
         ...
 
-    async def terminal_execute(self, computer_id: str, command: str, timeout_seconds: Any = None) -> Dict[str, Any]:
+    async def terminal_execute(self, computer_id: str, command: str, timeout_seconds: Any = None, background: bool = False) -> Dict[str, Any]:
         ...
 
     async def files_list(self, computer_id: str, path: str = "/workspace") -> Dict[str, Any]:
@@ -432,11 +432,14 @@ class FakeComputerProvider:
             "state": status.state,
         }
 
-    async def terminal_execute(self, computer_id: str, command: str, timeout_seconds: Any = None) -> Dict[str, Any]:
+    async def terminal_execute(self, computer_id: str, command: str, timeout_seconds: Any = None, background: bool = False) -> Dict[str, Any]:
         status = self._require_active(computer_id)
         command = check_command(command)
         limit = check_timeout(timeout_seconds)
         self._touch(status, "terminal.exec")
+        if background:
+            return {"computer_id": status.computer_id, "provider": self.provider_name, "operation": "terminal.exec", "command": command,
+                    "background": True, "job_id": "job-fake", "pid": 0, "log": "/home/pwuser/.cubicle-jobs/job-fake.log", "exit_code": 0, "stdout": "", "stderr": ""}
         return {
             "computer_id": status.computer_id,
             "provider": self.provider_name,

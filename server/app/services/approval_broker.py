@@ -20,6 +20,23 @@ class PendingApproval:
     owner_id: str = ""
 
 
+def card_timeout() -> Optional[float]:
+    """How long a card waits for the user (approval or question): the user's setting, else the
+    environment default. None (wait until answered) when it is 0."""
+    value: Any = None
+    try:
+        value = current_storage().get_settings().get("approval_timeout_seconds")
+    except Exception:
+        value = None
+    if value is None or value == "":
+        value = settings.APPROVAL_TIMEOUT_SECONDS
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        seconds = float(settings.APPROVAL_TIMEOUT_SECONDS)
+    return None if seconds <= 0 else seconds
+
+
 class ApprovalBroker:
     """In-process approval coordinator for the local single-user server."""
 
@@ -59,6 +76,7 @@ class ApprovalBroker:
         return approval
 
     async def wait(self, request_id: str) -> str:
+        """The user's answer, or "expired" once the card has waited as long as the user allows."""
         pending = self.pending.get(request_id)
         if not pending:
             return "expired"
@@ -66,7 +84,7 @@ class ApprovalBroker:
         try:
             return await asyncio.wait_for(
                 asyncio.shield(pending.future),
-                timeout=settings.APPROVAL_TIMEOUT_SECONDS,
+                timeout=card_timeout(),
             )
         except asyncio.TimeoutError:
             if not pending.future.done():

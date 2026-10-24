@@ -4,6 +4,8 @@ import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+import CodeView from './CodeView';
+
 // Rendered Markdown for documents (file previews), as opposed to the compact
 // styling chat replies use in MessageItem. GitHub-flavoured: tables, task
 // lists and strikethrough work, which reports lean on.
@@ -32,6 +34,7 @@ const components = {
   th: ({ node, ...props }) => <th className="px-3 py-2 font-semibold border-b border-[#26262b] whitespace-nowrap" {...props} />,
   td: ({ node, ...props }) => <td className="px-3 py-1.5 border-b border-[#1f1f23] align-top text-zinc-200" {...props} />,
   input: ({ node, ...props }) => <input className="mr-1.5 accent-cyan-400 align-middle" {...props} />,
+  pre: ({ node, children }) => <>{children}</>,
   code: ({ node, inline, className, children, ...props }) => {
     const isInline = inline || (!className && typeof children === 'string' && !children.includes('\n'));
     if (isInline) {
@@ -41,13 +44,9 @@ const components = {
         </code>
       );
     }
-    return (
-      <pre className="bg-[#141416] p-3 rounded-xl border border-[#2b2b32] text-zinc-300 font-mono text-[11px] overflow-x-auto my-3">
-        <code className={className} {...props}>
-          {children}
-        </code>
-      </pre>
-    );
+    // A fenced block: coloured for the language the fence names.
+    const fence = /language-([\w+#.-]+)/.exec(className || '');
+    return <CodeView compact text={String(children).replace(/\n$/, '')} language={fence ? fence[1].toLowerCase() : 'plaintext'} />;
   },
 };
 

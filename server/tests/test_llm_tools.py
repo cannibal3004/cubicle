@@ -39,7 +39,7 @@ class ToolCatalogTests(unittest.TestCase):
         everything = available_tools(computer=True, github=False)
         slim = without_duplicate_routes(everything, shared_in_computer=True)
         self.assertNotIn("shared_folder_write", names(slim))
-        self.assertIn("computer_write_file", names(slim))
+        self.assertIn("write_file", names(slim))
         self.assertIn("share_file", names(slim))
         # Without the mount, or without a computer, the host-side tools stay.
         self.assertEqual(without_duplicate_routes(everything, shared_in_computer=False), everything)
@@ -114,22 +114,22 @@ class BuildInvocationTests(unittest.TestCase):
         with self.assertRaisesRegex(ToolCallError, "one of click"):
             build_invocation("computer_send_input", {"type": "drag"}, "bot-1")
 
-        files = build_invocation("computer_files_list", {}, "bot-1")
+        files = build_invocation("list_files", {}, "bot-1")
         self.assertEqual(files.arguments["path"], "/workspace")
 
-        read = build_invocation("computer_read_file", {"path": "/workspace/app/main.py"}, "bot-1")
+        read = build_invocation("read_file", {"path": "/workspace/app/main.py"}, "bot-1")
         self.assertEqual((read.name, read.arguments["path"]), ("computer.files_read", "/workspace/app/main.py"))
-        write = build_invocation("computer_write_file", {"path": "/workspace/a.txt", "content": "hello\n"}, "bot-1")
+        write = build_invocation("write_file", {"path": "/workspace/a.txt", "content": "hello\n"}, "bot-1")
         self.assertEqual(write.name, "computer.files_write")
         self.assertIn("Write 6 characters to /workspace/a.txt", write.preview)
-        edit = build_invocation("computer_edit_file", {"path": "/workspace/a.txt", "old_text": "hello", "new_text": ""}, "bot-1")
+        edit = build_invocation("edit_file", {"path": "/workspace/a.txt", "old_text": "hello", "new_text": ""}, "bot-1")
         self.assertEqual(edit.arguments["new_text"], "")
         self.assertIn("5 characters become 0", edit.preview)
         # Relative paths resolve under /workspace before the call is made.
-        relative = build_invocation("computer_read_file", {"path": "app/main.py"}, "bot-1")
+        relative = build_invocation("read_file", {"path": "app/main.py"}, "bot-1")
         self.assertEqual(relative.arguments["path"], "/workspace/app/main.py")
-        self.assertEqual(build_invocation("computer_write_file", {"path": "~/report.md", "content": "x"}, "bot-1").arguments["path"], "/home/pwuser/report.md")
-        self.assertEqual(build_invocation("computer_files_list", {"path": "src"}, "bot-1").arguments["path"], "/workspace/src")
+        self.assertEqual(build_invocation("write_file", {"path": "~/report.md", "content": "x"}, "bot-1").arguments["path"], "/home/pwuser/report.md")
+        self.assertEqual(build_invocation("list_files", {"path": "src"}, "bot-1").arguments["path"], "/workspace/src")
         with self.assertRaises(ToolCallError):
             build_invocation("computer_read_file", {"path": "  "}, "bot-1")
         with self.assertRaisesRegex(ToolCallError, "'old_text' is required"):

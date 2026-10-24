@@ -190,7 +190,8 @@ class AllowedCommandTests(unittest.TestCase):
             self.assertEqual(updated["allowed_commands"], ["git status", "npm test", "cat"])
             with self.assertRaises(HTTPException):
                 asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(allowed_commands=[""])))
-        self.assertEqual(chat_router.command_trusted(updated, "computer_terminal_execute", {"command": "cd x && npm test | cat"}), False)  # cd is not allowed
+        self.assertEqual(chat_router.command_trusted(updated, "computer_terminal_execute", {"command": "cd x && npm test | cat"}), "allowed_command")  # cd needs no rule
+        self.assertEqual(chat_router.command_trusted(updated, "computer_terminal_execute", {"command": "cd x && rm -rf y"}), False)  # rm does
         self.assertEqual(chat_router.command_trusted(updated, "computer_terminal_execute", {"command": "npm test | cat"}), "allowed_command")
         self.assertEqual(chat_router.command_trusted(updated, "computer_terminal_execute", {"command": 'bash -c "git status -sb"'}), "allowed_command")
         self.assertFalse(chat_router.command_trusted(updated, "computer_terminal_execute", {"command": "git push"}))
