@@ -450,21 +450,23 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             prev.map((msg) => {
               if (msg.id !== streamingMsgId) return msg;
               const key = event.requestId || `${event.callName || event.tool}-${Date.now()}`;
-              const others = (msg.toolCalls || []).filter((call) => call.id !== key);
+              const calls = msg.toolCalls || [];
+              const existing = calls.find((call) => call.id === key);
+              const entry = {
+                id: key,
+                name: event.callName || event.tool,
+                status: event.type.replace('tool.', ''),
+                error: event.error || null,
+                gate: event.gate || existing?.gate || null,
+                trusted: Boolean(event.trusted) || Boolean(existing?.trusted),
+                trusted_by: event.trustedBy || existing?.trusted_by || null,
+                summary: event.action?.preview || existing?.summary || null,
+                // Where in the reply the call came: the text streamed so far.
+                at: existing ? existing.at : (msg.text || '').length,
+              };
               return {
                 ...msg,
-                toolCalls: [
-                  ...others,
-                  {
-                    id: key,
-                    name: event.callName || event.tool,
-                    status: event.type.replace('tool.', ''),
-                    error: event.error || null,
-                    gate: event.gate || null,
-                    trusted: Boolean(event.trusted),
-                    trusted_by: event.trustedBy || null,
-                  },
-                ],
+                toolCalls: existing ? calls.map((call) => (call.id === key ? entry : call)) : [...calls, entry],
               };
             })
           );

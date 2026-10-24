@@ -528,6 +528,11 @@ def schedule_recheck(thread_id: Optional[str] = None) -> None:
     loop.create_task(recheck_pending(thread_id) if thread_id else recheck_all_pending())
 
 
+def _reply_text(pieces: List[str]) -> str:
+    """The stored reply: each round's text, separated by a blank line."""
+    return "\n\n".join(piece.strip("\n") for piece in pieces if piece.strip())
+
+
 def parse_arguments_quietly(raw: Any) -> Any:
     """A call's arguments for comparing two calls; unparsable text compares as itself."""
     try:
@@ -938,6 +943,9 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
 
                 if round_text.strip():
                     text_pieces.append(round_text)
+                # Where this round's calls sit in the reply: after the text so
+                # far. The chat draws them there instead of above the reply.
+                calls_at = len(_reply_text(text_pieces))
                 if round_cut and not pending_calls:
                     # A text reply stopped at the output limit: say so rather
                     # than leave a sentence hanging as if it were the answer.
@@ -969,7 +977,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     # Budget spent: answer the pending calls without running
                     # them, then ask for a text-only reply.
                     for call in pending_calls:
-                        tool_records.append({"id": call["id"], "name": call["name"], "status": "skipped",
+                        tool_records.append({"id": call["id"], "name": call["name"], "status": "skipped", "at": calls_at,
                                              "raw_arguments": call.get("arguments") or "{}",
                                              "error": "Tool budget for this turn was used up."})
                         turn.emit({"type": "tool.failed", "tool": call["name"], "callName": call["name"],
@@ -992,7 +1000,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     same_key = (call_name, json.dumps(parse_arguments_quietly(call.get("arguments")), sort_keys=True))
                     if same_key in ran_this_round:
                         note = f"Not run: the same call as {ran_this_round[same_key]} earlier in this round, which ran once; see its result."
-                        tool_records.append({"id": call_id, "name": call_name, "status": "skipped", "raw_arguments": safe_arguments(call.get("arguments")), "error": note})
+                        tool_records.append({"id": call_id, "name": call_name, "status": "skipped", "at": calls_at, "raw_arguments": safe_arguments(call.get("arguments")), "error": note})
                         turn.emit({"type": "tool.failed", "tool": call_name, "callName": call_name, "error": note})
                         messages.append({"role": "tool", "tool_call_id": call_id, "content": _tool_result_text({"status": "skipped", "error": note})})
                         continue
@@ -1001,6 +1009,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         "id": call_id,
                         "name": call_name,
                         "status": "running",
+                        "at": calls_at,
                         # The model's own argument text, replayed verbatim in later turns
                         # (a malformed one is quoted inside a JSON object instead).
                         "raw_arguments": safe_arguments(call.get("arguments")),
@@ -1119,7 +1128,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             "thread_id": thread_id,
             "bot_id": thread_id,
             "sender": "bot",
-            "text": "\n\n".join(piece.strip("\n") for piece in text_pieces if piece.strip()),
+            "text": _reply_text(text_pieces),
             "created_at": datetime.now().isoformat(),
             "model": selected_model,
             "item_type": "assistant_text",
