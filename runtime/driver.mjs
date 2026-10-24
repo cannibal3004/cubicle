@@ -17,6 +17,7 @@ import { promisify } from 'node:util';
 import { createServer } from 'node:http';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { constants as osConstants } from 'node:os';
 import { chromium } from 'playwright';
 import { WebSocketServer } from 'ws';
 import { createRecorder } from './recorder.mjs';
@@ -221,40 +222,191 @@ async function listFiles(requestedPath) {
   }));
 }
 
-async function executeCommand(command, timeoutMs) {
+// What a terminal command runs with, for one call: the computer's own
+// environment plus the user's secrets as they are now. The API sends the
+// current secrets with every command (`env`) and the names of ones since
+// deleted (`unset`), so a secret added or changed after the computer started
+// works without a restart. The runtime's own variables cannot be replaced.
+const PROTECTED_ENV = new Set(['COMPUTER_TOKEN', 'COMMAND_TIMEOUT_MS', 'COMMAND_TIMEOUT_MAX_MS', 'NAVIGATE_TIMEOUT_MS', 'COMPUTER_ID', 'PORT', 'WORKSPACE', 'SHARED', 'CUBICLE_PACKAGES', 'HOME', 'PATH', 'DISPLAY']);
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+
+function commandEnv(extra, unset) {
+  const env = { ...terminalEnv };
+  if (Array.isArray(unset)) {
+    for (const name of unset) {
+      if (typeof name === 'string' && ENV_NAME.test(name) && !PROTECTED_ENV.has(name)) delete env[name];
+    }
+  }
+  if (extra && typeof extra === 'object') {
+    for (const [name, value] of Object.entries(extra)) {
+      if (ENV_NAME.test(name) && !PROTECTED_ENV.has(name) && typeof value === 'string') env[name] = value;
+    }
+  }
+  return env;
+}
+
+const OUTPUT_MAX_BYTES = 1024 * 1024;
+// After the shell exits, how long to wait for its output to close. A process
+// the command left running in the background (`server &`) keeps the output
+// open for as long as it runs; the command itself is finished.
+const OUTPUT_GRACE_MS = 1500;
+
+function signalNumber(signal) {
+  return (signal && osConstants.signals[signal]) || 15;
+}
+
+// Run one shell command and report what happened, telling apart: it
+// finished; it hit the time limit (we stopped it); something else killed the
+// shell (often `pkill -f` matching this very command); it finished but left
+// a background process attached to its output; its output passed 1 MB.
+function runShell(command, limit, env) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      // Its own process group, so a timeout stops everything it started.
+      child = spawn('/bin/sh', ['-lc', command], { cwd: workspace, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    const out = [];
+    const err = [];
+    let size = 0;
+    let overflow = false;
+    let timedOut = false;
+    let exit = null;
+    let settled = false;
+    let grace = null;
+    const killGroup = (signal) => {
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+        try { child.kill(signal); } catch { /* gone */ }
+      }
+    };
+    const take = (into) => (chunk) => {
+      if (overflow) return;
+      size += chunk.length;
+      if (size > OUTPUT_MAX_BYTES) {
+        overflow = true;
+        killGroup('SIGTERM');
+        return;
+      }
+      into.push(chunk);
+    };
+    child.stdout.on('data', take(out));
+    child.stderr.on('data', take(err));
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killGroup('SIGTERM');
+      setTimeout(() => killGroup('SIGKILL'), 2000).unref();
+    }, limit);
+
+    const finish = (how) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (grace) clearTimeout(grace);
+      const stdout = Buffer.concat(out).toString('utf8');
+      let stderr = Buffer.concat(err).toString('utf8');
+      const code = exit ? exit.code : null;
+      const signal = exit ? exit.signal : null;
+      if (timedOut) {
+        const seconds = Math.round(limit / 1000);
+        resolve({
+          exit_code: 124,
+          stdout,
+          stderr: `${stderr}\n[command timed out after ${seconds}s and was stopped, with everything it started; the output above is what it had produced. For a long job, run it with background: true and check its log.]`.trim(),
+          timed_out: true,
+        });
+        return;
+      }
+      if (overflow) {
+        resolve({
+          exit_code: code ?? 1,
+          stdout,
+          stderr: `${stderr}\n[the output passed 1 MB and the command was stopped; send long output to a file and read the part you need]`.trim(),
+          output_truncated: true,
+        });
+        return;
+      }
+      if (signal) {
+        resolve({
+          exit_code: 128 + signalNumber(signal),
+          stdout,
+          stderr: `${stderr}\n[the shell was killed by ${signal} before it finished; this was not a timeout. Something in the command killed it: \`pkill -f\` and \`killall\` also match this command itself when their pattern appears in it. Kill by PID (pgrep, then kill), or use a pattern that does not occur in the command.]`.trim(),
+          killed_by: signal,
+        });
+        return;
+      }
+      if (how === 'held') {
+        stderr = `${stderr}\n[the command finished, but a process it started in the background is still attached to its output and keeps running. Send a background process's output to a file (cmd > file 2>&1 &), or use background: true.]`.trim();
+      }
+      resolve({ exit_code: code ?? 0, stdout, stderr, ...(how === 'held' ? { background_attached: true } : {}) });
+    };
+
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+    child.on('exit', (code, signal) => {
+      exit = { code, signal };
+      grace = setTimeout(() => finish('held'), OUTPUT_GRACE_MS);
+    });
+    child.on('close', () => finish('closed'));
+  });
+}
+
+// A job that runs on after the call returns: its output goes to a log file
+// and its exit code to a file next to it when it ends. Kept under the home
+// directory, which survives a stop and start.
+const JOBS_DIR = path.join(home, '.cubicle-jobs');
+
+async function startBackground(command, env) {
+  await mkdir(JOBS_DIR, { recursive: true });
+  const id = `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const log = path.join(JOBS_DIR, `${id}.log`);
+  const exitFile = path.join(JOBS_DIR, `${id}.exit`);
+  const wrapper = '/bin/sh -lc "$CUBICLE_JOB_COMMAND" > "$CUBICLE_JOB_LOG" 2>&1; echo $? > "$CUBICLE_JOB_EXIT"';
+  const child = spawn('/bin/sh', ['-c', wrapper], {
+    cwd: workspace,
+    env: { ...env, CUBICLE_JOB_COMMAND: command, CUBICLE_JOB_LOG: log, CUBICLE_JOB_EXIT: exitFile },
+    stdio: 'ignore',
+    detached: true,
+  });
+  await new Promise((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+  child.unref();
+  return {
+    exit_code: 0,
+    background: true,
+    job_id: id,
+    pid: child.pid,
+    log,
+    exit_file: exitFile,
+    stdout: '',
+    stderr: '',
+    check: `tail -n 40 ${log}; cat ${exitFile} 2>/dev/null || echo "still running (pid ${child.pid})"`,
+    stop: `kill -- -${child.pid}`,
+  };
+}
+
+async function executeCommand(command, timeoutMs, options = {}) {
   // The caller's limit (the model's timeout_seconds), clamped to the ceiling.
   const requested = Number(timeoutMs);
   const limit = requested > 0 ? Math.min(Math.max(requested, 1000), COMMAND_TIMEOUT_MAX_MS) : COMMAND_TIMEOUT_MS;
   if (typeof command !== 'string' || !command.trim()) throw new Error('A terminal command is required.');
   if (command.length > TERMINAL_COMMAND_MAX) throw new Error(`Terminal commands must be at most ${TERMINAL_COMMAND_MAX} characters.`);
-  try {
-    const result = await execFileAsync('/bin/sh', ['-lc', command], {
-      cwd: workspace,
-      timeout: limit,
-      maxBuffer: 1024 * 1024,
-      env: terminalEnv,
-    });
-    return { exit_code: 0, stdout: result.stdout, stderr: result.stderr };
-  } catch (error) {
-    // The shell itself could not start: that is a failed action, not a
-    // command that ran and exited.
-    if (outOfProcessSlots(error)) throw error;
-    if (error.killed || error.signal) {
-      // Hit the time limit: report it as `timeout` would, with the output so far.
-      const seconds = Math.round(limit / 1000);
-      return {
-        exit_code: 124,
-        stdout: error.stdout || '',
-        stderr: `${error.stderr || ''}\n[command timed out after ${seconds}s and was killed; the output above is what it had produced]`.trim(),
-        timed_out: true,
-      };
-    }
-    return {
-      exit_code: typeof error.code === 'number' ? error.code : 1,
-      stdout: error.stdout || '',
-      stderr: error.stderr || error.message,
-    };
-  }
+  const env = commandEnv(options.env, options.unset);
+  if (options.background) return startBackground(command, env);
+  // The shell itself could not start (no free process slots, say): that is
+  // a failed action, not a command that ran; runShell rejects with it.
+  return runShell(command, limit, env);
 }
 
 // ---- desktop capture and input ---------------------------------------------
@@ -665,7 +817,10 @@ async function unqueued(request, body) {
   if (request.url === '/mcp/start') return { operation: 'mcp.start', ...mcpStart(body) };
   if (request.url === '/mcp/stop') return { operation: 'mcp.stop', ...mcpStop(String(body.id || '')) };
   if (request.url === '/terminal') {
-    return { operation: 'terminal.exec', ...(await executeCommand(body.command, body.timeout_ms)) };
+    return {
+      operation: 'terminal.exec',
+      ...(await executeCommand(body.command, body.timeout_ms, { env: body.env, unset: body.unset, background: body.background === true })),
+    };
   }
   if (request.url === '/files') {
     return { operation: 'files.list', path: workspacePath(body.path), entries: await listFiles(body.path) };

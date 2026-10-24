@@ -38,6 +38,7 @@ from app.services import recall, retrieval
 from app.services import demonstrations, procedures
 from app.services import rewind as rewind_service
 from app.services import tool_names
+from app.services.repetition import RepetitionGuard, TAIL_CHARS as _LOOP_TAIL
 from app.services.tool_selection import select_tools
 from app.services import orchestrator as _orchestrator  # noqa: F401 - registers bots.* actions
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
@@ -528,6 +529,30 @@ def schedule_recheck(thread_id: Optional[str] = None) -> None:
     loop.create_task(recheck_pending(thread_id) if thread_id else recheck_all_pending())
 
 
+_LOOP_NUDGE = (
+    "[Your last output fell into a loop: it kept repeating \"{sample}\" and was cut off there. Do not repeat it. "
+    "Step back, decide the next concrete step, and continue the task, or answer the user if you are done.]"
+)
+_LOOP_STOP_NOTE = "[Stopped: the model kept repeating itself. Send a message to steer it.]"
+
+
+def _cut_loop(text: str, sample: str) -> str:
+    """The text up to the first time the repeated part appears in its tail (one copy kept)."""
+    if not sample:
+        return text
+    window_start = max(0, len(text) - _LOOP_TAIL)
+    flat = text
+    at = flat.find(sample, window_start)
+    if at < 0:
+        # The sample is whitespace-normalised; fall back to the first line of it.
+        head = sample.split(" ")[0]
+        at = flat.find(head, window_start) if head else -1
+        if at < 0:
+            return text
+        return text[: at + len(head)]
+    return text[: at + len(sample)]
+
+
 def _reply_text(pieces: List[str]) -> str:
     """The stored reply: each round's text, separated by a blank line."""
     return "\n\n".join(piece.strip("\n") for piece in pieces if piece.strip())
@@ -740,6 +765,8 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         nonlocal formatted_history, history
         bot_msg_id = f"msg-{uuid.uuid4().hex[:6]}"
         text_pieces: List[str] = []
+        # Rounds cut because the model fell into a loop (see services/repetition).
+        loop_cuts = 0
         # Thinking is shown to the user and kept with the message for display,
         # but it is never part of `text`, so it is not replayed to the model.
         accumulated_reasoning = ""
@@ -903,19 +930,29 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     if left:
                         round_prompt += f" Your to-do list still has {len(left)} unfinished item(s); say which they are so the next turn can pick them up."
 
-                async for event in llm_service.stream_chat_completion(
+                round_stream = llm_service.stream_chat_completion(
                     model=selected_model,
                     messages=messages,
                     system_prompt=round_prompt,
                     config=llm_config,
                     tools=round_tools,
-                ):
+                )
+                reply_guard = RepetitionGuard()
+                thinking_guard = RepetitionGuard()
+                looped: Optional[tuple] = None  # ("reply" | "thinking", what repeats)
+                async for event in round_stream:
                     if event["type"] == "content.delta":
                         round_text += event["delta"]
                         turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": event["delta"]})
+                        if reply_guard.feed(event["delta"]):
+                            looped = ("reply", reply_guard.loop)
+                            break
                     elif event["type"] == "reasoning.delta":
                         accumulated_reasoning += event["delta"]
                         turn.emit({"type": "reasoning.delta", "botMsgId": bot_msg_id, "delta": event["delta"]})
+                        if thinking_guard.feed(event["delta"]):
+                            looped = ("thinking", thinking_guard.loop)
+                            break
                     elif event["type"] == "tool_calls":
                         # A former or habitual name (computer_write_file, write_to_file) is
                         # the tool it means, so the transcript names the real tool.
@@ -940,6 +977,33 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         turn.emit({"type": "turn.truncated", "botMsgId": bot_msg_id, "reason": event.get("reason") or "length"})
                     elif event["type"] == "turn.completed":
                         round_ok = bool(event.get("ok", True))
+
+                if looped is not None:
+                    # Stop the model generating (and free its slot), keep one copy
+                    # of what repeated, and tell it so. A second loop ends the turn.
+                    closer = getattr(round_stream, "aclose", None)
+                    if closer is not None:
+                        with contextlib.suppress(Exception):
+                            await closer()
+                    where, sample = looped
+                    loop_cuts += 1
+                    pending_calls = []
+                    if where == "reply":
+                        round_text = _cut_loop(round_text, sample)
+                    else:
+                        accumulated_reasoning = _cut_loop(accumulated_reasoning, sample)
+                    turn.emit({"type": "turn.loop", "botMsgId": bot_msg_id, "where": where, "sample": sample, "count": loop_cuts})
+                    if round_text.strip():
+                        text_pieces.append(round_text)
+                    if loop_cuts >= 2 or final_answer_only:
+                        text_pieces.append(_LOOP_STOP_NOTE)
+                        turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": f"\n\n{_LOOP_STOP_NOTE}"})
+                        break
+                    messages.append({"role": "assistant", "content": round_text if round_text.strip() else "(cut off)"})
+                    messages.append({"role": "user", "content": _LOOP_NUDGE.format(sample=sample)})
+                    if round_text.strip():
+                        turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": "\n\n"})
+                    continue
 
                 if round_text.strip():
                     text_pieces.append(round_text)
@@ -1120,6 +1184,8 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             raw_payload["tool_calls"] = tool_records
         if usage_rounds:
             raw_payload["usage"] = usage_payload()
+        if loop_cuts:
+            raw_payload["loop_cuts"] = loop_cuts
         if attachments:
             raw_payload["attachments"] = attachments
 

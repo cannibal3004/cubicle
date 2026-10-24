@@ -57,7 +57,7 @@ class AskUserExecutorTests(unittest.TestCase):
         self.patches = [
             mock.patch.object(user_questions, "turn_manager", self.manager),
             mock.patch.object(user_questions, "question_broker", self.broker),
-            mock.patch.object(user_questions.settings, "QUESTION_TIMEOUT_SECONDS", 1),
+            mock.patch.object(user_questions, "card_timeout", lambda: 1),
         ]
         for p in self.patches:
             p.start()
@@ -113,7 +113,7 @@ class AskUserExecutorTests(unittest.TestCase):
     def test_timeout_tells_the_model_to_carry_on(self):
         async def scenario():
             turn = await self._turn()()
-            with mock.patch.object(user_questions.settings, "QUESTION_TIMEOUT_SECONDS", 0.05):
+            with mock.patch.object(user_questions, "card_timeout", lambda: 0.05):
                 result = await execute_ask(self._call(question="Which?", options=["A", "B"]))
             self.assertFalse(result["answered"])
             self.assertIn("did not answer", result["note"])

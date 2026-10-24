@@ -172,6 +172,8 @@ class AppSettingsSchema(BaseModel):
     )
     # An action is auto-approved only when every risk score is below this.
     decider_threshold: float = Field(default_factory=lambda: settings.DECIDER_THRESHOLD, ge=0.01, le=0.99)
+    # How long an approval or question card waits for the user, in seconds; 0 = until answered.
+    approval_timeout_seconds: int = Field(default_factory=lambda: settings.APPROVAL_TIMEOUT_SECONDS, ge=0, le=7 * 24 * 3600)
     # Requests in flight at the model server at once, shared fairly between
     # accounts; the rest wait in the chat with their place shown. 0 = no limit.
     llm_max_concurrent: int = Field(default_factory=lambda: settings.LLM_MAX_CONCURRENT_REQUESTS, ge=0, le=64)

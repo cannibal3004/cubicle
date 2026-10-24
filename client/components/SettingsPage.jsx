@@ -141,6 +141,8 @@ export default function SettingsPage({
 
   // Auto-approval gate
   const [autoApproval, setAutoApproval] = useState("off");
+  // How long approval and question cards wait, in minutes; 0 = until answered.
+  const [cardMinutes, setCardMinutes] = useState(15);
   const [deciderUrl, setDeciderUrl] = useState("");
   const [deciderThreshold, setDeciderThreshold] = useState(0.2);
   const [deciderCheck, setDeciderCheck] = useState(null); // {ok, scores, latency_ms, error}
@@ -180,6 +182,7 @@ export default function SettingsPage({
             setAutoApproval(data.auto_approval || "off");
             setDeciderUrl(data.decider_url || "");
             setDeciderThreshold(typeof data.decider_threshold === "number" ? data.decider_threshold : 0.2);
+            setCardMinutes(Number.isFinite(Number(data.approval_timeout_seconds)) ? Math.round(Number(data.approval_timeout_seconds) / 60) : 15);
             setDeciderCheck(null);
           }
         })
@@ -258,6 +261,7 @@ export default function SettingsPage({
         auto_approval: autoApproval,
         ...(admin ? { decider_url: deciderUrl.trim() } : {}),
         decider_threshold: Number(deciderThreshold),
+        approval_timeout_seconds: Math.max(0, Math.min(7 * 24 * 60, Math.round(Number(cardMinutes) || 0))) * 60,
       });
       triggerSavedNotice("gate");
     } catch (err) {
@@ -804,6 +808,31 @@ export default function SettingsPage({
             <p className="text-[10px] leading-relaxed text-zinc-500">
               An action is approved only when every risk score is below this. Lower is stricter. 0.20 is the
               tested default; above 0.30 the model starts waving through things it should not.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+              <span className="text-emerald-400">•</span> How long cards wait for you
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                suppressHydrationWarning={true}
+                type="number"
+                min="0"
+                max={7 * 24 * 60}
+                step="5"
+                value={String(cardMinutes)}
+                onChange={(e) => setCardMinutes(e.target.value === "" ? "" : Number(e.target.value))}
+                className={`${inputClass} w-28`}
+              />
+              <span className="text-xs text-zinc-400">minutes{Number(cardMinutes) === 0 ? " · never expire" : ""}</span>
+              <span className="flex-1" />
+              <SaveButton field="gate" onClick={handleSaveGate} />
+            </div>
+            <p className="text-[10px] leading-relaxed text-zinc-500">
+              An approval or a question from a bot waits this long for you, then the bot is told it went unanswered.
+              0 keeps it waiting until you answer, so a bot can finish a job you come back to later.
             </p>
           </div>
         </div>

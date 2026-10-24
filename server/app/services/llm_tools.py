@@ -140,11 +140,12 @@ COMPUTER_TOOLS: List[ToolSpec] = [
     ),
     ToolSpec(
         name="computer_terminal_execute",
-        description=f"Run a shell command inside the sandbox as its unprivileged user (1 MB of output). It may run for {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT)} seconds unless you set timeout_seconds: longer (up to {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX)}) for builds, installs and test runs, shorter for probes of hosts that may hang. A command that hits its limit is killed and returns exit code 124 with its output so far. /workspace and the home directory persist between starts; /tmp does not. There is no sudo: for apt packages use computer_install_packages; pip (in a venv), npm, cargo and similar work normally in the home directory. To create or change files use computer_write_file and computer_edit_file rather than heredocs.",
+        description=f"Run a shell command inside the sandbox as its unprivileged user (1 MB of output). It may run for {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT)} seconds unless you set timeout_seconds: longer (up to {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX)}) for builds, installs and test runs, shorter for probes of hosts that may hang. A command that hits its limit is stopped, with everything it started, and returns exit code 124 with its output so far. For anything long or that keeps running (a big copy or download, a server, a watcher), set background: true: the call returns at once with a job id, a log file and the commands to check on it or stop it, and the job runs on. Do not end a normal command with `server &`: send a background process's output to a file or use background. /workspace and the home directory persist between starts; /tmp does not. There is no sudo: for apt packages use computer_install_packages; pip (in a venv), npm, cargo and similar work normally in the home directory. To create or change files use write_file and edit_file rather than heredocs. Your secrets are set as environment variables in every command.",
         parameters=_obj(
             {
                 "command": {"type": "string", "description": "Shell command to run"},
                 "timeout_seconds": {"type": "integer", "description": f"How long it may run, in seconds (default {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT)}, at most {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX)})"},
+                "background": {"type": "boolean", "description": "Start it as a background job and return at once with its log file (no time limit)"},
             },
             ["command"],
         ),
@@ -971,6 +972,9 @@ def build_invocation(
             args["timeout_seconds"] = int(limit)
             if limit != float(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT):
                 preview += f" (up to {_duration(limit)})"
+        if arguments.get("background") in (True, "true", "True", 1):
+            args["background"] = True
+            preview = f"Start a background job in the computer for {bot_id}"
         return _computer_invocation("terminal_execute", bot_id, args, f"{preview}: {command[:120]}")
     if name == "read_file":
         path = _computer_file_path(arguments)

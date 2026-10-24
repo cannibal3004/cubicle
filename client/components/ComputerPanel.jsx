@@ -396,10 +396,20 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, onDemonst
               <FiPlay /> {loadingAction === 'start' ? 'Starting…' : 'Start'}
             </button>
           )}
-          <button onClick={() => runAction('reset', resetComputer)} disabled={actionBusy} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700 disabled:opacity-50 transition" title="Recreate the computer: packages are reinstalled, /workspace and the home directory are kept">
+          <button
+            onClick={() => {
+              const ok = window.confirm(
+                `Reset ${bot.name || 'this bot'}'s computer?\n\nThis wipes the home directory (SSH keys, virtualenvs, settings, background job logs) and forgets the packages it installed. Only /workspace and the shared folder are kept.\n\nTo restart it, or to move it onto a new computer image, use Stop and then Start instead: that keeps everything.`
+              );
+              if (ok) runAction('reset', resetComputer);
+            }}
+            disabled={actionBusy}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-red-500/20 hover:text-red-200 hover:border-red-500/40 disabled:opacity-50 transition"
+            title="Start over: wipes the home directory and the installed packages, keeps /workspace. Stop then Start keeps everything."
+          >
             <FiRefreshCw className={loadingAction === 'reset' ? 'animate-spin' : ''} /> Reset
           </button>
-          <button onClick={() => runAction('stop', stopComputer)} disabled={actionBusy || state === 'stopped'} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700 disabled:opacity-50 transition">
+          <button onClick={() => runAction('stop', stopComputer)} disabled={actionBusy || state === 'stopped'} title="Shut the computer down; Start brings it back on the current image with its files, home directory and packages" className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700 disabled:opacity-50 transition">
             <FiSquare /> Stop
           </button>
         </div>
