@@ -39,6 +39,7 @@ from app.services import demonstrations, procedures
 from app.services import rewind as rewind_service
 from app.services import tool_names
 from app.services.repetition import RepetitionGuard, TAIL_CHARS as _LOOP_TAIL
+from app.services import stray_calls
 from app.services.tool_selection import select_tools
 from app.services import orchestrator as _orchestrator  # noqa: F401 - registers bots.* actions
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
@@ -553,6 +554,28 @@ def _cut_loop(text: str, sample: str) -> str:
     return text[: at + len(sample)]
 
 
+_STRAY_NUDGE = (
+    "[You wrote a tool call inside your thinking, where calls cannot run, and it could not be read, so it did not run "
+    "and there is no result. Make the call again as a real tool call, outside your thinking, and do not assume any result "
+    "until it comes back.]"
+)
+_STRAY_NUDGES_MAX = 2
+
+
+def _resolve_calls(raw_calls: List[Dict[str, Any]], tool_specs: List[Any], callable_specs: List[Any], written_as_text: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The model's calls with former or habitual names resolved to the real tools."""
+    offered_names = [spec.name for spec in tool_specs]
+    callable_names = [spec.name for spec in callable_specs]
+    calls: List[Dict[str, Any]] = []
+    for raw_call in raw_calls or []:
+        resolved = tool_names.resolve(raw_call.get("name"), offered_names, callable_names)
+        call = raw_call if resolved == raw_call.get("name") else {**raw_call, "name": resolved, "called_as": raw_call.get("name")}
+        if written_as_text:
+            call = {**call, "written_as_text": written_as_text}
+        calls.append(call)
+    return calls
+
+
 def _reply_text(pieces: List[str]) -> str:
     """The stored reply: each round's text, separated by a blank line."""
     return "\n\n".join(piece.strip("\n") for piece in pieces if piece.strip())
@@ -767,6 +790,10 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         text_pieces: List[str] = []
         # Rounds cut because the model fell into a loop (see services/repetition).
         loop_cuts = 0
+        # Calls the model wrote as text (in its thinking, or unparsed in its answer) that were run,
+        # and nudges sent for ones that could not be read (see services/stray_calls).
+        stray_runs = 0
+        stray_nudges = 0
         # Thinking is shown to the user and kept with the message for display,
         # but it is never part of `text`, so it is not replayed to the model.
         accumulated_reasoning = ""
@@ -940,6 +967,11 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                 reply_guard = RepetitionGuard()
                 thinking_guard = RepetitionGuard()
                 looped: Optional[tuple] = None  # ("reply" | "thinking", what repeats)
+                # A call written inside the thinking does not run; the model would go on to
+                # invent its result. Stop the stream right after it and run it instead.
+                call_watch = stray_calls.CallWatch() if round_tools else None
+                reasoning_at_start = len(accumulated_reasoning)
+                stray_cut = False
                 async for event in round_stream:
                     if event["type"] == "content.delta":
                         round_text += event["delta"]
@@ -948,6 +980,15 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                             looped = ("reply", reply_guard.loop)
                             break
                     elif event["type"] == "reasoning.delta":
+                        if call_watch is not None and call_watch.feed(event["delta"]):
+                            # Keep and show only what came before the end of the call(s):
+                            # anything after them is the start of an invented result.
+                            kept = call_watch.kept_of(event["delta"])
+                            if kept:
+                                accumulated_reasoning += kept
+                                turn.emit({"type": "reasoning.delta", "botMsgId": bot_msg_id, "delta": kept})
+                            stray_cut = True
+                            break
                         accumulated_reasoning += event["delta"]
                         turn.emit({"type": "reasoning.delta", "botMsgId": bot_msg_id, "delta": event["delta"]})
                         if thinking_guard.feed(event["delta"]):
@@ -956,12 +997,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     elif event["type"] == "tool_calls":
                         # A former or habitual name (computer_write_file, write_to_file) is
                         # the tool it means, so the transcript names the real tool.
-                        offered_names = [spec.name for spec in tool_specs]
-                        callable_names = [spec.name for spec in callable_specs]
-                        pending_calls = []
-                        for raw_call in event.get("calls") or []:
-                            resolved = tool_names.resolve(raw_call.get("name"), offered_names, callable_names)
-                            pending_calls.append(raw_call if resolved == raw_call.get("name") else {**raw_call, "name": resolved, "called_as": raw_call.get("name")})
+                        pending_calls = _resolve_calls(event.get("calls") or [], tool_specs, callable_specs)
                     elif event["type"] == "usage":
                         usage_rounds += 1
                         usage_prompt = int(event.get("prompt_tokens") or 0)
@@ -977,6 +1013,42 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         turn.emit({"type": "turn.truncated", "botMsgId": bot_msg_id, "reason": event.get("reason") or "length"})
                     elif event["type"] == "turn.completed":
                         round_ok = bool(event.get("ok", True))
+
+                # Calls written as text. In the thinking: the stream was cut right after
+                # them (or ended there); run them as the round's calls, and keep the
+                # thinking only up to where they began. In the answer (a call the model
+                # server did not parse): take them out of the text and run them.
+                stray_unreadable = False
+                if call_watch is not None and not pending_calls and looped is None and (stray_cut or call_watch.holds_calls()):
+                    if stray_cut:
+                        closer = getattr(round_stream, "aclose", None)
+                        if closer is not None:
+                            with contextlib.suppress(Exception):
+                                await closer()
+                    found, unreadable = stray_calls.parse_blocks(call_watch.text, callable_specs)
+                    accumulated_reasoning = accumulated_reasoning[:reasoning_at_start] + call_watch.before_calls()
+                    if found:
+                        pending_calls = _resolve_calls(found, tool_specs, callable_specs, written_as_text="thinking")
+                        stray_runs += len(found)
+                        turn.emit({"type": "turn.stray_calls", "botMsgId": bot_msg_id, "where": "thinking", "count": len(found)})
+                    elif unreadable:
+                        stray_unreadable = True
+                elif round_tools and not pending_calls and looped is None and stray_calls.OPEN in round_text:
+                    found, unreadable = stray_calls.parse_blocks(round_text, callable_specs)
+                    if found:
+                        round_text = stray_calls.without_blocks(round_text)
+                        pending_calls = _resolve_calls(found, tool_specs, callable_specs, written_as_text="answer")
+                        stray_runs += len(found)
+                        turn.emit({"type": "turn.stray_calls", "botMsgId": bot_msg_id, "where": "answer", "count": len(found)})
+                if stray_unreadable and stray_nudges < _STRAY_NUDGES_MAX:
+                    # A call it meant to make but wrote unreadably: say so, rather than let it guess.
+                    stray_nudges += 1
+                    if round_text.strip():
+                        text_pieces.append(round_text)
+                    messages.append({"role": "assistant", "content": round_text if round_text.strip() else "(thinking cut off at an unreadable tool call)"})
+                    messages.append({"role": "user", "content": _STRAY_NUDGE})
+                    turn.emit({"type": "turn.stray_calls", "botMsgId": bot_msg_id, "where": "thinking", "count": 0, "unreadable": True})
+                    continue
 
                 if looped is not None:
                     # Stop the model generating (and free its slot), keep one copy
@@ -1080,6 +1152,8 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     }
                     if call.get("called_as"):
                         record["called_as"] = call["called_as"]  # the name the model used
+                    if call.get("written_as_text"):
+                        record["written_as_text"] = call["written_as_text"]  # recovered from its thinking or answer text
                     tool_records.append(record)
 
                     try:
@@ -1186,6 +1260,8 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             raw_payload["usage"] = usage_payload()
         if loop_cuts:
             raw_payload["loop_cuts"] = loop_cuts
+        if stray_runs:
+            raw_payload["stray_calls"] = stray_runs
         if attachments:
             raw_payload["attachments"] = attachments
 

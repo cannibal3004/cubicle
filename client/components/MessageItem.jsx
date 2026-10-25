@@ -184,6 +184,11 @@ function ToolStep({ call }) {
       <FiTool className="flex-shrink-0 text-[10px] text-zinc-600" />
       <span className="flex-shrink-0 text-zinc-300">{call.name}</span>
       {call.summary && <span className="min-w-0 truncate text-zinc-500">{stepSummary(call.summary)}</span>}
+      {call.written_as_text && (
+        <span className="flex-shrink-0 text-amber-300/80" title={`The model wrote this call inside its ${call.written_as_text === 'thinking' ? 'thinking' : 'answer text'} instead of making it; Cubicle ran it so the model would not guess the result.`}>
+          from its {call.written_as_text === 'thinking' ? 'thinking' : 'text'}
+        </span>
+      )}
       <span className={`flex-shrink-0 ml-auto ${TOOL_STATUS_STYLES[call.status] || 'text-zinc-500'}`}>{call.status}</span>
       {call.gate?.outcome === 'auto_approved' && <FiZap className="flex-shrink-0 text-[10px] text-emerald-400" aria-label="auto-approved" />}
       {call.trusted && <FiShield className="flex-shrink-0 text-[10px] text-emerald-400" aria-label="trusted" />}
