@@ -903,12 +903,16 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         # the context in use; completions add up across rounds.
         usage_prompt = 0
         usage_completion = 0
+        # The last round's output alone: with the last prompt, what the context holds now
+        # (earlier rounds' output is already inside that prompt; their thinking is not kept).
+        usage_last_completion = 0
         usage_rounds = 0
 
         def usage_payload() -> Dict[str, Any]:
             return {
                 "prompt_tokens": usage_prompt,
                 "completion_tokens": usage_completion,
+                "last_completion_tokens": usage_last_completion,
                 "rounds": usage_rounds,
                 "context_window": context_window,
             }
@@ -1093,6 +1097,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         usage_rounds += 1
                         usage_prompt = int(event.get("prompt_tokens") or 0)
                         usage_completion += int(event.get("completion_tokens") or 0)
+                        usage_last_completion = int(event.get("completion_tokens") or 0)
                         turn.emit({"type": "turn.usage", "botMsgId": bot_msg_id, "usage": usage_payload()})
                     elif event["type"] == "model.queued":
                         # Waiting for a slot at the model server; the chat shows the place in line.

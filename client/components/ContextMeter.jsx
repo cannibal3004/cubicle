@@ -13,7 +13,10 @@ function formatTokens(n) {
 // the latest turn. `usage` is {prompt_tokens, completion_tokens, context_window}.
 export default function ContextMeter({ usage, contextWindow, model }) {
   if (!usage || !Number.isFinite(usage.prompt_tokens)) return null;
-  const used = (usage.prompt_tokens || 0) + (usage.completion_tokens || 0);
+  // The latest prompt plus the latest round's output. Summing every round's output
+  // (thinking included, which is not kept) counted a long turn's work many times over.
+  const lastOutput = Number.isFinite(usage.last_completion_tokens) ? usage.last_completion_tokens : usage.rounds > 1 ? 0 : usage.completion_tokens || 0;
+  const used = (usage.prompt_tokens || 0) + lastOutput;
   const window = usage.context_window || contextWindow || null;
   const ratio = window ? Math.min(1, used / window) : null;
   const tone = ratio === null ? 'bg-zinc-500' : ratio >= 0.9 ? 'bg-rose-500' : ratio >= 0.75 ? 'bg-amber-400' : 'bg-emerald-500';
