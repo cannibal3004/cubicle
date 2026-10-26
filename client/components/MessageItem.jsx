@@ -309,6 +309,20 @@ function MessageItem({ message, botId, onEdit }) {
                 </span>
               )}
               {message.raw_payload?.demonstration && <DemonstrationChip demonstration={message.raw_payload.demonstration} />}
+              {(() => {
+                // What Cubicle looked up for the bot with this message (passages, procedures, earlier exchanges).
+                const found = message.raw_payload?.turn_context || {};
+                const parts = [
+                  found.passages ? `${found.passages} passage${found.passages === 1 ? '' : 's'} from attachments` : '',
+                  found.procedures ? `${found.procedures} procedure${found.procedures === 1 ? '' : 's'}` : '',
+                  found.recalled ? `${found.recalled} earlier message${found.recalled === 1 ? '' : 's'}` : '',
+                ].filter(Boolean);
+                return parts.length ? (
+                  <span className="block text-[10px] font-mono text-zinc-300/60 mb-0.5" title="Added after your message for the bot to read; not shown here">
+                    looked up for the bot: {parts.join(' · ')}
+                  </span>
+                ) : null;
+              })()}
               {message.raw_payload?.delegated && (
                 <span className="block text-[10px] font-mono text-cyan-200/80 mb-0.5" title="Handed over by the orchestrator bot on your behalf">
                   from {message.raw_payload.delegated.from_name || 'the orchestrator'}

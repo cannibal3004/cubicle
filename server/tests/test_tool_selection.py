@@ -98,3 +98,51 @@ class ToolSelectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class KeptSelectionTests(unittest.TestCase):
+    """The selection holds from message to message (the prompt cache), and is made again after a compaction."""
+
+    def setUp(self):
+        tool_selection._tool_vectors.clear()
+        self.builtin = available_tools(computer=False)
+        self.specs = self.builtin + APPS
+        self.limit = len(self.builtin) + 2
+
+    def _run(self, query, kept, since="", mention=""):
+        with mock.patch.object(retrieval, "rerank", return_value=None):
+            return asyncio.run(tool_selection.select_tools_kept(
+                self.specs, query, kept=kept, since=since, mention_text=mention, max_tools=self.limit, config=CONFIG, embed=fake_embed,
+            ))
+
+    def test_the_first_choice_holds_whatever_the_next_message_says(self):
+        first, info, keep = self._run("what's the weather forecast for Dallas this weekend?", None)
+        names = [s.name for s in first if s.connector]
+        self.assertTrue(info.narrowed)
+        self.assertEqual(keep["names"], names)
+        second, _, keep2 = self._run("yes, go ahead", keep)
+        self.assertEqual([s.name for s in second], [s.name for s in first])  # the same list, in the same order
+        self.assertEqual(keep2, keep)
+
+    def test_a_compaction_starts_a_new_choice(self):
+        _, _, keep = self._run("what's the weather forecast for Dallas this weekend?", None, since="")
+        after, _, keep2 = self._run("send the report by email to the team", keep, since="msg-compaction-1")
+        self.assertEqual(keep2["since"], "msg-compaction-1")
+        self.assertIn("gmail_send_email", [s.name for s in after])
+
+    def test_an_app_named_by_the_user_or_the_bot_is_added(self):
+        _, info, keep = self._run("what's the weather forecast for Dallas this weekend?", None)
+        missing = info.dropped_apps[0]  # an app with none of its tools on offer
+        name = next(s.connector["toolkit_name"] for s in APPS if s.connector["toolkit"] == missing)
+        added, info2, keep2 = self._run("ok, do it", keep, mention=f"I need the {name} app for that.")
+        self.assertTrue(any(s.connector and s.connector["toolkit"] == missing for s in added))
+        self.assertTrue(set(keep["names"]) <= set(keep2["names"]))
+        self.assertNotIn(missing, info2.dropped_apps)
+        # Once offered, naming it again changes nothing.
+        _, _, keep3 = self._run("again", keep2, mention=name)
+        self.assertEqual(keep3, keep2)
+
+    def test_nothing_is_kept_when_everything_fits(self):
+        specs, info, keep = asyncio.run(tool_selection.select_tools_kept(self.specs, "hi", kept={"since": "", "limit": 500, "names": []}, since="", max_tools=500, config=CONFIG, embed=fake_embed))
+        self.assertEqual((len(specs), keep), (len(self.specs), None))
+        self.assertEqual(tool_selection.mentioned_toolkits("use google drive? no, googledrive", APPS), ["googledrive"])

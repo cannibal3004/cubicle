@@ -25,7 +25,7 @@ from app.services.approval_gate import approval_gate
 from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs
-from app.services.context_builder import build_history_messages, cap_message_results, safe_arguments, trim_result_text
+from app.services.context_builder import build_history_messages, cap_message_results, latest_compaction, live_messages, safe_arguments, trim_result_text
 from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
 from app.services import bot_memory as _bot_memory  # noqa: F401 - registers memory.read/write
 from app.services.bot_todo import get_todo
@@ -40,7 +40,7 @@ from app.services import rewind as rewind_service
 from app.services import tool_names
 from app.services.repetition import RepetitionGuard, TAIL_CHARS as _LOOP_TAIL
 from app.services import stray_calls
-from app.services.tool_selection import select_tools
+from app.services.tool_selection import select_tools_kept
 from app.services import orchestrator as _orchestrator  # noqa: F401 - registers bots.* actions
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
 from app.services.file_share import FileShareError, resolve_shared_file
@@ -155,6 +155,10 @@ async def get_history(thread_id: str):
     # Attachment text is for the model; the chat gets the card fields.
     messages = []
     for message in current_storage().get_messages(thread_id=thread_id):
+        context = ((message.get("raw_payload") or {}).get("turn_context")) if message.get("sender") == "user" else None
+        if isinstance(context, dict) and "text" in context:
+            # The looked-up text is for the model; the chat gets what was found, by kind.
+            message = {**message, "raw_payload": {**message["raw_payload"], "turn_context": {k: v for k, v in context.items() if k != "text"}}}
         if message.get("attachments"):
             message = {**message, "attachments": attachment_service.without_text(message["attachments"])}
         messages.append(message)
@@ -188,6 +192,7 @@ async def clear_history(thread_id: str):
         raise HTTPException(status_code=409, detail="A reply is still in progress; stop it first.")
     deleted = current_storage().delete_messages(thread_id)
     current_storage().clear_rewinds(thread_id)
+    _store_tool_selection(thread_id, None)  # a fresh conversation chooses its tools afresh
     return {"status": "ok", "deleted": deleted}
 
 
@@ -616,6 +621,85 @@ async def retrieved_context(bot_id: str, query: str) -> str:
     )
 
 
+def _fresh_entries(block: str, marker: str, seen: str) -> str:
+    """The block without the entries already in `seen` (attached to an earlier message); "" when none is left.
+
+    A block is a heading line, then entries that each begin with `marker` ("--- " for passages and
+    procedures, "- " for recalled exchanges, which are one line each).
+    """
+    if not block or not seen:
+        return block
+    lines = block.split("\n")
+    heading, entries, current = lines[0], [], []
+    for line in lines[1:]:
+        if line.startswith(marker) and (marker == "- " or line.rstrip().endswith("---")):
+            if current:
+                entries.append("\n".join(current))
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        entries.append("\n".join(current))
+    fresh = [entry for entry in entries if entry.strip() not in seen]
+    return "\n".join([heading] + fresh) if fresh else ""
+
+
+def _store_tool_selection(bot_id: str, keep: Dict[str, Any]) -> None:
+    """Remember the bot's tool selection for this stretch of conversation."""
+    try:
+        bots = current_storage().get_bots()
+        bot = next((b for b in bots if b.get("id") == bot_id), None)
+        if bot is not None:
+            bot["tool_selection"] = keep
+            current_storage().save_bots(bots)
+    except Exception as exc:
+        logger.warning("Could not keep the tool selection of %s: %s", bot_id, exc)
+
+
+async def attach_turn_context(turn: Turn, thread_id: str, bot_msg_id: str, history: List[Dict[str, Any]], query: str) -> bool:
+    """Look up the context for the latest user message and store it on that message. True when it was added."""
+    latest = next((m for m in reversed(history) if m.get("sender") == "user"), None)
+    if latest is None or not (query or "").strip():
+        return False
+    payload = dict(latest.get("raw_payload") or {})
+    if "turn_context" in payload:
+        return False  # looked up already (this message's turn is running again): keep it as it was
+    blocks: List[str] = []
+    counts: Dict[str, int] = {}
+    # What earlier messages since the last compaction already carry is still in the
+    # context: attach only what is new, so the same passages do not pile up.
+    seen = "\n".join(
+        str(((m.get("raw_payload") or {}).get("turn_context") or {}).get("text") or "")
+        for m in live_messages(history) if m.get("sender") == "user" and m is not latest
+    )
+    # Passages from long attachments that match this message: the inlined part of a file is only its beginning.
+    retrieved = _fresh_entries(await retrieved_context(thread_id, query), "--- ", seen)
+    if retrieved:
+        counts["passages"] = retrieved.count("--- from ")
+        turn.emit({"type": "retrieval.used", "botMsgId": bot_msg_id, "count": counts["passages"]})
+        blocks.append(retrieved)
+    # Procedures the user showed the bot that match this message, in full.
+    known = _fresh_entries(await procedure_context(thread_id, query), "--- ", seen)
+    if known:
+        counts["procedures"] = known.count("\n--- ")
+        turn.emit({"type": "procedure.used", "botMsgId": bot_msg_id, "count": counts["procedures"]})
+        blocks.append(known)
+    # Past exchanges that the compaction folded away but that match this message.
+    recalled = _fresh_entries(await recalled_context(thread_id, query, history), "- ", seen)
+    if recalled:
+        counts["recalled"] = recalled.count("\n- ")
+        turn.emit({"type": "recall.used", "botMsgId": bot_msg_id, "count": counts["recalled"]})
+        blocks.append(recalled)
+    # Stored even when empty, so running the turn again does not look again.
+    payload["turn_context"] = {"text": "\n\n".join(blocks), **counts}
+    latest["raw_payload"] = payload
+    try:
+        current_storage().update_message(latest)
+    except Exception as exc:  # the turn still gets the context, just not the stable replay
+        logger.warning("Could not store the context of %s: %s", latest.get("id"), exc)
+    return bool(blocks)
+
+
 async def procedure_context(bot_id: str, query: str) -> str:
     """The bot's procedures that match the message, in full; "" when none."""
     try:
@@ -723,10 +807,25 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         # The user's standing approvals for this bot.
         tool_specs = trust_tools(tool_specs, current_bot.get("trusted_tools") if current_bot else None)
         callable_specs = list(tool_specs)
-        # Too many app tools for one round: keep the ones that match the message.
+        # Too many app tools for one round: keep the ones that match the message,
+        # chosen once per stretch of conversation (until the next compaction) so
+        # the tool list, at the very start of the prompt, does not change from
+        # message to message; an app named by the user or the bot is added.
         latest_user = next((m for m in reversed(history) if m.get("sender") == "user" and m.get("text")), None)
+        latest_bot = next((m for m in reversed(history) if m.get("sender") == "bot" and m.get("text")), None)
+        compaction = latest_compaction(history)
         try:
-            tool_specs, selection = await select_tools(tool_specs, str(latest_user.get("text") or "") if latest_user else "", history=history)
+            stored_selection = current_bot.get("tool_selection") if current_bot else None
+            tool_specs, selection, keep = await select_tools_kept(
+                tool_specs,
+                str(latest_user.get("text") or "") if latest_user else "",
+                kept=stored_selection,
+                since=str(compaction.get("id")) if compaction else "",
+                mention_text=" ".join(str(m.get("text") or "")[-4000:] for m in (latest_user, latest_bot) if m),
+                history=history,
+            )
+            if keep is not None and keep != stored_selection:
+                _store_tool_selection(thread_id, keep)
         except Exception as exc:  # never let selection fail a turn
             logger.warning("Tool selection failed for %s: %s", thread_id, exc)
             selection = None
@@ -804,12 +903,16 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         # the context in use; completions add up across rounds.
         usage_prompt = 0
         usage_completion = 0
+        # The last round's output alone: with the last prompt, what the context holds now
+        # (earlier rounds' output is already inside that prompt; their thinking is not kept).
+        usage_last_completion = 0
         usage_rounds = 0
 
         def usage_payload() -> Dict[str, Any]:
             return {
                 "prompt_tokens": usage_prompt,
                 "completion_tokens": usage_completion,
+                "last_completion_tokens": usage_last_completion,
                 "rounds": usage_rounds,
                 "context_window": context_window,
             }
@@ -874,22 +977,14 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                 turn_system_prompt = f"{turn_system_prompt}\n\n{tools_prompt}"
             if tool_context:
                 turn_system_prompt = f"{turn_system_prompt}\n\n{tool_context}"
-            # Passages from long attachments that match this message: the
-            # inlined part of a file is only its beginning.
-            retrieved = await retrieved_context(thread_id, last_user_text)
-            if retrieved:
-                turn.emit({"type": "retrieval.used", "botMsgId": bot_msg_id, "count": retrieved.count("--- from ")})
-                turn_system_prompt = f"{turn_system_prompt}\n\n{retrieved}"
-            # Procedures the user showed the bot that match this message, in full.
-            known = await procedure_context(thread_id, last_user_text)
-            if known:
-                turn.emit({"type": "procedure.used", "botMsgId": bot_msg_id, "count": known.count("\n--- ")})
-                turn_system_prompt = f"{turn_system_prompt}\n\n{known}"
-            # Past exchanges that the compaction folded away but that match this message.
-            recalled = await recalled_context(thread_id, last_user_text, history)
-            if recalled:
-                turn.emit({"type": "recall.used", "botMsgId": bot_msg_id, "count": recalled.count("\n- ")})
-                turn_system_prompt = f"{turn_system_prompt}\n\n{recalled}"
+            # What Cubicle looks up for this message (attachment passages, the
+            # bot's matching procedures, exchanges a compaction folded away) goes
+            # with the message, not into the system prompt: stored on it once and
+            # replayed the same on later turns, so the start of the prompt never
+            # changes and the model server reuses its cache. A turn run again for
+            # the same message reuses what was stored.
+            if await attach_turn_context(turn, thread_id, bot_msg_id, history, last_user_text):
+                formatted_history = build_history_messages(history, replay_tools=replay_tools)
 
             # --- model turn, looping while it calls tools ------------------------
             messages: List[Dict[str, Any]] = list(formatted_history)
@@ -1002,6 +1097,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         usage_rounds += 1
                         usage_prompt = int(event.get("prompt_tokens") or 0)
                         usage_completion += int(event.get("completion_tokens") or 0)
+                        usage_last_completion = int(event.get("completion_tokens") or 0)
                         turn.emit({"type": "turn.usage", "botMsgId": bot_msg_id, "usage": usage_payload()})
                     elif event["type"] == "model.queued":
                         # Waiting for a slot at the model server; the chat shows the place in line.
