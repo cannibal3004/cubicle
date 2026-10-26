@@ -16,6 +16,7 @@ means the turn is offered everything, as before.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -160,3 +161,115 @@ async def select_tools(
         if toolkit and toolkit not in present and toolkit not in dropped:
             dropped.append(toolkit)
     return selected, Selection(offered=len(selected), total=total, dropped_apps=dropped)
+
+
+# ---- one selection per stretch of conversation ------------------------------------------
+# The tool definitions sit at the very start of the prompt (Qwen's template puts
+# them in the system block), so a list that changes from message to message
+# makes the model server prefill the whole conversation again. And a message
+# like "yes, go ahead" says nothing about which tools are needed. So the
+# selection is made once and kept: on the first turn, and again after each
+# compaction (when the prompt is rebuilt anyway). The one change in between:
+# an app named in the user's message or the bot's last reply, with none of its
+# tools on offer, gets its best-matching tools added ("say which app and the
+# next turn will offer it").
+
+MENTION_ADDS = 5
+
+
+def mentioned_toolkits(text: str, apps: List[ToolSpec]) -> List[str]:
+    """Toolkits whose slug or display name appears in `text` as a word."""
+    lowered = (text or "").lower()
+    if not lowered:
+        return []
+    found: List[str] = []
+    for spec in apps:
+        info = spec.connector or {}
+        toolkit = str(info.get("toolkit") or "")
+        if not toolkit or toolkit in found:
+            continue
+        names = {toolkit.lower(), str(info.get("toolkit_name") or "").lower()}
+        for name in names:
+            if len(name) >= 3 and re.search(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", lowered):
+                found.append(toolkit)
+                break
+    return found
+
+
+async def _best_of(pool: List[ToolSpec], query: str, count: int, config, embed=None) -> List[ToolSpec]:
+    """The `count` tools of `pool` that best match `query` (catalog order when that cannot be scored)."""
+    if len(pool) <= count or not (query or "").strip():
+        return pool[:count]
+    try:
+        import numpy as np
+
+        texts = [tool_text(spec) for spec in pool]
+        matrix = np.asarray(await _vectors_for(texts, config, embed), dtype=np.float32)
+        qv = np.asarray((await (embed or retrieval.embed_texts)([query[: retrieval.MAX_QUERY_CHARS]], config))[0], dtype=np.float32)
+        norms = np.linalg.norm(matrix, axis=1)
+        norms[norms == 0] = 1.0
+        scores = (matrix @ qv) / (norms * (float(np.linalg.norm(qv)) or 1.0))
+        order = sorted(range(len(pool)), key=lambda i: float(scores[i]), reverse=True)
+        return [pool[i] for i in order[:count]]
+    except Exception as exc:
+        logger.warning("Scoring an app's tools failed: %s", exc)
+        return pool[:count]
+
+
+def _selection_for(specs: List[ToolSpec], names: Iterable[str]) -> Tuple[List[ToolSpec], Selection]:
+    keep = set(names)
+    apps = [spec for spec in specs if spec.connector]
+    offered_apps = [spec for spec in apps if spec.name in keep]
+    selected = [spec for spec in specs if not spec.connector or spec.name in keep]
+    present = {(spec.connector or {}).get("toolkit") for spec in offered_apps}
+    dropped: List[str] = []
+    for spec in apps:
+        toolkit = (spec.connector or {}).get("toolkit")
+        if toolkit and toolkit not in present and toolkit not in dropped:
+            dropped.append(toolkit)
+    return selected, Selection(offered=len(selected), total=len(specs), dropped_apps=dropped)
+
+
+async def select_tools_kept(
+    specs: List[ToolSpec],
+    query: str,
+    *,
+    kept: Optional[Dict[str, Any]],
+    since: str,
+    mention_text: str = "",
+    history: Optional[Iterable[Dict[str, Any]]] = None,
+    max_tools: Optional[int] = None,
+    config: Optional[retrieval.RetrievalConfig] = None,
+    embed=None,
+) -> Tuple[List[ToolSpec], Selection, Optional[Dict[str, Any]]]:
+    """Like select_tools, but the selection holds for the stretch since `since` (the latest
+    compaction's id, "" before any). `kept` is the stored selection; the third value is what
+    to store now (None when nothing is narrowed)."""
+    limit = configured_max() if max_tools is None else max(0, int(max_tools))
+    if limit <= 0 or len(specs) <= limit or not any(spec.connector for spec in specs):
+        return specs, Selection(offered=len(specs), total=len(specs), dropped_apps=[]), None
+    selected, info = await select_tools(specs, query, history=history, max_tools=limit, config=config, embed=embed) if not (
+        isinstance(kept, dict) and kept.get("since") == since and kept.get("limit") == limit and isinstance(kept.get("names"), list)
+    ) else (None, None)
+    if selected is not None:
+        if not info.narrowed:
+            return selected, info, None
+        names = [spec.name for spec in selected if spec.connector]
+        return selected, info, {"since": since, "limit": limit, "names": names}
+
+    # The stored selection stands; add the tools of an app that was asked for by name.
+    apps = [spec for spec in specs if spec.connector]
+    available = {spec.name for spec in apps}
+    names = [name for name in kept["names"] if name in available]
+    offered_toolkits = {(spec.connector or {}).get("toolkit") for spec in apps if spec.name in set(names)}
+    config = config or retrieval.current_config()
+    for toolkit in mentioned_toolkits(mention_text, apps):
+        if toolkit in offered_toolkits:
+            continue
+        pool = [spec for spec in apps if (spec.connector or {}).get("toolkit") == toolkit]
+        for spec in await _best_of(pool, query or mention_text, MENTION_ADDS, config, embed):
+            if spec.name not in names:
+                names.append(spec.name)
+        offered_toolkits.add(toolkit)
+    selected, info = _selection_for(specs, names)
+    return selected, info, {"since": since, "limit": limit, "names": names}

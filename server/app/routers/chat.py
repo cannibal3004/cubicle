@@ -25,7 +25,7 @@ from app.services.approval_gate import approval_gate
 from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs
-from app.services.context_builder import build_history_messages, cap_message_results, safe_arguments, trim_result_text
+from app.services.context_builder import build_history_messages, cap_message_results, latest_compaction, safe_arguments, trim_result_text
 from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
 from app.services import bot_memory as _bot_memory  # noqa: F401 - registers memory.read/write
 from app.services.bot_todo import get_todo
@@ -40,7 +40,7 @@ from app.services import rewind as rewind_service
 from app.services import tool_names
 from app.services.repetition import RepetitionGuard, TAIL_CHARS as _LOOP_TAIL
 from app.services import stray_calls
-from app.services.tool_selection import select_tools
+from app.services.tool_selection import select_tools_kept
 from app.services import orchestrator as _orchestrator  # noqa: F401 - registers bots.* actions
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
 from app.services.file_share import FileShareError, resolve_shared_file
@@ -192,6 +192,7 @@ async def clear_history(thread_id: str):
         raise HTTPException(status_code=409, detail="A reply is still in progress; stop it first.")
     deleted = current_storage().delete_messages(thread_id)
     current_storage().clear_rewinds(thread_id)
+    _store_tool_selection(thread_id, None)  # a fresh conversation chooses its tools afresh
     return {"status": "ok", "deleted": deleted}
 
 
@@ -620,6 +621,18 @@ async def retrieved_context(bot_id: str, query: str) -> str:
     )
 
 
+def _store_tool_selection(bot_id: str, keep: Dict[str, Any]) -> None:
+    """Remember the bot's tool selection for this stretch of conversation."""
+    try:
+        bots = current_storage().get_bots()
+        bot = next((b for b in bots if b.get("id") == bot_id), None)
+        if bot is not None:
+            bot["tool_selection"] = keep
+            current_storage().save_bots(bots)
+    except Exception as exc:
+        logger.warning("Could not keep the tool selection of %s: %s", bot_id, exc)
+
+
 async def attach_turn_context(turn: Turn, thread_id: str, bot_msg_id: str, history: List[Dict[str, Any]], query: str) -> bool:
     """Look up the context for the latest user message and store it on that message. True when it was added."""
     latest = next((m for m in reversed(history) if m.get("sender") == "user"), None)
@@ -765,10 +778,25 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         # The user's standing approvals for this bot.
         tool_specs = trust_tools(tool_specs, current_bot.get("trusted_tools") if current_bot else None)
         callable_specs = list(tool_specs)
-        # Too many app tools for one round: keep the ones that match the message.
+        # Too many app tools for one round: keep the ones that match the message,
+        # chosen once per stretch of conversation (until the next compaction) so
+        # the tool list, at the very start of the prompt, does not change from
+        # message to message; an app named by the user or the bot is added.
         latest_user = next((m for m in reversed(history) if m.get("sender") == "user" and m.get("text")), None)
+        latest_bot = next((m for m in reversed(history) if m.get("sender") == "bot" and m.get("text")), None)
+        compaction = latest_compaction(history)
         try:
-            tool_specs, selection = await select_tools(tool_specs, str(latest_user.get("text") or "") if latest_user else "", history=history)
+            stored_selection = current_bot.get("tool_selection") if current_bot else None
+            tool_specs, selection, keep = await select_tools_kept(
+                tool_specs,
+                str(latest_user.get("text") or "") if latest_user else "",
+                kept=stored_selection,
+                since=str(compaction.get("id")) if compaction else "",
+                mention_text=" ".join(str(m.get("text") or "")[-4000:] for m in (latest_user, latest_bot) if m),
+                history=history,
+            )
+            if keep is not None and keep != stored_selection:
+                _store_tool_selection(thread_id, keep)
         except Exception as exc:  # never let selection fail a turn
             logger.warning("Tool selection failed for %s: %s", thread_id, exc)
             selection = None
