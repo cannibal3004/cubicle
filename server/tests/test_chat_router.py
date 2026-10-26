@@ -785,7 +785,7 @@ class ChatStreamRouteTests(unittest.TestCase):
             _, events = asyncio.run(_start_and_stream(bot["id"]))
             usage_events = [e["usage"] for e in events if e["type"] == "turn.usage"]
             self.assertEqual([u["rounds"] for u in usage_events], [1, 2])
-            self.assertEqual(usage_events[-1], {"prompt_tokens": 420, "completion_tokens": 29, "rounds": 2, "context_window": 32000})
+            self.assertEqual(usage_events[-1], {"prompt_tokens": 420, "completion_tokens": 29, "last_completion_tokens": 9, "rounds": 2, "context_window": 32000})
 
             saved = [m for m in self.storage.get_messages(bot["id"]) if m["sender"] == "bot"][-1]
             record = saved["raw_payload"]["tool_calls"][0]
