@@ -86,6 +86,37 @@ class TurnContextTests(chat_harness.ChatStreamRouteTests):
         self.assertEqual(len([c for c in calls if c[0] == "recalled"]), 1)
         self.assertEqual(first["rounds"][0]["messages"], again["rounds"][0]["messages"])
 
+    def test_what_an_earlier_message_already_carries_is_not_attached_again(self):
+        bot = self.storage.get_bots()[0]["id"]
+        self.storage.delete_messages(bot)
+
+        async def same_passages(bot_id, query):
+            return "Passages that match:\n--- from notes.pdf (part 1) ---\nalpha\n- a list item\n--- from notes.pdf (part 2) ---\nbeta"
+
+        async def recalled(bot_id, query, history):
+            return "Earlier in this conversation:\n- the user: \"one\"\n- you: \"two\"" if "first" in query else "Earlier:\n- you: \"two\"\n- the user: \"three\""
+
+        async def nothing(bot_id, query):
+            return ""
+
+        def lookups():
+            return [mock.patch.object(chat_router, "retrieved_context", same_passages), mock.patch.object(chat_router, "recalled_context", recalled),
+                    mock.patch.object(chat_router, "procedure_context", nothing)]
+
+        self.storage.add_message({"id": "u1", "thread_id": bot, "bot_id": bot, "sender": "user", "text": "first question", "created_at": "2026-10-26T10:00:00"})
+        self._turn(bot, "A.", lookups())
+        self.storage.add_message({"id": "u2", "thread_id": bot, "bot_id": bot, "sender": "user", "text": "second question", "created_at": "2026-10-26T10:05:00"})
+        self._turn(bot, "B.", lookups())
+        stored = {m["id"]: m for m in self.storage.get_messages(bot)}
+        first = stored["u1"]["raw_payload"]["turn_context"]
+        second = stored["u2"]["raw_payload"]["turn_context"]
+        self.assertIn("- a list item", first["text"])  # a list inside a passage stays part of it
+        self.assertEqual(first.get("passages"), 2)
+        self.assertNotIn("alpha", second["text"])  # the same passages are already in the context
+        self.assertNotIn("passages", second)
+        self.assertIn("three", second["text"])
+        self.assertNotIn("two", second["text"])
+
     def test_a_message_with_nothing_found_reads_as_before(self):
         history = [{"id": "u1", "sender": "user", "text": "hello", "raw_payload": {"turn_context": {"text": ""}}}]
         self.assertEqual(build_history_messages(history, replay_tools=True)[0]["content"], "hello")

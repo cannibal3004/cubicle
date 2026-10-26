@@ -25,7 +25,7 @@ from app.services.approval_gate import approval_gate
 from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs
-from app.services.context_builder import build_history_messages, cap_message_results, latest_compaction, safe_arguments, trim_result_text
+from app.services.context_builder import build_history_messages, cap_message_results, latest_compaction, live_messages, safe_arguments, trim_result_text
 from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
 from app.services import bot_memory as _bot_memory  # noqa: F401 - registers memory.read/write
 from app.services.bot_todo import get_todo
@@ -621,6 +621,29 @@ async def retrieved_context(bot_id: str, query: str) -> str:
     )
 
 
+def _fresh_entries(block: str, marker: str, seen: str) -> str:
+    """The block without the entries already in `seen` (attached to an earlier message); "" when none is left.
+
+    A block is a heading line, then entries that each begin with `marker` ("--- " for passages and
+    procedures, "- " for recalled exchanges, which are one line each).
+    """
+    if not block or not seen:
+        return block
+    lines = block.split("\n")
+    heading, entries, current = lines[0], [], []
+    for line in lines[1:]:
+        if line.startswith(marker) and (marker == "- " or line.rstrip().endswith("---")):
+            if current:
+                entries.append("\n".join(current))
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        entries.append("\n".join(current))
+    fresh = [entry for entry in entries if entry.strip() not in seen]
+    return "\n".join([heading] + fresh) if fresh else ""
+
+
 def _store_tool_selection(bot_id: str, keep: Dict[str, Any]) -> None:
     """Remember the bot's tool selection for this stretch of conversation."""
     try:
@@ -643,20 +666,26 @@ async def attach_turn_context(turn: Turn, thread_id: str, bot_msg_id: str, histo
         return False  # looked up already (this message's turn is running again): keep it as it was
     blocks: List[str] = []
     counts: Dict[str, int] = {}
+    # What earlier messages since the last compaction already carry is still in the
+    # context: attach only what is new, so the same passages do not pile up.
+    seen = "\n".join(
+        str(((m.get("raw_payload") or {}).get("turn_context") or {}).get("text") or "")
+        for m in live_messages(history) if m.get("sender") == "user" and m is not latest
+    )
     # Passages from long attachments that match this message: the inlined part of a file is only its beginning.
-    retrieved = await retrieved_context(thread_id, query)
+    retrieved = _fresh_entries(await retrieved_context(thread_id, query), "--- ", seen)
     if retrieved:
         counts["passages"] = retrieved.count("--- from ")
         turn.emit({"type": "retrieval.used", "botMsgId": bot_msg_id, "count": counts["passages"]})
         blocks.append(retrieved)
     # Procedures the user showed the bot that match this message, in full.
-    known = await procedure_context(thread_id, query)
+    known = _fresh_entries(await procedure_context(thread_id, query), "--- ", seen)
     if known:
         counts["procedures"] = known.count("\n--- ")
         turn.emit({"type": "procedure.used", "botMsgId": bot_msg_id, "count": counts["procedures"]})
         blocks.append(known)
     # Past exchanges that the compaction folded away but that match this message.
-    recalled = await recalled_context(thread_id, query, history)
+    recalled = _fresh_entries(await recalled_context(thread_id, query, history), "- ", seen)
     if recalled:
         counts["recalled"] = recalled.count("\n- ")
         turn.emit({"type": "recall.used", "botMsgId": bot_msg_id, "count": counts["recalled"]})
