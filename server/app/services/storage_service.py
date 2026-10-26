@@ -455,6 +455,17 @@ class StorageService:
             )
             return cursor.rowcount if cursor.rowcount is not None else 0
 
+    def update_message(self, message: Dict[str, Any]) -> bool:
+        """Replace a stored message's payload where it stands (its place in the thread is kept)."""
+        if not isinstance(message, dict) or not message.get("id"):
+            return False
+        with self.database.connect() as connection:
+            cursor = connection.execute(
+                "UPDATE messages SET payload = ? WHERE owner_id = ? AND id = ?",
+                (json.dumps(message), self.owner_id, str(message["id"])),
+            )
+        return (cursor.rowcount or 0) > 0
+
     def delete_message_ids(self, thread_id: str, message_ids: List[str]) -> int:
         """Remove the given messages of one thread; returns how many were deleted."""
         if not message_ids:

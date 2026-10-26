@@ -155,6 +155,10 @@ async def get_history(thread_id: str):
     # Attachment text is for the model; the chat gets the card fields.
     messages = []
     for message in current_storage().get_messages(thread_id=thread_id):
+        context = ((message.get("raw_payload") or {}).get("turn_context")) if message.get("sender") == "user" else None
+        if isinstance(context, dict) and "text" in context:
+            # The looked-up text is for the model; the chat gets what was found, by kind.
+            message = {**message, "raw_payload": {**message["raw_payload"], "turn_context": {k: v for k, v in context.items() if k != "text"}}}
         if message.get("attachments"):
             message = {**message, "attachments": attachment_service.without_text(message["attachments"])}
         messages.append(message)
@@ -616,6 +620,44 @@ async def retrieved_context(bot_id: str, query: str) -> str:
     )
 
 
+async def attach_turn_context(turn: Turn, thread_id: str, bot_msg_id: str, history: List[Dict[str, Any]], query: str) -> bool:
+    """Look up the context for the latest user message and store it on that message. True when it was added."""
+    latest = next((m for m in reversed(history) if m.get("sender") == "user"), None)
+    if latest is None or not (query or "").strip():
+        return False
+    payload = dict(latest.get("raw_payload") or {})
+    if "turn_context" in payload:
+        return False  # looked up already (this message's turn is running again): keep it as it was
+    blocks: List[str] = []
+    counts: Dict[str, int] = {}
+    # Passages from long attachments that match this message: the inlined part of a file is only its beginning.
+    retrieved = await retrieved_context(thread_id, query)
+    if retrieved:
+        counts["passages"] = retrieved.count("--- from ")
+        turn.emit({"type": "retrieval.used", "botMsgId": bot_msg_id, "count": counts["passages"]})
+        blocks.append(retrieved)
+    # Procedures the user showed the bot that match this message, in full.
+    known = await procedure_context(thread_id, query)
+    if known:
+        counts["procedures"] = known.count("\n--- ")
+        turn.emit({"type": "procedure.used", "botMsgId": bot_msg_id, "count": counts["procedures"]})
+        blocks.append(known)
+    # Past exchanges that the compaction folded away but that match this message.
+    recalled = await recalled_context(thread_id, query, history)
+    if recalled:
+        counts["recalled"] = recalled.count("\n- ")
+        turn.emit({"type": "recall.used", "botMsgId": bot_msg_id, "count": counts["recalled"]})
+        blocks.append(recalled)
+    # Stored even when empty, so running the turn again does not look again.
+    payload["turn_context"] = {"text": "\n\n".join(blocks), **counts}
+    latest["raw_payload"] = payload
+    try:
+        current_storage().update_message(latest)
+    except Exception as exc:  # the turn still gets the context, just not the stable replay
+        logger.warning("Could not store the context of %s: %s", latest.get("id"), exc)
+    return bool(blocks)
+
+
 async def procedure_context(bot_id: str, query: str) -> str:
     """The bot's procedures that match the message, in full; "" when none."""
     try:
@@ -874,22 +916,14 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                 turn_system_prompt = f"{turn_system_prompt}\n\n{tools_prompt}"
             if tool_context:
                 turn_system_prompt = f"{turn_system_prompt}\n\n{tool_context}"
-            # Passages from long attachments that match this message: the
-            # inlined part of a file is only its beginning.
-            retrieved = await retrieved_context(thread_id, last_user_text)
-            if retrieved:
-                turn.emit({"type": "retrieval.used", "botMsgId": bot_msg_id, "count": retrieved.count("--- from ")})
-                turn_system_prompt = f"{turn_system_prompt}\n\n{retrieved}"
-            # Procedures the user showed the bot that match this message, in full.
-            known = await procedure_context(thread_id, last_user_text)
-            if known:
-                turn.emit({"type": "procedure.used", "botMsgId": bot_msg_id, "count": known.count("\n--- ")})
-                turn_system_prompt = f"{turn_system_prompt}\n\n{known}"
-            # Past exchanges that the compaction folded away but that match this message.
-            recalled = await recalled_context(thread_id, last_user_text, history)
-            if recalled:
-                turn.emit({"type": "recall.used", "botMsgId": bot_msg_id, "count": recalled.count("\n- ")})
-                turn_system_prompt = f"{turn_system_prompt}\n\n{recalled}"
+            # What Cubicle looks up for this message (attachment passages, the
+            # bot's matching procedures, exchanges a compaction folded away) goes
+            # with the message, not into the system prompt: stored on it once and
+            # replayed the same on later turns, so the start of the prompt never
+            # changes and the model server reuses its cache. A turn run again for
+            # the same message reuses what was stored.
+            if await attach_turn_context(turn, thread_id, bot_msg_id, history, last_user_text):
+                formatted_history = build_history_messages(history, replay_tools=replay_tools)
 
             # --- model turn, looping while it calls tools ------------------------
             messages: List[Dict[str, Any]] = list(formatted_history)

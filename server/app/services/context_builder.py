@@ -27,6 +27,11 @@ MEMORY_EDIT_LEAD = "The user edited your notes (memory). They now read:"
 TODO_ITEM_TYPE = "todo"
 TODO_LEAD = "Your to-do list at this point:"
 TODO_EDIT_LEAD = "The user edited your to-do list. It is now:"
+# What Cubicle looked up for a user message (attachment passages, procedures,
+# recalled exchanges). Stored with the message and replayed the same on every
+# later turn, so the prompt's beginning never changes and the model server's
+# prompt cache holds.
+TURN_CONTEXT_LEAD = "[Cubicle looked this up for the message above. It is reference material, not part of what the user wrote.]"
 # After the user rewound the conversation past a change: the state as it stands.
 REWIND_NOTES_LEAD = "The user rewound the conversation; messages after this point were removed. Your notes (memory) as they stand now:"
 REWIND_TODO_LEAD = "The user rewound the conversation; messages after this point were removed. Your to-do list as it stands now:"
@@ -226,11 +231,14 @@ def build_history_messages(history: List[Dict[str, Any]], *, replay_tools: bool)
                 from app.services.demonstrations import LEAD as DEMONSTRATION_LEAD
 
                 text = f"{text}\n\n{DEMONSTRATION_LEAD}\n{demonstration['text']}"
+            turn_context = ((message.get("raw_payload") or {}).get("turn_context") or {}).get("text")
             # Attached files follow the user's words: a header saying where
             # each one is, then its text (capped at upload time).
             blocks = [attachment_for_model(a) for a in (message.get("attachments") or []) if isinstance(a, dict)]
             if blocks:
                 text = "\n\n".join(([text] if text.strip() else []) + blocks)
+            if turn_context:
+                text = f"{text}\n\n{TURN_CONTEXT_LEAD}\n\n{turn_context}"
             messages.append({"role": "user", "content": text, "image_url": message.get("image_url")})
             continue
         if is_memory_note(message):
