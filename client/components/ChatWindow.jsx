@@ -1034,6 +1034,28 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
             </span>
           </div>
 
+          {/* An empty conversation offers the bot's starter prompts. */}
+          {activeMessages.length === 0 && Array.isArray(bot?.suggestions) && bot.suggestions.length > 0 && (
+            <div className="pt-6">
+              <div className="text-center text-xs text-zinc-500 mb-3">Not sure where to start? Try one of these.</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {bot.suggestions.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() => {
+                      setInputPrompt(suggestion);
+                      window.setTimeout(() => textareaRef.current?.focus(), 0);
+                    }}
+                    className="text-left text-sm text-zinc-200 rounded-xl border border-[#26262b] bg-[#141417] px-4 py-3 hover:border-zinc-500 hover:bg-[#1a1a1e] transition"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Message Items List */}
           {activeMessages.map((msg) => (
             <MessageItem key={msg.id} message={msg} botId={bot?.id} onEdit={editableSet.has(msg.id) ? onEditMessage : null} />

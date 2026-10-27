@@ -242,6 +242,21 @@ export async function updateBot(botId, updates) {
   return res.json();
 }
 
+// Starter prompts drafted by the model from the bot's prompt, notes and procedures (not saved).
+export async function draftBotSuggestions(botId) {
+  const res = await apiFetch(`${API_BASE_URL}/bots/${botId}/suggestions/draft`, { method: 'POST' });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = (await res.json()).detail;
+    } catch {
+      // not JSON
+    }
+    throw new Error(typeof detail === 'string' && detail ? detail : 'Could not draft suggestions.');
+  }
+  return (await res.json()).suggestions || [];
+}
+
 export async function deleteBot(botId) {
   const res = await apiFetch(`${API_BASE_URL}/bots/${botId}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Failed to delete bot');

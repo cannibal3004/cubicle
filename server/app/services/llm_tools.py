@@ -647,11 +647,13 @@ def filter_tools(
     tool_settings: Optional[Dict[str, Any]] = None,
     disabled_toolkits: Optional[List[str]] = None,
 ) -> List[ToolSpec]:
-    """Apply a bot's tool settings and the global app switch-offs.
+    """Apply a bot's tool settings over the apps' defaults.
 
     `tool_settings` is {"groups": {id: bool}, "toolkits": {slug: bool},
     "tools": {name: bool}}. Only an explicit False disables anything, so a
-    bot with no settings gets everything.
+    bot with no settings gets everything, except the apps in
+    `disabled_toolkits`: those are off by default, and a bot gets one only
+    with an explicit True for it.
     """
     config = tool_settings if isinstance(tool_settings, dict) else {}
     groups = config.get("groups") if isinstance(config.get("groups"), dict) else {}
@@ -663,7 +665,8 @@ def filter_tools(
     for spec in specs:
         if spec.connector:
             toolkit = spec.connector.get("toolkit")
-            if toolkit in withheld or toolkits.get(toolkit) is False:
+            choice = toolkits.get(toolkit)
+            if choice is False or (choice is not True and toolkit in withheld):
                 continue
         elif groups.get(spec.group) is False:
             continue
