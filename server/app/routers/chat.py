@@ -796,7 +796,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
             connector_management=bool(composio_service.get_api_key()),
             orchestrator=bool(current_bot.get("orchestrator")),
         )
-        # The bot's own tool choices, then apps switched off for every bot.
+        # The bot's own tool choices, over the apps that are off by default.
         tool_specs = filter_tools(
             tool_specs,
             current_bot.get("tool_settings") if current_bot else None,

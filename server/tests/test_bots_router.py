@@ -151,10 +151,40 @@ class BotsRouterTests(unittest.TestCase):
             "junk": {"x": 1},
         })))
         self.assertEqual(updated["tool_settings"], {"groups": {"computer": False}, "toolkits": {"gmail": False}, "tools": {"gmail_send_email": False}})
+        # An app can be switched on too, over an app that is off by default.
+        updated = asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(tool_settings={"toolkits": {"slack": True, "gmail": False}})))
+        self.assertEqual(updated["tool_settings"], {"toolkits": {"slack": True, "gmail": False}})
         with self.assertRaises(HTTPException):
             asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(tool_settings={"tools": {"x": "no"}})))
         with self.assertRaises(HTTPException):
             asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(tool_settings={"tools": ["x"]})))
+
+    def test_suggestions_are_cleaned_and_bounded(self):
+        bot = asyncio.run(bots_router.create_bot(bots_router.BotInput(name="Helpful", suggestions=[" Hi there "])))
+        self.assertEqual(bot["suggestions"], ["Hi there"])
+        updated = asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(suggestions=["  Check   the disks ", "", "Check the disks", "Update Nextcloud"])))
+        self.assertEqual(updated["suggestions"], ["Check the disks", "Update Nextcloud"])
+        with self.assertRaises(HTTPException):
+            asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(suggestions=[f"q{i}" for i in range(7)])))
+        with self.assertRaises(HTTPException):
+            asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(suggestions=["x" * 301])))
+
+    def test_drafted_suggestions_are_read_from_the_reply(self):
+        self.assertEqual(bots_router.parse_drafted('Sure:\n["Is Nextcloud healthy?", "Update Nextcloud", "Is Nextcloud healthy?"]', 4),
+                         ["Is Nextcloud healthy?", "Update Nextcloud"])
+        self.assertEqual(bots_router.parse_drafted('1. Check disk space\n- "Restart the web app"\n\n', 4), ["Check disk space", "Restart the web app"])
+        self.assertEqual(bots_router.parse_drafted('["a", "b", "c"]', 2), ["a", "b"])
+
+        async def reply(**kwargs):
+            yield {"type": "content.delta", "delta": '["Check the backups", '}
+            yield {"type": "content.delta", "delta": '"Show the update status"]'}
+            yield {"type": "turn.completed", "ok": True}
+
+        bot = asyncio.run(bots_router.create_bot(bots_router.BotInput(name="Drafty", system_prompt="You look after Nextcloud.")))
+        with mock.patch.object(bots_router.llm_service, "stream_chat_completion", side_effect=lambda **kw: reply(**kw)) as called:
+            result = asyncio.run(bots_router.draft_suggestions(bot["id"]))
+        self.assertEqual(result, {"suggestions": ["Check the backups", "Show the update status"]})
+        self.assertIn("You look after Nextcloud.", called.call_args.kwargs["messages"][0]["content"])
 
     def test_one_bot_can_be_fetched_by_id(self):
         bot = asyncio.run(bots_router.create_bot(bots_router.BotInput(name="Solo")))

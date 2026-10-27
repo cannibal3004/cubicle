@@ -17,7 +17,9 @@ class Bot(BaseModel):
     archived: bool = False
     archived_at: Optional[str] = None
     # Which tools this bot may use: {"groups": {id: bool}, "toolkits":
-    # {slug: bool}, "tools": {name: bool}}; anything absent is enabled.
+    # {slug: bool}, "tools": {name: bool}}; anything absent is enabled,
+    # except a connected app that is off by default (disabled_toolkits),
+    # which a True here switches on for this bot.
     tool_settings: Dict[str, Any] = Field(default_factory=dict)
     # Auto-approval for this bot: "inherit" follows App Settings; "off",
     # "shadow", or "on" override it for this bot only.
@@ -42,6 +44,9 @@ class Bot(BaseModel):
     memory_limit: int = Field(default_factory=lambda: settings.BOT_MEMORY_MAX_CHARS)
     # The bot's working list for the job at hand: [{id, text, state}].
     todo: List[Dict[str, Any]] = Field(default_factory=list)
+    # Starter prompts shown as cards on an empty conversation; a click puts
+    # one in the message box.
+    suggestions: List[str] = Field(default_factory=list)
     todo_updated_at: Optional[str] = None
     todo_limit: int = Field(default_factory=lambda: settings.BOT_TODO_MAX_ITEMS)
     unread_count: int = 0

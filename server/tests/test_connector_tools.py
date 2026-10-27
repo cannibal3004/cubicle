@@ -255,9 +255,13 @@ class FilterTests(unittest.TestCase):
         self.assertNotIn("gmail_send_email", names(narrowed))
         self.assertIn("gmail_fetch_emails", names(narrowed))
 
-        # A True never re-enables something switched off for every bot.
-        globally = filter_tools(everything, {"toolkits": {"gmail": True}}, ["gmail"])
-        self.assertFalse(any(s.connector and s.connector["toolkit"] == "gmail" for s in globally))
+        # An app off by default is off for a bot that has not chosen...
+        by_default = filter_tools(everything, {}, ["gmail"])
+        self.assertFalse(any(s.connector and s.connector["toolkit"] == "gmail" for s in by_default))
+        # ...and on for one that switched it on, minus its own tool switch-offs.
+        chosen = filter_tools(everything, {"toolkits": {"gmail": True}, "tools": {"gmail_send_email": False}}, ["gmail"])
+        self.assertIn("gmail_fetch_emails", names(chosen))
+        self.assertNotIn("gmail_send_email", names(chosen))
         # Garbage settings are ignored rather than fatal.
         self.assertEqual(names(filter_tools(everything, {"groups": "nope", "tools": 3}, None)), names(everything))
 

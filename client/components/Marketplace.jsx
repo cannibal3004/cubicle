@@ -18,6 +18,7 @@ import {
   fetchSettings,
   saveSettings,
 } from '../lib/api';
+import { loadToolCatalog } from '../lib/toolCatalog';
 
 // A stable fallback keeps the marketplace useful when the API or connector key
 // is not configured yet.
@@ -294,6 +295,7 @@ export default function Marketplace({ onOpenSettings }) {
     setDisabledToolkits(next);
     try {
       await saveSettings({ disabled_toolkits: next });
+      loadToolCatalog().catch(() => {});
     } catch (err) {
       setDisabledToolkits(disabledToolkits);
       setError(err.message || 'Could not update tool settings');
@@ -438,7 +440,9 @@ export default function Marketplace({ onOpenSettings }) {
                         onChange={(e) => setToolsOffered(app, e.target.checked)}
                         className="accent-emerald-500"
                       />
-                      {disabledToolkits.includes(app.slug) ? 'Tools off for all bots (still connected)' : 'Tools offered to bots'}
+                      {disabledToolkits.includes(app.slug)
+                        ? 'Off for bots by default (each bot can switch it on)'
+                        : 'On for bots by default'}
                     </label>
                   )}
                   {needsSetup && (

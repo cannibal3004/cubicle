@@ -1,5 +1,6 @@
 """Bot personas: create, edit, archive, and delete."""
 
+import json
 import logging
 import re
 import uuid
@@ -30,7 +31,7 @@ MAX_SHORT = 200
 MAX_PROMPT = 20_000
 # Only these fields can be changed from the client; ids, counters, and
 # timestamps are the server's.
-EDITABLE_FIELDS = {"name", "role", "description", "avatar", "model", "accent_color", "system_prompt", "tools", "pinned", "tool_settings", "auto_approval", "gate_threshold", "trusted_tools", "allowed_commands", "procedures"}  # memory is handled separately
+EDITABLE_FIELDS = {"name", "role", "description", "avatar", "model", "accent_color", "system_prompt", "tools", "pinned", "tool_settings", "auto_approval", "gate_threshold", "trusted_tools", "allowed_commands", "procedures", "suggestions"}  # memory is handled separately
 MAX_TOOL_SETTINGS_ENTRIES = 2000
 MAX_TRUSTED_TOOLS = 500
 _TOOL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -74,15 +75,81 @@ def clean_tool_settings(value: Any) -> Dict[str, Dict[str, bool]]:
         for key, flag in entries.items():
             if not isinstance(key, str) or not isinstance(flag, bool) or len(key) > 128:
                 raise HTTPException(status_code=422, detail=f"tool_settings.{section} must map names to booleans.")
-            # Only disabled entries need storing; enabled is the default.
-            if flag is False:
-                kept[key] = False
+            # Only switch-offs need storing, since enabled is the default; a
+            # connected app can also be switched on, over an app that is off
+            # by default.
+            if flag is False or section == "toolkits":
+                kept[key] = flag
         total += len(kept)
         if kept:
             cleaned[section] = kept
     if total > MAX_TOOL_SETTINGS_ENTRIES:
         raise HTTPException(status_code=422, detail="tool_settings has too many entries.")
     return cleaned
+
+
+MAX_SUGGESTIONS = 6
+MAX_SUGGESTION_CHARS = 300
+
+
+def clean_suggestions(value: Any) -> List[str]:
+    """Starter prompts: trimmed, non-empty, distinct, at most six of 300 characters."""
+    if not isinstance(value, list):
+        raise HTTPException(status_code=422, detail="suggestions must be a list of strings.")
+    kept: List[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise HTTPException(status_code=422, detail="suggestions must be a list of strings.")
+        text = " ".join(item.split())
+        if len(text) > MAX_SUGGESTION_CHARS:
+            raise HTTPException(status_code=422, detail=f"A suggestion can be at most {MAX_SUGGESTION_CHARS} characters.")
+        if text and text not in kept:
+            kept.append(text)
+    if len(kept) > MAX_SUGGESTIONS:
+        raise HTTPException(status_code=422, detail=f"A bot can have at most {MAX_SUGGESTIONS} suggestions.")
+    return kept
+
+
+DRAFT_INSTRUCTION = (
+    "Write {count} messages a new user could send this assistant as their first message, to get something useful "
+    "done or to see what it can do. Each is one sentence under 90 characters, written the way the user would type "
+    "it, and specific to this assistant's job: name the real systems, places and tasks mentioned above. Reply with "
+    "only a JSON array of strings."
+)
+
+
+def _draft_brief(bot: Dict[str, Any]) -> str:
+    parts = [f"Name: {bot.get('name') or ''}", f"Role: {bot.get('role') or ''}"]
+    if bot.get("description"):
+        parts.append(f"Description: {bot['description']}")
+    if bot.get("system_prompt"):
+        parts.append("Its instructions:\n" + str(bot["system_prompt"])[:4000])
+    if bot.get("memory"):
+        parts.append("Its notes:\n" + str(bot["memory"])[:4000])
+    titles = [str(p.get("title") or "") for p in (bot.get("procedures") or []) if isinstance(p, dict) and p.get("title")]
+    if titles:
+        parts.append("Things it has been shown how to do:\n" + "\n".join(f"- {t}" for t in titles[:20]))
+    return "Here is an AI assistant someone set up.\n\n" + "\n\n".join(parts)
+
+
+def parse_drafted(text: str, count: int) -> List[str]:
+    """The prompts in a model reply: a JSON array when there is one, else one per line."""
+    match = re.search(r"\[.*\]", text or "", re.S)
+    items: List[Any] = []
+    if match:
+        try:
+            parsed = json.loads(match.group(0))
+            items = parsed if isinstance(parsed, list) else []
+        except ValueError:
+            items = []
+    if not items:
+        items = [re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip().strip('"') for line in (text or "").splitlines()]
+    kept: List[str] = []
+    for item in items:
+        line = " ".join(str(item).split()) if isinstance(item, (str, int, float)) else ""
+        if line and len(line) <= MAX_SUGGESTION_CHARS and line not in kept:
+            kept.append(line)
+    return kept[:count]
 
 
 class BotInput(BaseModel):
@@ -97,6 +164,7 @@ class BotInput(BaseModel):
     trusted_tools: List[str] = Field(default_factory=list)
     allowed_commands: List[str] = Field(default_factory=list)
     orchestrator: bool = False
+    suggestions: List[str] = Field(default_factory=list)
 
 
 class BotUpdate(BaseModel):
@@ -120,6 +188,7 @@ class BotUpdate(BaseModel):
     orchestrator: Optional[bool] = None
     memory: Optional[str] = Field(default=None, max_length=MEMORY_MAX_CHARS)
     todo: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=TODO_MAX_ITEMS)
+    suggestions: Optional[List[str]] = None
 
 
 def _find(bots: List[Dict[str, Any]], bot_id: str) -> int:
@@ -165,6 +234,7 @@ async def create_bot(bot_data: BotInput):
         "trusted_tools": clean_trusted_tools(bot_data.trusted_tools),
         "allowed_commands": clean_allowed_commands(bot_data.allowed_commands),
         "orchestrator": bool(bot_data.orchestrator),
+        "suggestions": clean_suggestions(bot_data.suggestions),
         "pinned": False,
         "archived": False,
         "unread_count": 0,
@@ -193,6 +263,8 @@ async def update_bot(bot_id: str, updates: BotUpdate):
         changes["trusted_tools"] = clean_trusted_tools(changes["trusted_tools"])
     if "allowed_commands" in changes:
         changes["allowed_commands"] = clean_allowed_commands(changes["allowed_commands"])
+    if "suggestions" in changes:
+        changes["suggestions"] = clean_suggestions(changes["suggestions"])
     procedures_before = None
     if "procedures" in changes:
         try:
@@ -256,6 +328,31 @@ async def update_bot(bot_id: str, updates: BotUpdate):
     if todo_note is not None:
         current_storage().add_message(todo_note)
     return bots[index]
+
+
+@router.post("/{bot_id}/suggestions/draft")
+async def draft_suggestions(bot_id: str):
+    """Starter prompts drafted from the bot's prompt, notes and procedures, for the user to edit (not saved)."""
+    bots = current_storage().get_bots()
+    bot = bots[_find(bots, bot_id)]
+    config = llm_service.current_llm_config()
+    model = bot.get("model") or config.default_model
+    count = 4
+    messages = [{"role": "user", "content": f"{_draft_brief(bot)}\n\n{DRAFT_INSTRUCTION.format(count=count)}"}]
+    pieces: List[str] = []
+    try:
+        async for event in llm_service.stream_chat_completion(model=model, messages=messages, system_prompt="", config=config, tools=None, one_shot=True):
+            if event.get("type") == "content.delta":
+                pieces.append(event.get("delta") or "")
+            elif event.get("type") == "turn.completed" and not event.get("ok", True):
+                raise RuntimeError(event.get("error") or "the request failed")
+    except Exception as exc:
+        logger.warning("Drafting suggestions for %s failed: %s", bot_id, exc)
+        raise HTTPException(status_code=502, detail=f"The model could not draft suggestions: {exc}") from exc
+    drafted = parse_drafted("".join(pieces), count)
+    if not drafted:
+        raise HTTPException(status_code=502, detail="The model's reply had no suggestions in it. Try again.")
+    return {"suggestions": drafted}
 
 
 @router.delete("/{bot_id}")

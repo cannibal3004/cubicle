@@ -128,7 +128,7 @@ class CompactThreadTests(unittest.IsolatedAsyncioTestCase):
             pass  # Windows keeps the SQLite file open until the process exits.
 
     def _fake_stream(self, summary="## Task\nBuild the thing.\n## Open items\nTests."):
-        async def stream(model, messages, system_prompt="", config=None, tools=None):
+        async def stream(model, messages, system_prompt="", config=None, tools=None, one_shot=False):
             self.requests.append({"model": model, "messages": messages, "system_prompt": system_prompt, "tools": tools})
             yield {"type": "content.delta", "delta": summary[:10]}
             yield {"type": "content.delta", "delta": summary[10:]}

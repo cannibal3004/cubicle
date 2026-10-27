@@ -8,6 +8,7 @@ import SecretsSection from './SecretsSection';
 import SchedulesSection from './SchedulesSection';
 import BotMcpSection from './BotMcpSection';
 import {
+  draftBotSuggestions,
   fetchBotSecrets,
   setBotSecret,
   deleteBotSecret,
@@ -22,6 +23,8 @@ import {
   deleteBotMcpServer,
   testBotMcpServer,
 } from '../lib/api';
+
+const MAX_SUGGESTIONS = 6;
 
 const AVATARS = ['🤖', '🧠', '🦊', '🐙', '🦉', '🐝', '🧭', '🛠️', '📚', '🎯', '🧪', '🌱'];
 const ACCENTS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#f43f5e', '#a3a3a3'];
@@ -133,6 +136,8 @@ export default function BotEditorModal({
   const runSchedule = useCallback((id) => runBotSchedule(botId, id), [botId]);
   const [showMcp, setShowMcp] = useState(false);
   const [procedures, setProcedures] = useState([]);
+  const [suggestions, setSuggestions] = useState([]);
+  const [drafting, setDrafting] = useState(false);
   const [showProcedures, setShowProcedures] = useState(false);
   const [openProcedure, setOpenProcedure] = useState('');
   const loadMcp = useCallback(() => fetchBotMcpServers(botId), [botId]);
@@ -158,6 +163,8 @@ export default function BotEditorModal({
     setTrustedTools(Array.isArray(bot?.trusted_tools) ? bot.trusted_tools : []);
     setAllowedCommands(Array.isArray(bot?.allowed_commands) ? bot.allowed_commands : []);
     setProcedures(Array.isArray(bot?.procedures) ? bot.procedures : []);
+    setSuggestions(Array.isArray(bot?.suggestions) ? bot.suggestions : []);
+    setDrafting(false);
     setShowProcedures(false);
     setOpenProcedure('');
     setNewRule('');
@@ -188,6 +195,7 @@ export default function BotEditorModal({
         tool_settings: toolSettings,
         trusted_tools: trustedTools,
         allowed_commands: allowedCommands,
+        suggestions: suggestions.map((s) => s.trim()).filter(Boolean),
         // Only an existing bot has notes to edit; the server records a
         // change in the thread so the bot sees it.
         ...(bot ? { memory, procedures } : {}),
@@ -371,6 +379,67 @@ export default function BotEditorModal({
               </span>
             </span>
           </label>
+
+          <div>
+            <div className="flex items-center justify-between">
+              <span className={labelClass + ' mb-0'}>Suggestion cards · {suggestions.length}/{MAX_SUGGESTIONS}</span>
+              {bot && (
+                <button
+                  type="button"
+                  disabled={drafting}
+                  onClick={async () => {
+                    setDrafting(true);
+                    setError('');
+                    try {
+                      const drafted = await draftBotSuggestions(bot.id);
+                      setSuggestions((current) => {
+                        const kept = current.map((s) => s.trim()).filter(Boolean);
+                        return [...kept, ...drafted.filter((s) => !kept.includes(s))].slice(0, MAX_SUGGESTIONS);
+                      });
+                    } catch (err) {
+                      setError(err?.message || 'Could not draft suggestions.');
+                    } finally {
+                      setDrafting(false);
+                    }
+                  }}
+                  className="text-[11px] text-cyan-300 hover:text-white disabled:opacity-50"
+                >
+                  {drafting ? 'Drafting…' : 'Draft some for me'}
+                </button>
+              )}
+            </div>
+            <p className="text-[11px] text-zinc-500 mt-1 mb-2">
+              Shown on an empty conversation so someone new knows where to start. A click puts one in the message box.
+            </p>
+            <div className="space-y-1.5">
+              {suggestions.map((suggestion, index) => (
+                <div key={index} className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={suggestion}
+                    maxLength={300}
+                    onChange={(e) => setSuggestions((current) => current.map((s, i) => (i === index ? e.target.value : s)))}
+                    placeholder="Is Nextcloud healthy?"
+                    className={`${inputClass} text-xs py-1.5`}
+                    aria-label={`Suggestion ${index + 1}`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setSuggestions((current) => current.filter((_, i) => i !== index))}
+                    className="p-1.5 text-zinc-500 hover:text-white"
+                    title="Remove"
+                  >
+                    <FiX />
+                  </button>
+                </div>
+              ))}
+              {suggestions.length < MAX_SUGGESTIONS && (
+                <button type="button" onClick={() => setSuggestions((current) => [...current, ''])} className="text-[11px] text-zinc-400 hover:text-white">
+                  + Add a suggestion
+                </button>
+              )}
+            </div>
+          </div>
 
           {bot && (
             <div>

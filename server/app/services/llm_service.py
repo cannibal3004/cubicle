@@ -25,14 +25,16 @@ async def stream_chat_completion(
     system_prompt: str = "",
     config: Optional[LLMConfig] = None,
     tools: Optional[List[Dict[str, Any]]] = None,
+    one_shot: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
+    """`one_shot`: nothing will continue this request, so its prompt is not worth caching."""
     config = config or current_llm_config()
     if config.provider == PROVIDER_MUAPI:
         # MUAPI takes a single prompt; it cannot do function calling.
         generator = muapi_service.stream_chat_completion(model, messages, system_prompt, config)
     else:
         generator = openai_compatible_service.stream_chat_completion(
-            model, messages, system_prompt, config, tools=tools
+            model, messages, system_prompt, config, tools=tools, one_shot=one_shot
         )
     # One gate for every request: chat rounds, compaction summaries, all of it.
     async for event in model_slots.gated(get_current_owner(), generator):

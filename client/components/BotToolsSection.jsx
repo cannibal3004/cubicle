@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { FiChevronRight, FiShield } from 'react-icons/fi';
-import { fetchToolCatalog } from '../lib/api';
+import { useToolCatalog } from '../lib/toolCatalog';
 import { Switch } from './ToolsPopover';
 import {
   countEnabled,
@@ -10,6 +10,7 @@ import {
   isToolOn,
   isToolkitOn,
   isTrusted,
+  toolkitDefaultOn,
   withGroup,
   withTool,
   withToolkit,
@@ -107,25 +108,17 @@ function Section({ title, subtitle, on, disabled, onToggle, tools, settings, onC
 // per-tool checkboxes underneath. Edits the settings object and the
 // trusted list passed in.
 export default function BotToolsSection({ settings, onChange, trusted = [], onTrustedChange = () => {} }) {
-  const [catalog, setCatalog] = useState(null);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    fetchToolCatalog()
-      .then(setCatalog)
-      .catch((err) => setError(err?.message || 'Could not load the tool list.'));
-  }, []);
+  const { catalog, error } = useToolCatalog();
 
   if (error) return <p className="text-xs text-rose-400">{error}</p>;
   if (!catalog) return <p className="text-xs text-zinc-500">Loading tools…</p>;
 
   const counts = countEnabled(catalog, settings);
-  const disabledGlobally = new Set(catalog.disabled_toolkits || []);
 
   return (
     <div className="space-y-2">
       <p className="text-[11px] text-zinc-500">
-        {counts.on} of {counts.total} tools will be offered to the model. Anything new that gets connected is on by default.
+        {counts.on} of {counts.total} tools will be offered to the model. A newly connected app is on unless it is switched off by default in Plugins.
       </p>
       <p className="text-[11px] text-zinc-500">
         A tool marked <span className="text-amber-400/90">asks first</span> shows you a card before it runs. Click the mark to{' '}
@@ -147,15 +140,15 @@ export default function BotToolsSection({ settings, onChange, trusted = [], onTr
         />
       ))}
       {catalog.toolkits.map((toolkit) => {
-        const offForAll = disabledGlobally.has(toolkit.slug);
+        const defaultOn = toolkitDefaultOn(catalog, toolkit.slug);
+        const on = isToolkitOn(settings, toolkit.slug, defaultOn);
         return (
           <Section
             key={toolkit.slug}
             title={toolkit.name}
-            subtitle={offForAll ? 'Turned off for all bots in Plugins' : undefined}
-            on={!offForAll && isToolkitOn(settings, toolkit.slug)}
-            disabled={offForAll}
-            onToggle={(on) => onChange(withToolkit(settings, toolkit.slug, on))}
+            subtitle={!defaultOn && !on ? 'Off by default (Plugins); switch on for this bot' : undefined}
+            on={on}
+            onToggle={(next) => onChange(withToolkit(settings, toolkit.slug, next, defaultOn))}
             tools={toolkit.tools}
             settings={settings}
             onChange={onChange}

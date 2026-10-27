@@ -2,8 +2,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { FiTool, FiSliders } from 'react-icons/fi';
-import { fetchToolCatalog } from '../lib/api';
-import { countEnabled, isGroupOn, isToolkitOn, withGroup, withToolkit } from '../lib/toolSettings';
+import { preloadToolCatalog, useToolCatalog } from '../lib/toolCatalog';
+import { countEnabled, isGroupOn, isToolkitOn, toolkitDefaultOn, withGroup, withToolkit } from '../lib/toolSettings';
 
 export function Switch({ on, onChange, disabled = false, label }) {
   return (
@@ -42,18 +42,17 @@ export default function ToolsPopover({ bot, onSave, onSaveAutoApproval, onSaveGa
     setThreshold(typeof bot?.gate_threshold === 'number' ? bot.gate_threshold : null);
   }, [bot?.id, bot?.gate_threshold]);
   const [open, setOpen] = useState(false);
-  const [catalog, setCatalog] = useState(null);
-  const [loading, setLoading] = useState(false);
+  // Loaded before the first click and kept, so opening shows it at once.
+  const { catalog, loading } = useToolCatalog(open);
+  useEffect(() => {
+    preloadToolCatalog();
+  }, []);
   const [saving, setSaving] = useState(false);
   const ref = useRef(null);
   const settings = bot?.tool_settings || {};
 
   useEffect(() => {
     if (!open) return undefined;
-    setLoading(true);
-    fetchToolCatalog()
-      .then((data) => setCatalog(data))
-      .finally(() => setLoading(false));
     const close = (event) => {
       if (ref.current && !ref.current.contains(event.target)) setOpen(false);
     };
@@ -71,7 +70,6 @@ export default function ToolsPopover({ bot, onSave, onSaveAutoApproval, onSaveGa
   };
 
   const counts = countEnabled(catalog, settings);
-  const disabledGlobally = new Set(catalog?.disabled_toolkits || []);
   const toolCount = (tools) => `${tools.length} tool${tools.length === 1 ? '' : 's'}`;
 
   return (
@@ -96,50 +94,6 @@ export default function ToolsPopover({ bot, onSave, onSaveAutoApproval, onSaveGa
           </div>
 
           <div className="max-h-80 overflow-y-auto py-1">
-            {!loading && catalog && catalog.tools_enabled === false && (
-              <p className="px-4 py-2 text-[11px] text-amber-400">Model tool calling is disabled on the server (LLM_TOOLS_ENABLED).</p>
-            )}
-            {catalog?.groups?.map((group) => (
-              <div key={group.id} className="flex items-center justify-between px-4 py-2 hover:bg-[#16161a]">
-                <div className="min-w-0">
-                  <div className="text-xs text-zinc-100">{group.label}</div>
-                  <div className="text-[10px] text-zinc-500">{toolCount(group.tools)}</div>
-                </div>
-                <Switch
-                  on={isGroupOn(settings, group.id)}
-                  disabled={saving}
-                  label={`Toggle ${group.label}`}
-                  onChange={(on) => apply(withGroup(settings, group.id, on))}
-                />
-              </div>
-            ))}
-
-            {catalog?.toolkits?.length > 0 && (
-              <div className="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wide text-zinc-500">Connected apps</div>
-            )}
-            {catalog?.toolkits?.map((toolkit) => {
-              const offForAll = disabledGlobally.has(toolkit.slug);
-              return (
-                <div key={toolkit.slug} className={`flex items-center justify-between px-4 py-2 hover:bg-[#16161a] ${offForAll ? 'opacity-60' : ''}`}>
-                  <div className="min-w-0">
-                    <div className="text-xs text-zinc-100 truncate">{toolkit.name}</div>
-                    <div className="text-[10px] text-zinc-500">
-                      {offForAll ? 'Turned off for all bots in Plugins' : toolCount(toolkit.tools)}
-                    </div>
-                  </div>
-                  <Switch
-                    on={!offForAll && isToolkitOn(settings, toolkit.slug)}
-                    disabled={saving || offForAll}
-                    label={`Toggle ${toolkit.name}`}
-                    onChange={(on) => apply(withToolkit(settings, toolkit.slug, on))}
-                  />
-                </div>
-              );
-            })}
-            {catalog && !catalog.toolkits?.length && (
-              <p className="px-4 py-2 text-[11px] text-zinc-500">No connected apps. Connect some in Plugins.</p>
-            )}
-
             {onSaveAutoApproval && (
               <>
                 <div className="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wide text-zinc-500">Auto-approval</div>
@@ -245,6 +199,54 @@ export default function ToolsPopover({ bot, onSave, onSaveAutoApproval, onSaveGa
                 </p>
               </div>
             )}
+            <div className="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wide text-zinc-500 border-t border-[#1f1f23]">Tools</div>
+            {!catalog && loading && <p className="px-4 py-2 text-[11px] text-zinc-500">Loading tools…</p>}
+            {!loading && catalog && catalog.tools_enabled === false && (
+              <p className="px-4 py-2 text-[11px] text-amber-400">Model tool calling is disabled on the server (LLM_TOOLS_ENABLED).</p>
+            )}
+            {catalog?.groups?.map((group) => (
+              <div key={group.id} className="flex items-center justify-between px-4 py-2 hover:bg-[#16161a]">
+                <div className="min-w-0">
+                  <div className="text-xs text-zinc-100">{group.label}</div>
+                  <div className="text-[10px] text-zinc-500">{toolCount(group.tools)}</div>
+                </div>
+                <Switch
+                  on={isGroupOn(settings, group.id)}
+                  disabled={saving}
+                  label={`Toggle ${group.label}`}
+                  onChange={(on) => apply(withGroup(settings, group.id, on))}
+                />
+              </div>
+            ))}
+
+            {catalog?.toolkits?.length > 0 && (
+              <div className="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wide text-zinc-500">Connected apps</div>
+            )}
+            {catalog?.toolkits?.map((toolkit) => {
+              const defaultOn = toolkitDefaultOn(catalog, toolkit.slug);
+              const on = isToolkitOn(settings, toolkit.slug, defaultOn);
+              return (
+                <div key={toolkit.slug} className="flex items-center justify-between px-4 py-2 hover:bg-[#16161a]">
+                  <div className="min-w-0">
+                    <div className="text-xs text-zinc-100 truncate">{toolkit.name}</div>
+                    <div className="text-[10px] text-zinc-500">
+                      {toolCount(toolkit.tools)}
+                      {!defaultOn && (on ? ' · on for this bot' : ' · off by default')}
+                    </div>
+                  </div>
+                  <Switch
+                    on={on}
+                    disabled={saving}
+                    label={`Toggle ${toolkit.name}`}
+                    onChange={(next) => apply(withToolkit(settings, toolkit.slug, next, defaultOn))}
+                  />
+                </div>
+              );
+            })}
+            {catalog && !catalog.toolkits?.length && (
+              <p className="px-4 py-2 text-[11px] text-zinc-500">No connected apps. Connect some in Plugins.</p>
+            )}
+
           </div>
 
           {onOpenEditor && (

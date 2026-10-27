@@ -110,12 +110,17 @@ def build_messages(messages: List[Dict[str, Any]], system_prompt: str = "") -> L
     return result
 
 
+# Servers that answered `prompt_cache_policy` with an error: it is not sent to them again.
+_NO_CACHE_POLICY: set = set()
+
+
 def build_request_body(
     model: str,
     messages: List[Dict[str, Any]],
     system_prompt: str,
     config: LLMConfig,
     tools: Optional[List[Dict[str, Any]]] = None,
+    one_shot: bool = False,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "model": model,
@@ -130,6 +135,11 @@ def build_request_body(
         body["max_tokens"] = settings.LLM_MAX_COMPLETION_TOKENS
     if tools:
         body["tools"] = tools
+    # A request nothing will continue (a summary, a draft) asks the server not
+    # to keep its prompt in the prompt cache, where it would only push out
+    # conversations that will be continued (halogen-flash-server reads this).
+    if one_shot and not config.is_openrouter and config.base_url not in _NO_CACHE_POLICY:
+        body["prompt_cache_policy"] = "no_store"
     return body
 
 
@@ -272,6 +282,7 @@ class OpenAICompatibleService:
         system_prompt: str,
         config: LLMConfig,
         tools: Optional[List[Dict[str, Any]]] = None,
+        one_shot: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Yield `content.delta` / `reasoning.delta` / `tool_calls` events, then `turn.completed`.
 
@@ -284,7 +295,7 @@ class OpenAICompatibleService:
         """
         target_model = (model or config.default_model).strip()
         url = f"{config.base_url}/chat/completions"
-        body = build_request_body(target_model, messages, system_prompt, config, tools=tools)
+        body = build_request_body(target_model, messages, system_prompt, config, tools=tools, one_shot=one_shot)
         headers = build_headers(config)
 
         try:
@@ -292,6 +303,12 @@ class OpenAICompatibleService:
                 async with client.stream("POST", url, json=body, headers=headers) as response:
                     if response.status_code != 200:
                         raw = await response.aread()
+                        if "prompt_cache_policy" in body and response.status_code in (400, 422) and b"prompt_cache_policy" in raw:
+                            # This server does not take the cache hint: ask again without it.
+                            _NO_CACHE_POLICY.add(config.base_url)
+                            async for event in self.stream_chat_completion(model, messages, system_prompt, config, tools=tools, one_shot=one_shot):
+                                yield event
+                            return
                         yield {"type": "content.delta", "delta": _error_detail(response.status_code, raw, url)}
                         yield {"type": "turn.completed", "ok": False}
                         return

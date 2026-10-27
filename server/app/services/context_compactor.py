@@ -175,7 +175,9 @@ async def compact_thread(
 
     pieces: List[str] = []
     usage: Dict[str, Any] = {}
-    async for event in llm_service.stream_chat_completion(model=model, messages=messages, system_prompt=system_prompt, config=config, tools=None):
+    async for event in llm_service.stream_chat_completion(
+        model=model, messages=messages, system_prompt=system_prompt, config=config, tools=None, one_shot=True
+    ):
         if event["type"] == "content.delta":
             pieces.append(event["delta"])
         elif event["type"] == "usage":
