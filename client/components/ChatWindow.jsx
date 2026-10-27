@@ -23,7 +23,6 @@ import {
   respondApproval,
   answerQuestion,
   fetchCommands,
-  clearChatHistory,
   compactThread,
   fetchChatHistory,
   fetchBot,
@@ -72,27 +71,30 @@ function formatHeaderDate(msgs) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-export default function ChatWindow({ bot, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onBotPatched, onToggleComputer, onOpenFiles, onOpenTakeover, onOpenAudit, onOpenSettings, defaultModel, prefill, onBotsChanged }) {
+export default function ChatWindow({ bot, threadId: threadIdProp, conversation, onConversationPatched, onNewConversation, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onBotPatched, onToggleComputer, onOpenFiles, onOpenTakeover, onOpenAudit, onOpenSettings, defaultModel, prefill, onBotsChanged }) {
+  // The conversation shown: its id is the thread id the server keys
+  // messages, turns and undo by (a bot's first conversation has the bot's id).
+  const threadId = threadIdProp || bot?.id;
   const [inputPrompt, setInputPrompt] = useState('');
-  // Streaming is tracked per bot by the Dashboard so a reply keeps going
-  // while another bot or tab is shown.
-  const isStreaming = Boolean(bot?.id && streamingBots?.[bot.id]);
-  const setStreamingFor = (botId, value) => {
-    if (onStreamingChange) onStreamingChange(botId, value);
+  // Streaming is tracked per conversation by the Dashboard so a reply keeps
+  // going while another conversation, bot or tab is shown.
+  const isStreaming = Boolean(threadId && streamingBots?.[threadId]);
+  const setStreamingFor = (key, value) => {
+    if (onStreamingChange) onStreamingChange(key, value);
   };
 
-  // One draft per bot: switching bots must not carry or lose typed text.
+  // One draft per conversation: switching must not carry or lose typed text.
   const draftsRef = useRef({});
-  const draftBotRef = useRef(bot?.id);
+  const draftBotRef = useRef(threadId);
   useEffect(() => {
     const previous = draftBotRef.current;
-    const next = bot?.id;
+    const next = threadId;
     if (previous === next) return;
     if (previous) draftsRef.current[previous] = inputPrompt;
     setInputPrompt(draftsRef.current[next] || '');
     draftBotRef.current = next;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bot?.id]);
+  }, [threadId]);
   const [isListening, setIsListening] = useState(false);
   const [activeModel, setActiveModel] = useState(bot?.model || defaultModel || '');
   const [selectedImage, setSelectedImage] = useState(null);
@@ -199,15 +201,15 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     scrollToBottom('smooth');
   };
 
-  const botApprovals = pendingApprovals.filter((approval) => approval.botId === bot?.id);
-  const botTakeovers = takeoverRequests.filter((request) => request.botId === bot?.id);
+  const botApprovals = pendingApprovals.filter((approval) => approval.threadId === threadId);
+  const botTakeovers = takeoverRequests.filter((request) => request.threadId === threadId);
 
-  // Switching bots shows a different thread: start it at the bottom.
+  // Switching bots or conversations shows a different thread: start it at the bottom.
   useEffect(() => {
     followRef.current = true;
     setShowJumpPill(false);
     scrollToBottom('auto');
-  }, [bot?.id]);
+  }, [threadId]);
 
   // New content (tokens, tool cards, approval cards) only moves the view when
   // the reader is following. Instant, not smooth: a smooth scroll per token
@@ -296,13 +298,13 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
   // One live subscription per bot. Attaching replays the turn's events from
   // `after`, so a reload or another machine rebuilds the reply in progress.
   const attachmentsRef = useRef({});
-  const attachToTurn = (botId, turnId, after = 0) => {
-    const existing = attachmentsRef.current[botId];
+  const attachToTurn = (threadKey, turnId, after = 0, ownerBotId = bot?.id) => {
+    const existing = attachmentsRef.current[threadKey];
     if (existing && (!turnId || existing.turnId === turnId)) return;
     if (existing) existing.close();
 
     let streamingMsgId = null;
-    const updateMessages = (updater) => setMessagesFor(botId, updater);
+    const updateMessages = (updater) => setMessagesFor(threadKey, updater);
 
     // Tokens arrive one event each. They are collected and applied once per
     // animation frame, so a burst of tokens costs one render, not one each.
@@ -333,17 +335,17 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
 
     const finish = () => {
       flushDeltas();
-      setStreamingFor(botId, false);
-      const current = attachmentsRef.current[botId];
+      setStreamingFor(threadKey, false);
+      const current = attachmentsRef.current[threadKey];
       if (current && current.turnId === turnId) {
         current.close();
-        delete attachmentsRef.current[botId];
+        delete attachmentsRef.current[threadKey];
       }
     };
 
-    setStreamingFor(botId, true);
+    setStreamingFor(threadKey, true);
     const close = subscribeToChatStream(
-      botId,
+      threadKey,
       { turnId, after },
       (event) => {
         if (event.type === 'content.delta') {
@@ -377,7 +379,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
         } else if (event.type === 'request.opened') {
           setPendingApprovals((prev) => [
             ...prev.filter((approval) => approval.requestId !== event.requestId),
-            { ...event, botId },
+            { ...event, threadId: threadKey },
           ]);
         } else if (event.type === 'request.answered' || event.type === 'request.expired') {
           // A question card is done with (answered, or the bot stopped waiting).
@@ -391,7 +393,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
         } else if (event.type === 'computer.takeover_requested') {
           setTakeoverRequests((prev) => [
             ...prev.slice(-4),
-            { id: `${event.botMsgId}-${Date.now()}`, reason: event.reason || '', botId },
+            { id: `${event.botMsgId}-${Date.now()}`, reason: event.reason || '', threadId: threadKey, threadKey: ownerBotId },
           ]);
         } else if (event.type === 'context.compacted' && event.message) {
           // The stored marker goes where it sits in history: after the user's
@@ -426,10 +428,10 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
               return existing.some(same) ? msg : { ...msg, attachments: [...existing, event.attachment] };
             })
           );
-        } else if (['tool.started', 'tool.completed', 'tool.failed', 'tool.denied', 'tool.expired'].includes(event.type)) {
+        } else if (['tool.waiting', 'tool.started', 'tool.completed', 'tool.failed', 'tool.denied', 'tool.expired'].includes(event.type)) {
           if (event.type === 'tool.completed' && String(event.callName || '').startsWith('todo_') && Array.isArray(event.result?.items) && onBotPatched) {
             // A todo result carries the whole list: show it without a refetch.
-            onBotPatched(botId, { todo: event.result.items });
+            if (onConversationPatched) onConversationPatched(threadKey, { todo: event.result.items });
           }
           if (event.type === 'tool.completed' && String(event.callName || '') === 'bots_create' && onBotsChanged) {
             // An orchestrator made a bot: the list shows it without a reload.
@@ -437,8 +439,8 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
           }
           if (event.type === 'tool.completed' && ['memory_write', 'memory_edit'].includes(String(event.callName || '')) && onBotPatched) {
             // The notes changed: fetch them so the editor shows the new text without a reload.
-            fetchBot(botId)
-              .then((fresh) => onBotPatched(botId, { memory: fresh.memory, memory_updated_at: fresh.memory_updated_at }))
+            fetchBot(ownerBotId)
+              .then((fresh) => onBotPatched(ownerBotId, { memory: fresh.memory, memory_updated_at: fresh.memory_updated_at }))
               .catch(() => {});
           }
           if (event.requestId) {
@@ -457,6 +459,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
                 name: event.callName || event.tool,
                 status: event.type.replace('tool.', ''),
                 error: event.error || null,
+                waiting: event.type === 'tool.waiting' ? event.reason || 'Waiting for the computer.' : null,
                 gate: event.gate || existing?.gate || null,
                 trusted: Boolean(event.trusted) || Boolean(existing?.trusted),
                 trusted_by: event.trustedBy || existing?.trusted_by || null,
@@ -490,7 +493,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
       },
       () => finish()
     );
-    attachmentsRef.current[botId] = { turnId, close };
+    attachmentsRef.current[threadKey] = { turnId, close };
   };
 
   useEffect(() => () => {
@@ -499,9 +502,9 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
 
   // Follow a turn that is already running for this bot: after a reload, a
   // bot switch, or when the server reports one started elsewhere.
-  const remoteTurnId = bot?.id ? turnStates?.[bot.id]?.turn_id : undefined;
+  const remoteTurnId = threadId ? turnStates?.[threadId]?.turn_id : undefined;
   useEffect(() => {
-    const botId = bot?.id;
+    const botId = threadId;
     if (!botId) return undefined;
     let cancelled = false;
     fetchTurnStatus(botId)
@@ -535,7 +538,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bot?.id, remoteTurnId]);
+  }, [threadId, remoteTurnId]);
 
   // ---- slash commands ---------------------------------------------------------
 
@@ -577,7 +580,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
   const editableSet = useMemo(() => new Set(editableKey ? editableKey.split(',') : []), [editableKey]);
 
   useEffect(() => {
-    const botId = bot?.id;
+    const botId = threadId;
     setRedoInfo(null);
     setRewindConfirm(null);
     setPendingRecording(null);
@@ -586,7 +589,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     let cancelled = false;
     fetchRedoState(botId).then((state) => { if (!cancelled) setRedoInfo(state); }).catch(() => {});
     return () => { cancelled = true; };
-  }, [bot?.id]);
+  }, [threadId]);
 
   // The message comes back into the composer: its text, files, image and demonstration.
   const restoreToComposer = (message) => {
@@ -608,7 +611,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
   };
 
   const performRewind = async (messageId) => {
-    const botId = bot?.id;
+    const botId = threadId;
     if (!botId || rewinding) return;
     setRewinding(true);
     setRewindConfirm(null);
@@ -635,7 +638,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
   // Edit (and /undo, and the up arrow): rewind at once, unless the bot did
   // something since that the rewind cannot take back; then ask first.
   const editMessage = async (message) => {
-    const botId = bot?.id;
+    const botId = threadId;
     if (!botId || !message?.id || rewinding) return;
     try {
       const preview = await previewRewind(botId, message.id);
@@ -664,7 +667,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
   };
 
   const redoLast = async () => {
-    const botId = bot?.id;
+    const botId = threadId;
     if (!botId) return;
     try {
       const result = await redoThread(botId);
@@ -686,15 +689,15 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
   };
 
   const addLocalMessage = (text, isError = false) => {
-    if (!bot?.id) return;
-    setMessagesFor(bot.id, (prev) => [
+    if (!threadId) return;
+    setMessagesFor(threadId, (prev) => [
       ...prev,
       { id: `local-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, sender: 'system', text, isError, local: true, created_at: new Date().toISOString() },
     ]);
   };
 
   const runClientCommand = async (spec, args) => {
-    const botId = bot?.id;
+    const botId = threadId;
     if (!botId) return;
     switch (spec.name) {
       case 'help': {
@@ -703,13 +706,12 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
         return;
       }
       case 'clear': {
-        if (!window.confirm(`Delete the whole conversation with ${botTitle}? This cannot be undone.`)) return;
+        // A fresh start is a new conversation; this one stays in the list.
+        if (!onNewConversation) return;
         try {
-          await clearChatHistory(botId);
-          setMessagesFor(botId, () => []);
-          addLocalMessage('Conversation cleared.');
+          await onNewConversation();
         } catch (err) {
-          addLocalMessage(`Could not clear the conversation: ${err.message}`, true);
+          addLocalMessage(`Could not start a new conversation: ${err.message}`, true);
         }
         return;
       }
@@ -758,7 +760,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
         }
         if (!onUpdateBot) return;
         try {
-          await onUpdateBot(botId, { auto_approval: mode });
+          await onUpdateBot(bot.id, { auto_approval: mode });
           addLocalMessage(`Auto-approval for ${botTitle}: ${mode}.`);
         } catch (err) {
           addLocalMessage(`Could not change auto-approval: ${err.message}`, true);
@@ -866,8 +868,8 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     const recordingId = options.recordingId || pendingRecording?.id || null;
     if ((!rawText.trim() && !selectedImage && readyFiles.length === 0 && !recordingId) || isStreaming) return;
 
-    const botId = bot?.id;
-    if (!botId) return;
+    const botId = threadId;
+    if (!botId || !bot?.id) return;
     const updateMessages = (updater) => setMessagesFor(botId, updater);
     const userText = rawText;
     const currentSelected = selectedImage;
@@ -907,7 +909,7 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
     try {
       const sent = await sendMessage(
         botId,
-        botId,
+        bot.id,
         userText,
         activeModel,
         finalImageUrl,
@@ -922,7 +924,9 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
         );
       }
       const started = await startTurn(botId, activeModel);
-      attachToTurn(botId, started?.turn?.turn_id || null, 0);
+      attachToTurn(botId, started?.turn?.turn_id || null, 0, bot.id);
+      // The server names a conversation after its first message.
+      if (conversation && !conversation.title && onConversationPatched) onConversationPatched(botId, { refresh: true });
     } catch (err) {
       console.error('Send message error:', err);
       setStreamingFor(botId, false);
@@ -1316,7 +1320,12 @@ export default function ChatWindow({ bot, models, catalogError, onRefreshModels,
       </div>
       </div>
 
-      {bot && <TodoCard bot={bot} onSave={onUpdateBot ? (items) => onUpdateBot(bot.id, { todo: items }) : null} />}
+      {bot && (
+        <TodoCard
+          bot={{ ...bot, todo: conversation?.todo || [] }}
+          onSave={onConversationPatched ? (items) => onConversationPatched(threadId, { todo: items }, { save: true }) : null}
+        />
+      )}
       </div>
 
       {/* A rewind that passes things the bot did: they stay done, so ask first. */}

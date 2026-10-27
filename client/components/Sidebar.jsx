@@ -85,6 +85,144 @@ function formatTime(iso) {
   return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
+// Today: the time; otherwise the day.
+function formatWhen(iso) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  if (date.toDateString() === new Date().toDateString()) return formatTime(iso);
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// The turns of one bot, across its conversations: a waiting one first.
+function botTurn(turnStates, botId) {
+  const turns = Object.values(turnStates || {}).filter((turn) => (turn.bot_id || turn.thread_id) === botId);
+  return turns.find((turn) => turn.pending_approval) || turns.find((turn) => turn.status === 'running') || null;
+}
+
+const SHOWN_CONVERSATIONS = 6;
+
+function conversationTitle(conversation) {
+  return conversation.title || (conversation.messages ? 'Untitled conversation' : 'New conversation');
+}
+
+// The active bot's conversations, under its card: most recent first.
+function ConversationList({ bot, conversations, activeThreadId, turnStates, onSelect, onNew, onRename, onArchive, onDelete }) {
+  const [showAll, setShowAll] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [draft, setDraft] = useState('');
+  const listed = conversations && conversations.length ? conversations : [{ id: bot.id, bot_id: bot.id, title: '', messages: 0 }];
+  const open = listed.filter((c) => !c.archived);
+  const shown = showAll ? listed : open.slice(0, SHOWN_CONVERSATIONS);
+  const more = listed.length - shown.length;
+
+  const saveTitle = (conversation) => {
+    const title = draft.trim();
+    setEditing(null);
+    if (title !== (conversation.title || '')) onRename?.(conversation, title);
+  };
+
+  return (
+    <div className="ml-6 mt-1 mb-1.5 pl-2 border-l border-[#26262b] space-y-0.5" onClick={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        onClick={() => onNew?.(bot.id)}
+        className="w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] text-zinc-500 hover:text-zinc-200 hover:bg-[#1c1c20] transition"
+      >
+        <FiPlus className="text-[11px]" /> New conversation
+      </button>
+      {shown.map((conversation) => {
+        const active = conversation.id === activeThreadId;
+        const turn = turnStates?.[conversation.id];
+        const waiting = Boolean(turn?.pending_approval);
+        const working = Boolean(turn && turn.status === 'running' && !waiting);
+        const title = conversationTitle(conversation);
+        return (
+          <div
+            key={conversation.id}
+            onClick={() => editing !== conversation.id && onSelect?.(bot.id, conversation.id)}
+            className={`group/conv flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer text-[11.5px] transition ${
+              active ? 'bg-[#232327] text-white' : 'text-zinc-400 hover:bg-[#1c1c20] hover:text-zinc-200'
+            }`}
+            title={title}
+          >
+            {waiting && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0 animate-pulse" title="Waiting for you" />}
+            {working && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0" title="Working on a reply" />}
+            {editing === conversation.id ? (
+              <input
+                autoFocus
+                value={draft}
+                maxLength={80}
+                onChange={(event) => setDraft(event.target.value)}
+                onBlur={() => saveTitle(conversation)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') saveTitle(conversation);
+                  if (event.key === 'Escape') setEditing(null);
+                }}
+                className="flex-1 min-w-0 bg-[#141417] border border-[#34343a] rounded px-1 py-0.5 text-[11.5px] text-zinc-100 focus:outline-none"
+                aria-label="Conversation title"
+              />
+            ) : (
+              <span className={`flex-1 min-w-0 truncate ${conversation.archived ? 'opacity-60 italic' : ''}`}>{title}</span>
+            )}
+            {editing !== conversation.id && (
+              <>
+                <span className="flex-shrink-0 text-[10px] text-zinc-600 group-hover/conv:hidden">{formatWhen(conversation.last_activity)}</span>
+                <span className="hidden group-hover/conv:flex items-center gap-0.5 flex-shrink-0">
+                  <button
+                    type="button"
+                    title="Rename"
+                    onClick={() => {
+                      setDraft(conversation.title || '');
+                      setEditing(conversation.id);
+                    }}
+                    className="p-0.5 text-zinc-500 hover:text-white"
+                  >
+                    <FiEdit2 className="text-[10px]" />
+                  </button>
+                  {conversation.id !== bot.id && (
+                    <button
+                      type="button"
+                      title={conversation.archived ? 'Unarchive' : 'Archive'}
+                      onClick={() => onArchive?.(conversation, !conversation.archived)}
+                      className="p-0.5 text-zinc-500 hover:text-white"
+                    >
+                      {conversation.archived ? <FiRotateCcw className="text-[10px]" /> : <FiArchive className="text-[10px]" />}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    title={conversation.id === bot.id ? 'Empty this conversation' : 'Delete'}
+                    onClick={() => {
+                      const question =
+                        conversation.id === bot.id
+                          ? `Empty "${title}"? Its messages are deleted; the conversation stays, as the bot's first one. This cannot be undone.`
+                          : `Delete "${title}"? Its messages are deleted. This cannot be undone.`;
+                      if (window.confirm(question)) onDelete?.(conversation);
+                    }}
+                    className="p-0.5 text-zinc-500 hover:text-rose-300"
+                  >
+                    <FiTrash2 className="text-[10px]" />
+                  </button>
+                </span>
+              </>
+            )}
+          </div>
+        );
+      })}
+      {(more > 0 || showAll) && (
+        <button
+          type="button"
+          onClick={() => setShowAll((v) => !v)}
+          className="w-full text-left px-2 py-0.5 text-[10.5px] text-zinc-600 hover:text-zinc-300"
+        >
+          {showAll ? 'Show fewer' : `Show all (${more} more${listed.some((c) => c.archived) ? ', archived included' : ''})`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function Sidebar({
   bots,
   activeBotId,
@@ -98,6 +236,13 @@ export default function Sidebar({
   onArchiveBot,
   onDeleteBot,
   turnStates,
+  conversations,
+  activeThreadId,
+  onSelectConversation,
+  onNewConversation,
+  onRenameConversation,
+  onArchiveConversation,
+  onDeleteConversation,
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   // Results from inside the conversations, fetched a moment after typing stops.
@@ -144,7 +289,7 @@ export default function Sidebar({
 
   const renderBot = (bot) => {
     const isActive = activeBotId === bot.id;
-    const turn = turnStates?.[bot.id];
+    const turn = botTurn(turnStates, bot.id);
     const needsApproval = Boolean(turn?.pending_approval);
     const isWorking = Boolean(turn && turn.status === 'running' && !needsApproval);
     const menuOpen = openMenuFor === bot.id;
@@ -154,8 +299,8 @@ export default function Sidebar({
     // it would then paint beneath the next card. The card with an open
     // menu is lifted above its neighbours for the same reason.
     return (
+      <React.Fragment key={bot.id}>
       <div
-        key={bot.id}
         onClick={() => onSelectBot(bot.id)}
         className={`group relative p-2.5 rounded-xl cursor-pointer transition-all duration-150 flex items-start gap-3 ${
           isActive
@@ -198,6 +343,20 @@ export default function Sidebar({
           </p>
         </div>
       </div>
+      {isActive && !bot.archived && (
+        <ConversationList
+          bot={bot}
+          conversations={conversations}
+          activeThreadId={activeThreadId}
+          turnStates={turnStates}
+          onSelect={onSelectConversation}
+          onNew={onNewConversation}
+          onRename={onRenameConversation}
+          onArchive={onArchiveConversation}
+          onDelete={onDeleteConversation}
+        />
+      )}
+      </React.Fragment>
     );
   };
 

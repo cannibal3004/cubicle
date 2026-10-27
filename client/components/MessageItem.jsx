@@ -82,6 +82,8 @@ const TOOL_STATUS_STYLES = {
   denied: 'text-amber-400',
   expired: 'text-amber-400',
   rejected: 'text-rose-400',
+  // Another conversation of the bot is using its computer.
+  waiting: 'text-amber-300',
 };
 
 // How a call got approved, for the tool chip. Only auto-approvals get a mark;
@@ -179,7 +181,7 @@ function ToolStep({ call }) {
   return (
     <div
       className="flex items-center gap-2 min-w-0 text-[10.5px] font-mono leading-5"
-      title={[call.error || call.summary || call.name, gateTitle(call.gate), how].filter(Boolean).join('\n')}
+      title={[call.status === 'waiting' ? call.waiting : null, call.error || call.summary || call.name, gateTitle(call.gate), how].filter(Boolean).join('\n')}
     >
       <FiTool className="flex-shrink-0 text-[10px] text-zinc-600" />
       <span className="flex-shrink-0 text-zinc-300">{call.name}</span>
