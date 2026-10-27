@@ -23,6 +23,12 @@ MEMORY_ITEM_TYPE = "memory"
 SUMMARY_LEAD = "Summary of the conversation so far (earlier messages were compacted):"
 MEMORY_LEAD = "Your notes (memory) at this point:"
 MEMORY_EDIT_LEAD = "The user edited your notes (memory). They now read:"
+# The notes a new conversation starts with, and word that another conversation changed them.
+MEMORY_START_LEAD = "Your notes (memory) as this conversation starts. They are shared by all your conversations with this user:"
+MEMORY_ELSEWHERE_NOTE = (
+    "Your notes (memory) were changed in another of your conversations. Read them again with memory_read before you rely on them "
+    "or change them, so you do not undo that change."
+)
 # A user edit of the bot's to-do list, recorded in the thread where it happened.
 TODO_ITEM_TYPE = "todo"
 TODO_LEAD = "Your to-do list at this point:"
@@ -186,8 +192,13 @@ def summary_messages(compaction: Dict[str, Any]) -> List[Dict[str, Any]]:
 def memory_note_messages(note: Dict[str, Any]) -> List[Dict[str, Any]]:
     """How a user edit of the notes is shown to the model, in place."""
     text = note.get("text") or ""
-    if (note.get("raw_payload") or {}).get("by") == "rewind":
+    by = (note.get("raw_payload") or {}).get("by")
+    if by == "rewind":
         body = f"{REWIND_NOTES_LEAD}\n\n{text}" if text else REWIND_NOTES_LEAD + "\n\n(empty)"
+    elif by == "start":
+        body = f"{MEMORY_START_LEAD}\n\n{text}"
+    elif by == "elsewhere":
+        body = MEMORY_ELSEWHERE_NOTE
     else:
         body = f"{MEMORY_EDIT_LEAD}\n\n{text}" if text else "The user cleared your notes (memory)."
     return [

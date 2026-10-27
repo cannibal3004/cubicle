@@ -15,7 +15,8 @@ from app.services import llm_service
 from app.services.command_rules import clean_rules
 from app.services.search import schedule_notes_index
 from app.services.bot_memory import MEMORY_MAX_CHARS, MemoryError, clean_memory, memory_note_message
-from app.services.bot_todo import TODO_MAX_ITEMS, TodoError, clean_todo, todo_note_message
+from app.services.bot_todo import TODO_MAX_ITEMS, TodoError, clean_todo, get_todo, todo_note_message
+from app.services import conversations
 from app.services.computer_provider import ComputerProviderError, computer_id_for_bot, computer_provider
 from app.services.orchestrator import ensure_orchestrator
 from app.services import procedures as procedure_service
@@ -246,6 +247,16 @@ async def create_bot(bot_data: BotInput):
     return bot
 
 
+def _announce_notes(bot_id: str, memory: str) -> None:
+    """The user's edit of the notes, shown in each of the bot's conversations that has begun, and in
+    its first one (which, unlike the others, does not start with the notes)."""
+    for item in conversations.list_for_bot(bot_id):
+        if item["archived"] or (not item["messages"] and item["id"] != bot_id):
+            continue
+        current_storage().add_message(memory_note_message(item["id"], memory, message_id=f"msg-{uuid.uuid4().hex[:6]}", bot_id=bot_id))
+        conversations.notes_seen(item["id"])
+
+
 @router.put("/{bot_id}", response_model=Bot)
 async def update_bot(bot_id: str, updates: BotUpdate):
     bots = current_storage().get_bots()
@@ -294,18 +305,18 @@ async def update_bot(bot_id: str, updates: BotUpdate):
             bots[index]["memory"] = memory
             bots[index]["memory_updated_at"] = datetime.now().isoformat()
             schedule_notes_index(bot_id, str(bots[index].get("name") or bot_id), memory)
-            # Recorded in the thread so the model sees the edit where it
-            # happened, without the system prompt (and the cache) changing.
-            memory_note = memory_note_message(bot_id, memory, message_id=f"msg-{uuid.uuid4().hex[:6]}")
+            # Recorded in the bot's conversations so the model sees the edit
+            # where it happened, without the system prompt (and the cache) changing.
+            memory_note = memory
     todo_note = None
     if "todo" in changes:
         try:
             todo = clean_todo(changes.pop("todo"))
         except TodoError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        if todo != list(bots[index].get("todo") or []):
-            bots[index]["todo"] = todo
-            bots[index]["todo_updated_at"] = datetime.now().isoformat()
+        # The list given here is the bot's first conversation's (each conversation has its own).
+        if todo != get_todo(bot_id):
+            conversations.update(bot_id, {"todo": todo, "todo_updated_at": datetime.now().isoformat()})
             todo_note = todo_note_message(bot_id, todo, message_id=f"msg-{uuid.uuid4().hex[:6]}")
     archived = changes.pop("archived", None)
     bots[index].update({key: value for key, value in changes.items() if key in EDITABLE_FIELDS})
@@ -314,7 +325,7 @@ async def update_bot(bot_id: str, updates: BotUpdate):
         bots[index]["archived_at"] = datetime.now().isoformat() if archived else None
         if archived:
             # An archived bot should not keep working in the background.
-            turn_manager.cancel(bot_id)
+            turn_manager.cancel_bot(bot_id)
     current_storage().save_bots(bots)
     if {"trusted_tools", "allowed_commands", "auto_approval", "gate_threshold"} & set(changes):
         # A card waiting in a running turn may be covered by the new settings.
@@ -324,7 +335,7 @@ async def update_bot(bot_id: str, updates: BotUpdate):
     if procedures_before is not None:
         procedure_service.sync_index(bot_id, procedures_before, bots[index].get("procedures") or [])
     if memory_note is not None:
-        current_storage().add_message(memory_note)
+        _announce_notes(bot_id, memory_note)
     if todo_note is not None:
         current_storage().add_message(todo_note)
     return bots[index]
@@ -360,14 +371,14 @@ async def delete_bot(bot_id: str):
     """Remove a bot together with its transcript, running turn, and computer."""
     bots = current_storage().get_bots()
     index = _find(bots, bot_id)
-    turn_manager.cancel(bot_id)
+    turn_manager.cancel_bot(bot_id)
     try:
         await computer_provider.stop(computer_id_for_bot(bot_id))
     except ComputerProviderError:
         pass  # No computer, or none running: nothing to stop.
     except Exception as exc:  # The deletion must not fail because a container misbehaves.
         logger.warning("Could not stop the computer for %s during deletion: %s", bot_id, exc)
-    deleted_messages = current_storage().delete_messages(bot_id)
+    deleted_messages = sum(conversations.delete(c["id"]) for c in conversations.list_for_bot(bot_id))
     current_storage().delete_bot_secrets(bot_id)
     current_storage().delete_bot_schedules(bot_id)
     bots.pop(index)

@@ -76,8 +76,14 @@ def _manager():
     return getattr(chat_router, "turn_manager", turn_manager)
 
 
-def _turn_state(bot_id: str) -> Dict[str, Any]:
-    turn = _manager().current(bot_id)
+def _turn_state(bot_id: str, thread_id: Optional[str] = None) -> Dict[str, Any]:
+    """What the bot is doing: in one conversation when given, else in any of them (one waiting on the user first)."""
+    manager = _manager()
+    if thread_id:
+        turn = manager.current(thread_id)
+    else:
+        running = manager.running_for_bot(bot_id) if hasattr(manager, "running_for_bot") else []
+        turn = next((t for t in running if t.pending_approval), None) or (running[0] if running else None)
     if turn is None or turn.finished:
         return {"state": "idle"}
     pending = turn.pending_approval or {}
@@ -99,9 +105,16 @@ def _last_activity(messages: List[Dict[str, Any]]) -> Optional[str]:
     return messages[-1].get("created_at") if messages else None
 
 
+def _latest_thread(bot: Dict[str, Any], storage: StorageService) -> str:
+    from app.services import conversations
+
+    return conversations.latest_for_bot(bot["id"], storage)["id"]
+
+
 def bot_overview(bot: Dict[str, Any], storage: StorageService) -> Dict[str, Any]:
-    messages = storage.get_messages(thread_id=bot["id"])
-    todo = get_todo(bot["id"], storage)
+    thread_id = _latest_thread(bot, storage)
+    messages = storage.get_messages(thread_id=thread_id)
+    todo = get_todo(thread_id, storage)
     return {
         "id": bot["id"],
         "name": bot.get("name"),
@@ -118,7 +131,8 @@ def bot_overview(bot: Dict[str, Any], storage: StorageService) -> Dict[str, Any]
 
 
 def bot_status(bot: Dict[str, Any], storage: StorageService) -> Dict[str, Any]:
-    messages = storage.get_messages(thread_id=bot["id"])
+    thread_id = _latest_thread(bot, storage)
+    messages = storage.get_messages(thread_id=thread_id)
     compaction = latest_compaction(messages)
     recent = []
     for message in messages[-RECENT_MESSAGES:]:
@@ -146,7 +160,7 @@ def bot_status(bot: Dict[str, Any], storage: StorageService) -> Dict[str, Any]:
         "system_prompt": _trim(bot.get("system_prompt"), 1500),
         "summary": _trim(compaction.get("text"), SUMMARY_MAX_CHARS) if compaction else "",
         "summary_at": compaction.get("created_at") if compaction else None,
-        "todo": get_todo(bot["id"], storage),
+        "todo": get_todo(thread_id, storage),
         "notes": _trim(get_memory(bot["id"], storage), NOTES_MAX_CHARS),
         "recent": recent,
         "computer": computer,
@@ -155,11 +169,19 @@ def bot_status(bot: Dict[str, Any], storage: StorageService) -> Dict[str, Any]:
 
 # ---- delegating ------------------------------------------------------------------------------
 
-def delegated_message(bot_id: str, text: str, sender: Dict[str, Any], *, message_id: Optional[str] = None) -> Dict[str, Any]:
+def task_thread(sender: Dict[str, Any], target: Dict[str, Any], storage: Optional[StorageService] = None) -> str:
+    """The conversation of `target` that an orchestrator's tasks go to, one per orchestrator."""
+    from app.services import conversations
+
+    title = f"From {sender.get('name') or DEFAULT_NAME}"
+    return conversations.for_purpose(target["id"], f"delegated:{sender.get('id')}", title, storage)["id"]
+
+
+def delegated_message(bot_id: str, text: str, sender: Dict[str, Any], *, message_id: Optional[str] = None, thread_id: Optional[str] = None) -> Dict[str, Any]:
     """The message the orchestrator posts into another bot's chat."""
     return {
         "id": message_id or f"msg-{uuid.uuid4().hex[:6]}",
-        "thread_id": bot_id,
+        "thread_id": thread_id or bot_id,
         "bot_id": bot_id,
         "sender": "user",
         "text": text,
@@ -169,9 +191,9 @@ def delegated_message(bot_id: str, text: str, sender: Dict[str, Any], *, message
     }
 
 
-def _reply_after(storage: StorageService, bot_id: str, message_id: str) -> Dict[str, Any]:
+def _reply_after(storage: StorageService, thread_id: str, message_id: str) -> Dict[str, Any]:
     """The bot's reply to a delegated message, as the orchestrator gets it."""
-    messages = storage.get_messages(thread_id=bot_id)
+    messages = storage.get_messages(thread_id=thread_id)
     after = False
     reply = None
     for message in messages:
@@ -191,9 +213,10 @@ async def delegate(
 ) -> Dict[str, Any]:
     from app.routers import chat as chat_router  # the turn machinery; imported here to avoid a cycle
 
-    message = delegated_message(target["id"], text, sender)
+    thread_id = task_thread(sender, target, storage)
+    message = delegated_message(target["id"], text, sender, thread_id=thread_id)
     try:
-        turn = await chat_router.start_scheduled_turn(target["id"], message)
+        turn = await chat_router.start_scheduled_turn(thread_id, message)
     except TurnBusyError:
         return {"bot": target["id"], "status": "busy", "note": f"{target.get('name')} is still working on something; try again later or check with bots_status."}
     result: Dict[str, Any] = {"bot": target["id"], "name": target.get("name"), "turn_id": turn.turn_id, "message_id": message["id"]}
@@ -215,7 +238,7 @@ async def delegate(
         await asyncio.sleep(2)
     if not turn.finished:
         return {**result, "status": "running", "note": "Still working when the wait ran out; collect the reply later with bots_reply."}
-    return {**result, "status": turn.status, "error": turn.error, **_reply_after(storage, target["id"], message["id"])}
+    return {**result, "status": turn.status, "error": turn.error, **_reply_after(storage, thread_id, message["id"])}
 
 
 # ---- gateway executors ---------------------------------------------------------------------------
@@ -333,11 +356,12 @@ async def execute_reply(call: ActionInvocation) -> Dict[str, Any]:
     target = _other(call, storage, me)
     arguments = call.arguments if isinstance(call.arguments, dict) else {}
     message_id = str(arguments.get("message_id") or "")
-    state = _turn_state(target["id"])
+    thread_id = task_thread(me, target, storage)
+    state = _turn_state(target["id"], thread_id)
     if message_id:
-        found = _reply_after(storage, target["id"], message_id)
+        found = _reply_after(storage, thread_id, message_id)
     else:
-        messages = [m for m in storage.get_messages(thread_id=target["id"]) if m.get("sender") == "bot"]
+        messages = [m for m in storage.get_messages(thread_id=thread_id) if m.get("sender") == "bot"]
         last = messages[-1] if messages else None
         found = {"reply": _trim(last.get("text"), REPLY_MAX_CHARS) if last else "", "replied_at": last.get("created_at") if last else None}
     return {"bot": target["id"], "name": target.get("name"), **state, **found}

@@ -356,6 +356,59 @@ class StorageService:
                 (message_id, thread_id, self.owner_id, json.dumps(message)),
             )
 
+    # ---- conversations (services/conversations.py) -----------------------
+
+    def get_conversations(self, bot_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        with self.database.connect() as connection:
+            if bot_id:
+                rows = connection.execute(
+                    "SELECT payload FROM threads WHERE owner_id = ? AND bot_id = ? ORDER BY rowid", (self.owner_id, bot_id)
+                ).fetchall()
+            else:
+                rows = connection.execute("SELECT payload FROM threads WHERE owner_id = ? ORDER BY rowid", (self.owner_id,)).fetchall()
+        return [payload for row in rows if isinstance((payload := self._decode_payload(row[0])), dict)]
+
+    def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT payload FROM threads WHERE owner_id = ? AND id = ?", (self.owner_id, str(conversation_id or ""))
+            ).fetchone()
+        payload = self._decode_payload(row[0]) if row else None
+        return payload if isinstance(payload, dict) else None
+
+    def save_conversation(self, record: Dict[str, Any]) -> None:
+        if not isinstance(record, dict) or not record.get("id") or not record.get("bot_id"):
+            raise ValueError("A conversation needs an id and a bot id.")
+        with self.database.connect() as connection:
+            connection.execute(
+                "INSERT INTO threads(id, bot_id, owner_id, payload) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET bot_id = excluded.bot_id, payload = excluded.payload WHERE threads.owner_id = excluded.owner_id",
+                (str(record["id"]), str(record["bot_id"]), self.owner_id, json.dumps(record)),
+            )
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        with self.database.connect() as connection:
+            cursor = connection.execute("DELETE FROM threads WHERE owner_id = ? AND id = ?", (self.owner_id, str(conversation_id or "")))
+        return (cursor.rowcount or 0) > 0
+
+    def thread_activity(self) -> Dict[str, Dict[str, Any]]:
+        """Per thread: how many stored rows it has and when the last one was added."""
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT m.thread_id, c.n, m.payload FROM messages m JOIN ("
+                "SELECT MAX(rowid) AS r, COUNT(*) AS n FROM messages WHERE owner_id = ? GROUP BY thread_id"
+                ") c ON m.rowid = c.r",
+                (self.owner_id,),
+            ).fetchall()
+        activity: Dict[str, Dict[str, Any]] = {}
+        for thread_id, count, raw in rows:
+            payload = self._decode_payload(raw)
+            activity[str(thread_id)] = {
+                "messages": int(count or 0),
+                "last_activity": payload.get("created_at") if isinstance(payload, dict) else None,
+            }
+        return activity
+
     # ---- named secrets for bot computers --------------------------------
 
     def list_secrets(self, scope: str, bot_id: str = "") -> List[Dict[str, Any]]:

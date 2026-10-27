@@ -191,14 +191,20 @@ async def compact_thread(
     # The bot's notes as they stand now travel with the summary, so after the
     # cut the model still sees them (their earlier edits are gone with the
     # older turns), and sees the same text every turn until the next cut.
-    bot = next((b for b in storage.get_bots() if b.get("id") == thread_id), {})
+    from app.services import conversations
+    from app.services.bot_todo import get_todo
+
+    bot_id = conversations.bot_id_of(thread_id, storage) or thread_id
+    bot = next((b for b in storage.get_bots() if b.get("id") == bot_id), {})
     memory = str(bot.get("memory") or "")
-    todo = list(bot.get("todo") or [])
+    todo = get_todo(thread_id, storage)
+    # The summary carries the notes as they are now, so this conversation is up to date with them.
+    conversations.notes_seen(thread_id, storage)
 
     message = {
         "id": f"msg-{uuid.uuid4().hex[:6]}",
         "thread_id": thread_id,
-        "bot_id": thread_id,
+        "bot_id": bot_id,
         "sender": "system",
         "text": summary,
         "created_at": datetime.now().isoformat(),

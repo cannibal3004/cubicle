@@ -405,12 +405,19 @@ def record_run(
     return public(record)
 
 
-def scheduled_message(record: Dict[str, Any], *, message_id: str, now: Optional[datetime] = None) -> Dict[str, Any]:
+def run_thread(record: Dict[str, Any]) -> str:
+    """The conversation a schedule's runs go to: the bot's "Scheduled" one, so they do not interrupt the user's own."""
+    from app.services import conversations
+
+    return conversations.for_purpose(record["bot_id"], "scheduled")["id"]
+
+
+def scheduled_message(record: Dict[str, Any], *, message_id: str, now: Optional[datetime] = None, thread_id: Optional[str] = None) -> Dict[str, Any]:
     """The user message a run posts into the chat."""
     when = now or now_local()
     return {
         "id": message_id,
-        "thread_id": record["bot_id"],
+        "thread_id": thread_id or record["bot_id"],
         "bot_id": record["bot_id"],
         "sender": "user",
         "text": record["prompt"],

@@ -230,7 +230,9 @@ class OwnershipRouteTests(unittest.TestCase):
 
         seen = []
 
-        async def run_turn(bot_id, message, owner_id=None):
+        async def run_turn(thread_id, message, owner_id=None):
+            # Runs go to the bot's "Scheduled" conversation, under the schedule's owner.
+            bot_id = current_storage().get_conversation(thread_id)["bot_id"]
             seen.append((bot_id, owner_id, get_current_owner(), current_storage().owner_id))
             return SimpleNamespace(task=None, status="completed", error=None, pending_approval=None, turn_id="t")
 

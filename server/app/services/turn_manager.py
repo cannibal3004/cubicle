@@ -170,6 +170,14 @@ class TurnManager:
         turn.task.cancel()
         return turn
 
+    def running_for_bot(self, bot_id: str) -> List[Turn]:
+        """The bot's unfinished turns, one per conversation that has one."""
+        return [turn for turn in self._latest.values() if turn.bot_id == bot_id and not turn.finished]
+
+    def cancel_bot(self, bot_id: str) -> List[Turn]:
+        """Stop the bot's replies in all of its conversations."""
+        return [turn for turn in (self.cancel(t.thread_id) for t in self.running_for_bot(bot_id)) if turn is not None]
+
     def overview(self) -> List[Dict[str, Any]]:
         """Running turns and turns waiting on an approval, for the sidebar."""
         self._cleanup()

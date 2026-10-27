@@ -13,7 +13,8 @@ thread; and each compaction stores a snapshot that the summary renders. So
 a turn that was cut off, or a compaction that folded the older rounds
 away, does not lose what was done and what remains.
 
-The list lives on the bot record (`todo`) like the notes do.
+Each conversation keeps its own list, on its record (services/conversations):
+the work at hand is the conversation's, while the notes are the bot's.
 """
 
 from __future__ import annotations
@@ -94,24 +95,23 @@ def render_todo(items: List[Dict[str, Any]]) -> str:
     return "\n".join(f"- {_MARKS.get(item['state'], '[ ]')} {item['id']}: {item['text']}" for item in items)
 
 
-def get_todo(bot_id: str, storage: Optional[StorageService] = None) -> List[Dict[str, Any]]:
-    for bot in (storage or current_storage()).get_bots():
-        if bot.get("id") == bot_id:
-            try:
-                return clean_todo(bot.get("todo") or [])
-            except TodoError:
-                return []
-    return []
+def get_todo(thread_id: str, storage: Optional[StorageService] = None) -> List[Dict[str, Any]]:
+    """The to-do list of a conversation (a bot's id names its first conversation)."""
+    from app.services import conversations
+
+    record = conversations.get(thread_id, storage or current_storage())
+    try:
+        return clean_todo((record or {}).get("todo") or [])
+    except TodoError:
+        return []
 
 
-def _save_todo(bot_id: str, items: List[Dict[str, Any]], storage: StorageService) -> Dict[str, Any]:
-    bots = storage.get_bots()
-    bot = next((b for b in bots if b.get("id") == bot_id), None)
-    if bot is None:
-        raise TodoError("The bot does not exist.")
-    bot["todo"] = items
-    bot["todo_updated_at"] = datetime.now().isoformat()
-    storage.save_bots(bots)
+def _save_todo(thread_id: str, items: List[Dict[str, Any]], storage: StorageService) -> Dict[str, Any]:
+    from app.services import conversations
+
+    if conversations.get(thread_id, storage) is None:
+        raise TodoError("The conversation does not exist.")
+    conversations.update(thread_id, {"todo": items, "todo_updated_at": datetime.now().isoformat()}, storage)
     return summary(items)
 
 
@@ -171,12 +171,12 @@ def update_todo(
     return {**_save_todo(bot_id, current, storage), "updated": key}
 
 
-def todo_note_message(bot_id: str, items: List[Dict[str, Any]], *, message_id: str) -> Dict[str, Any]:
+def todo_note_message(thread_id: str, items: List[Dict[str, Any]], *, message_id: str, bot_id: Optional[str] = None) -> Dict[str, Any]:
     """The thread item recording that the user edited the list."""
     return {
         "id": message_id,
-        "thread_id": bot_id,
-        "bot_id": bot_id,
+        "thread_id": thread_id,
+        "bot_id": bot_id or thread_id,
         "sender": "system",
         "text": render_todo(items),
         "created_at": datetime.now().isoformat(),
@@ -186,6 +186,10 @@ def todo_note_message(bot_id: str, items: List[Dict[str, Any]], *, message_id: s
 
 
 def _bot_id(call: ActionInvocation) -> str:
+    """The conversation whose list it is: the call's thread, else the bot's first conversation."""
+    thread_id = call.arguments.get("thread_id")
+    if isinstance(thread_id, str) and thread_id.strip():
+        return thread_id
     bot_id = call.arguments.get("bot_id")
     if not isinstance(bot_id, str) or not bot_id.strip():
         raise TodoError("To-do actions require a bot id.")

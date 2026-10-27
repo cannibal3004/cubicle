@@ -343,19 +343,22 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)
             self.assertEqual([m["text"] for _, m in self.started], ["Ping."])
             self.assertEqual(self.started[0][1]["raw_payload"]["scheduled"]["name"], "Ping")
-            self.assertEqual(self.storage.get_messages(self.bot)[-1]["text"], "Ping.")
+            # The run went to the bot's "Scheduled" conversation, not its first one.
+            run_thread = self.started[0][0]
+            self.assertEqual(self.storage.get_conversation(run_thread)["purpose"], "scheduled")
+            self.assertEqual(self.storage.get_messages(run_thread)[-1]["text"], "Ping.")
             finished = schedule_service.get_schedule(once["id"], self.storage)
             self.assertEqual((finished["last_status"], finished["enabled"], finished["next_run_at"]), ("completed", False, None))
 
             # The daily one is due at 09:30; a running turn makes it a skip.
             at_daily = NOW + timedelta(minutes=30)
-            self.manager.start(self.bot, self.bot, "m", lambda turn: asyncio.sleep(0.2))
+            self.manager.start(run_thread, self.bot, "m", lambda turn: asyncio.sleep(0.2))
             self.assertEqual(await scheduler.tick(at_daily), 1)
             skipped = schedule_service.get_schedule(daily["id"], self.storage)
             self.assertEqual((skipped["last_status"], skipped["last_note"]), ("skipped", "a reply was still in progress"))
             self.assertEqual(skipped["next_run_at"], datetime(2026, 10, 13, 9, 30, tzinfo=TZ).isoformat(timespec="minutes"))
             self.assertEqual(len(self.started), 1)
-            self.manager.cancel(self.bot)
+            self.manager.cancel(run_thread)
 
     async def test_a_turn_that_cannot_start_is_recorded(self):
         async def busy(bot_id, message, owner_id=None):

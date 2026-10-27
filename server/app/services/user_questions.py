@@ -98,7 +98,8 @@ async def execute_ask(call: ActionInvocation) -> Dict[str, Any]:
     options = _clean_options(call.arguments.get("options"))
     allow_other = bool(call.arguments.get("allow_other", True)) or not options
 
-    turn = turn_manager.current(bot_id)
+    thread_id = call.arguments.get("thread_id") or bot_id
+    turn = turn_manager.current(thread_id)
     if turn is None or turn.finished:
         raise QuestionError("There is no running turn to ask the user in.")
 

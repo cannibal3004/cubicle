@@ -150,9 +150,13 @@ class DelegationTests(unittest.TestCase):
         # The worker saw the delegation lead, and its chat holds both sides.
         first = recorder["rounds"][0]["messages"][-1]["content"]
         self.assertTrue(first.startswith(DELEGATED_LEAD.format(name="Cubie")))
-        texts = [(m["sender"], m["text"]) for m in self.storage.get_messages(self.worker["id"])][-2:]
+        # The task went to the worker's "From Cubie" conversation, not its first one.
+        task_thread = orchestrator.task_thread(self.cubie, self.worker, self.storage)
+        self.assertEqual(self.storage.get_conversation(task_thread)["title"], f"From {self.cubie['name']}")
+        texts = [(m["sender"], m["text"]) for m in self.storage.get_messages(task_thread)][-2:]
         self.assertEqual(texts, [("user", "Check the logs."), ("bot", "Logs look clean.")])
-        self.assertEqual(self.storage.get_messages(self.worker["id"])[-2]["raw_payload"]["delegated"]["from"], self.cubie["id"])
+        self.assertEqual(self.storage.get_messages(task_thread)[-2]["raw_payload"]["delegated"]["from"], self.cubie["id"])
+        self.assertFalse(any(m.get("sender") == "user" for m in self.storage.get_messages(self.worker["id"])))
         # bots_reply finds the same reply by message id, and the latest one without it.
         by_id = asyncio.run(orchestrator.execute_reply(_call("bots.reply", self.cubie["id"], bot_id=self.worker["id"], message_id=result["message_id"])))
         self.assertEqual((by_id["reply"], by_id["state"]), ("Logs look clean.", "idle"))

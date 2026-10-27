@@ -27,7 +27,7 @@ class AskUserInvocationTests(unittest.TestCase):
     def test_question_with_options(self):
         call = build_invocation("ask_user", {"question": "Which region?", "options": ["North", "South"]}, "bot-1")
         self.assertEqual(call.name, "user.ask")
-        self.assertEqual(call.arguments, {"bot_id": "bot-1", "question": "Which region?", "options": ["North", "South"], "allow_other": True})
+        self.assertEqual(call.arguments, {"bot_id": "bot-1", "question": "Which region?", "options": ["North", "South"], "allow_other": True, "thread_id": "bot-1"})
         self.assertEqual(call.preview, "Ask the user: Which region?")
 
     def test_free_text_question_always_allows_typing(self):
