@@ -9,6 +9,7 @@ import ModelPicker from './ModelPicker';
 import ToolsPopover from './ToolsPopover';
 import ContextMeter from './ContextMeter';
 import TodoCard from './TodoCard';
+import WorkNotesSection from './WorkNotesSection';
 import MascotAvatar from './MascotAvatar';
 import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiEdit2, FiArrowDown, FiFile, FiFolder, FiRotateCw, FiVideo, FiAlertTriangle } from 'react-icons/fi';
 import ComputerStatusButton from './ComputerStatusButton';
@@ -71,7 +72,7 @@ function formatHeaderDate(msgs) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-export default function ChatWindow({ bot, threadId: threadIdProp, conversation, onConversationPatched, onNewConversation, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onBotPatched, onToggleComputer, onOpenFiles, onOpenTakeover, onOpenAudit, onOpenSettings, defaultModel, prefill, onBotsChanged }) {
+export default function ChatWindow({ bot, threadId: threadIdProp, conversation, project, onProjectsChanged, onSaveWorkNotes, onConversationPatched, onNewConversation, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onBotPatched, onToggleComputer, onOpenFiles, onOpenTakeover, onOpenAudit, onOpenSettings, defaultModel, prefill, onBotsChanged }) {
   // The conversation shown: its id is the thread id the server keys
   // messages, turns and undo by (a bot's first conversation has the bot's id).
   const threadId = threadIdProp || bot?.id;
@@ -432,6 +433,9 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
           if (event.type === 'tool.completed' && String(event.callName || '').startsWith('todo_') && Array.isArray(event.result?.items) && onBotPatched) {
             // A todo result carries the whole list: show it without a refetch.
             if (onConversationPatched) onConversationPatched(threadKey, { todo: event.result.items });
+          }
+          if (event.type === 'tool.completed' && /^(work_notes_|project)/.test(String(event.callName || '')) && onProjectsChanged) {
+            onProjectsChanged(ownerBotId, threadKey);
           }
           if (event.type === 'tool.completed' && String(event.callName || '') === 'bots_create' && onBotsChanged) {
             // An orchestrator made a bot: the list shows it without a reload.
@@ -1327,9 +1331,12 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
 
       {bot && (
         <TodoCard
-          bot={{ ...bot, todo: conversation?.todo || [] }}
+          bot={{ ...bot, id: threadId, todo: conversation?.todo || [] }}
           onSave={onConversationPatched ? (items) => onConversationPatched(threadId, { todo: items }, { save: true }) : null}
-        />
+          hasMore={Boolean(project?.notes || conversation?.work_notes)}
+        >
+          <WorkNotesSection project={project} conversation={conversation} onSave={onSaveWorkNotes} />
+        </TodoCard>
       )}
       </div>
 

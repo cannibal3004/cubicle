@@ -383,9 +383,40 @@ function MessageItem({ message, botId, onEdit }) {
     return (
       <details className="my-3 mx-auto max-w-xl rounded-xl border border-amber-500/20 bg-amber-500/5 text-[11px] text-zinc-300 shadow-sm">
         <summary className="cursor-pointer select-none px-3 py-1.5 font-mono text-amber-300/90">
-          {message.raw_payload?.by === 'rewind' ? 'Current notes shown to the bot after a rewind' : 'Notes edited'}{message.text ? ` · ${message.text.length} characters` : ' · cleared'}{formattedTime ? ` · ${formattedTime}` : ''}
+          {{
+            rewind: 'Current notes shown to the bot after a rewind',
+            start: 'The bot\'s notes, as this conversation started',
+            elsewhere: 'Notes changed in another conversation',
+          }[message.raw_payload?.by] || 'Notes edited'}
+          {message.raw_payload?.by === 'elsewhere' ? '' : message.text ? ` · ${message.text.length} characters` : ' · cleared'}{formattedTime ? ` · ${formattedTime}` : ''}
         </summary>
-        <div className="px-3 pb-3 leading-relaxed whitespace-pre-wrap break-words">{message.text || 'The notes are empty.'}</div>
+        <div className="px-3 pb-3 leading-relaxed whitespace-pre-wrap break-words">
+          {message.raw_payload?.by === 'elsewhere' ? 'The bot was told to read its notes again before relying on them.' : message.text || 'The notes are empty.'}
+        </div>
+      </details>
+    );
+  }
+
+  // Work notes: those a conversation starts with or gets on joining a project, the
+  // user's edit, the state after a rewind, or word that they changed elsewhere.
+  if (message.sender === 'system' && message.item_type === 'work_notes') {
+    const by = message.raw_payload?.by;
+    const project = message.raw_payload?.project;
+    const label = {
+      start: `Work notes of ${project}, as this conversation started`,
+      joined: `Moved into project ${project}`,
+      left: `Moved out of project ${project}`,
+      elsewhere: `${project}'s work notes changed in another conversation`,
+      rewind: 'Current work notes shown to the bot after a rewind',
+    }[by] || 'Work notes edited';
+    return (
+      <details className="my-3 mx-auto max-w-xl rounded-xl border border-amber-500/20 bg-amber-500/5 text-[11px] text-zinc-300 shadow-sm">
+        <summary className="cursor-pointer select-none px-3 py-1.5 font-mono text-amber-300/90">
+          {label}{formattedTime ? ` · ${formattedTime}` : ''}
+        </summary>
+        <div className="px-3 pb-3 leading-relaxed whitespace-pre-wrap break-words">
+          {by === 'elsewhere' ? 'The bot was told to read them again before relying on them.' : message.text || '(empty)'}
+        </div>
       </details>
     );
   }

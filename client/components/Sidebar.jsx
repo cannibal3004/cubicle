@@ -13,6 +13,7 @@ import {
   FiRotateCcw,
   FiTrash2,
   FiChevronRight,
+  FiFolder,
 } from 'react-icons/fi';
 
 function BotAvatar({ bot, size = 'md' }) {
@@ -106,117 +107,285 @@ function conversationTitle(conversation) {
   return conversation.title || (conversation.messages ? 'Untitled conversation' : 'New conversation');
 }
 
-// The active bot's conversations, under its card: most recent first.
-function ConversationList({ bot, conversations, activeThreadId, turnStates, onSelect, onNew, onRename, onArchive, onDelete }) {
-  const [showAll, setShowAll] = useState(false);
-  const [editing, setEditing] = useState(null);
+// The active bot's conversations, under its card, grouped by project: projects
+// first (in order of their latest activity), then conversations in none.
+function ConversationList({
+  bot,
+  conversations,
+  projects,
+  activeThreadId,
+  turnStates,
+  onSelect,
+  onNew,
+  onRename,
+  onArchive,
+  onDelete,
+  onMove,
+  onNewProject,
+  onRenameProject,
+  onArchiveProject,
+  onDeleteProject,
+}) {
+  const [showArchived, setShowArchived] = useState(false);
+  const [showAllLoose, setShowAllLoose] = useState(false);
+  const [editing, setEditing] = useState(null); // { kind: 'conversation' | 'project', id }
   const [draft, setDraft] = useState('');
-  const listed = conversations && conversations.length ? conversations : [{ id: bot.id, bot_id: bot.id, title: '', messages: 0 }];
-  const open = listed.filter((c) => !c.archived);
-  const shown = showAll ? listed : open.slice(0, SHOWN_CONVERSATIONS);
-  const more = listed.length - shown.length;
+  const [moving, setMoving] = useState(null); // conversation id
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [collapsed, setCollapsed] = useState({});
 
-  const saveTitle = (conversation) => {
-    const title = draft.trim();
+  const listed = conversations && conversations.length ? conversations : [{ id: bot.id, bot_id: bot.id, title: '', messages: 0 }];
+  const allProjects = projects || [];
+  const projectIds = new Set(allProjects.map((p) => p.id));
+  const visible = (c) => showArchived || !c.archived;
+  const inProject = (projectId) => listed.filter((c) => c.project_id === projectId && visible(c));
+  const loose = listed.filter((c) => (!c.project_id || !projectIds.has(c.project_id)) && visible(c));
+  const looseShown = showAllLoose ? loose : loose.slice(0, SHOWN_CONVERSATIONS);
+  // Projects in order of their latest conversation, then the rest by creation.
+  const order = new Map();
+  listed.forEach((c, index) => {
+    if (c.project_id && !order.has(c.project_id)) order.set(c.project_id, index);
+  });
+  const shownProjects = allProjects
+    .filter((p) => showArchived || !p.archived)
+    .sort((a, b) => (order.has(a.id) ? order.get(a.id) : 1e6) - (order.has(b.id) ? order.get(b.id) : 1e6));
+  const archivedCount = listed.filter((c) => c.archived).length + allProjects.filter((p) => p.archived).length;
+
+  const startEditing = (kind, id, text) => {
+    setDraft(text || '');
+    setEditing({ kind, id });
+  };
+  const commit = (item) => {
+    const text = draft.trim();
+    const kind = editing?.kind;
     setEditing(null);
-    if (title !== (conversation.title || '')) onRename?.(conversation, title);
+    if (kind === 'project') {
+      if (text && text !== item.name) onRenameProject?.(item, text);
+    } else if (text !== (item.title || '')) {
+      onRename?.(item, text);
+    }
+  };
+  const isEditing = (kind, id) => editing?.kind === kind && editing.id === id;
+
+  const titleInput = (item, kind) => (
+    <input
+      autoFocus
+      value={draft}
+      maxLength={80}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => commit(item)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') commit(item);
+        if (event.key === 'Escape') setEditing(null);
+      }}
+      className="flex-1 min-w-0 bg-[#141417] border border-[#34343a] rounded px-1 py-0.5 text-[11.5px] text-zinc-100 focus:outline-none"
+      aria-label={kind === 'project' ? 'Project name' : 'Conversation title'}
+    />
+  );
+
+  const row = (conversation) => {
+    const active = conversation.id === activeThreadId;
+    const turn = turnStates?.[conversation.id];
+    const waiting = Boolean(turn?.pending_approval);
+    const working = Boolean(turn && turn.status === 'running' && !waiting);
+    const title = conversationTitle(conversation);
+    const busy = isEditing('conversation', conversation.id) || moving === conversation.id;
+    return (
+      <div
+        key={conversation.id}
+        onClick={() => !busy && onSelect?.(bot.id, conversation.id)}
+        className={`group/conv flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer text-[11.5px] transition ${
+          active ? 'bg-[#232327] text-white' : 'text-zinc-400 hover:bg-[#1c1c20] hover:text-zinc-200'
+        }`}
+        title={title}
+      >
+        {waiting && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0 animate-pulse" title="Waiting for you" />}
+        {working && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0" title="Working on a reply" />}
+        {isEditing('conversation', conversation.id) ? (
+          titleInput(conversation, 'conversation')
+        ) : moving === conversation.id ? (
+          <select
+            autoFocus
+            value={conversation.project_id || ''}
+            onClick={(event) => event.stopPropagation()}
+            onChange={(event) => {
+              setMoving(null);
+              if ((event.target.value || null) !== (conversation.project_id || null)) onMove?.(conversation, event.target.value);
+            }}
+            onBlur={() => setMoving(null)}
+            className="flex-1 min-w-0 bg-[#141417] border border-[#34343a] rounded px-1 py-0.5 text-[11.5px] text-zinc-100 focus:outline-none"
+            aria-label="Move to project"
+          >
+            <option value="">No project</option>
+            {allProjects.filter((p) => !p.archived || p.id === conversation.project_id).map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        ) : (
+          <span className={`flex-1 min-w-0 truncate ${conversation.archived ? 'opacity-60 italic' : ''}`}>{title}</span>
+        )}
+        {!busy && (
+          <>
+            <span className="flex-shrink-0 text-[10px] text-zinc-600 group-hover/conv:hidden">{formatWhen(conversation.last_activity)}</span>
+            <span className="hidden group-hover/conv:flex items-center gap-0.5 flex-shrink-0" onClick={(event) => event.stopPropagation()}>
+              <button type="button" title="Rename" onClick={() => startEditing('conversation', conversation.id, conversation.title)} className="p-0.5 text-zinc-500 hover:text-white">
+                <FiEdit2 className="text-[10px]" />
+              </button>
+              {onMove && (
+                <button type="button" title="Move to a project" onClick={() => setMoving(conversation.id)} className="p-0.5 text-zinc-500 hover:text-white">
+                  <FiFolder className="text-[10px]" />
+                </button>
+              )}
+              {conversation.id !== bot.id && (
+                <button
+                  type="button"
+                  title={conversation.archived ? 'Unarchive' : 'Archive'}
+                  onClick={() => onArchive?.(conversation, !conversation.archived)}
+                  className="p-0.5 text-zinc-500 hover:text-white"
+                >
+                  {conversation.archived ? <FiRotateCcw className="text-[10px]" /> : <FiArchive className="text-[10px]" />}
+                </button>
+              )}
+              <button
+                type="button"
+                title={conversation.id === bot.id ? 'Empty this conversation' : 'Delete'}
+                onClick={() => {
+                  const question =
+                    conversation.id === bot.id
+                      ? `Empty "${title}"? Its messages are deleted; the conversation stays, as the bot's first one. This cannot be undone.`
+                      : `Delete "${title}"? Its messages are deleted. This cannot be undone.`;
+                  if (window.confirm(question)) onDelete?.(conversation);
+                }}
+                className="p-0.5 text-zinc-500 hover:text-rose-300"
+              >
+                <FiTrash2 className="text-[10px]" />
+              </button>
+            </span>
+          </>
+        )}
+      </div>
+    );
   };
 
   return (
     <div className="ml-6 mt-1 mb-1.5 pl-2 border-l border-[#26262b] space-y-0.5" onClick={(event) => event.stopPropagation()}>
-      <button
-        type="button"
-        onClick={() => onNew?.(bot.id)}
-        className="w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] text-zinc-500 hover:text-zinc-200 hover:bg-[#1c1c20] transition"
-      >
-        <FiPlus className="text-[11px]" /> New conversation
-      </button>
-      {shown.map((conversation) => {
-        const active = conversation.id === activeThreadId;
-        const turn = turnStates?.[conversation.id];
-        const waiting = Boolean(turn?.pending_approval);
-        const working = Boolean(turn && turn.status === 'running' && !waiting);
-        const title = conversationTitle(conversation);
-        return (
-          <div
-            key={conversation.id}
-            onClick={() => editing !== conversation.id && onSelect?.(bot.id, conversation.id)}
-            className={`group/conv flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer text-[11.5px] transition ${
-              active ? 'bg-[#232327] text-white' : 'text-zinc-400 hover:bg-[#1c1c20] hover:text-zinc-200'
-            }`}
-            title={title}
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onNew?.(bot.id)}
+          className="flex-1 flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] text-zinc-500 hover:text-zinc-200 hover:bg-[#1c1c20] transition"
+        >
+          <FiPlus className="text-[11px]" /> New conversation
+        </button>
+        {onNewProject && (
+          <button
+            type="button"
+            onClick={() => {
+              setDraft('');
+              setCreatingProject(true);
+            }}
+            className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] text-zinc-500 hover:text-zinc-200 hover:bg-[#1c1c20] transition"
+            title="New project: a piece of work with its own work notes and log"
           >
-            {waiting && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0 animate-pulse" title="Waiting for you" />}
-            {working && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0" title="Working on a reply" />}
-            {editing === conversation.id ? (
-              <input
-                autoFocus
-                value={draft}
-                maxLength={80}
-                onChange={(event) => setDraft(event.target.value)}
-                onBlur={() => saveTitle(conversation)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') saveTitle(conversation);
-                  if (event.key === 'Escape') setEditing(null);
-                }}
-                className="flex-1 min-w-0 bg-[#141417] border border-[#34343a] rounded px-1 py-0.5 text-[11.5px] text-zinc-100 focus:outline-none"
-                aria-label="Conversation title"
-              />
-            ) : (
-              <span className={`flex-1 min-w-0 truncate ${conversation.archived ? 'opacity-60 italic' : ''}`}>{title}</span>
-            )}
-            {editing !== conversation.id && (
-              <>
-                <span className="flex-shrink-0 text-[10px] text-zinc-600 group-hover/conv:hidden">{formatWhen(conversation.last_activity)}</span>
-                <span className="hidden group-hover/conv:flex items-center gap-0.5 flex-shrink-0">
-                  <button
-                    type="button"
-                    title="Rename"
-                    onClick={() => {
-                      setDraft(conversation.title || '');
-                      setEditing(conversation.id);
-                    }}
-                    className="p-0.5 text-zinc-500 hover:text-white"
-                  >
-                    <FiEdit2 className="text-[10px]" />
-                  </button>
-                  {conversation.id !== bot.id && (
+            <FiFolder className="text-[11px]" /> Project
+          </button>
+        )}
+      </div>
+      {creatingProject && (
+        <div className="flex items-center gap-1.5 px-2 py-1">
+          <FiFolder className="text-[11px] text-amber-300/80 flex-shrink-0" />
+          <input
+            autoFocus
+            value={draft}
+            maxLength={80}
+            placeholder="Project name"
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={() => setCreatingProject(false)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setCreatingProject(false);
+              if (event.key === 'Enter' && draft.trim()) {
+                onNewProject(bot.id, draft.trim());
+                setCreatingProject(false);
+              }
+            }}
+            className="flex-1 min-w-0 bg-[#141417] border border-[#34343a] rounded px-1 py-0.5 text-[11.5px] text-zinc-100 focus:outline-none"
+          />
+        </div>
+      )}
+
+      {shownProjects.map((project) => {
+        const members = inProject(project.id);
+        const open = !collapsed[project.id];
+        const hasActive = members.some((c) => c.id === activeThreadId);
+        return (
+          <div key={project.id}>
+            <div
+              onClick={() => setCollapsed((prev) => ({ ...prev, [project.id]: open }))}
+              className={`group/proj flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer text-[11.5px] transition ${
+                hasActive && !open ? 'text-white' : 'text-zinc-300 hover:bg-[#1c1c20]'
+              }`}
+              title={project.notes ? project.notes.split('\n')[0] : project.name}
+            >
+              <FiChevronRight className={`text-[10px] text-zinc-500 flex-shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+              <FiFolder className={`text-[11px] flex-shrink-0 ${project.archived ? 'text-zinc-600' : 'text-amber-300/80'}`} />
+              {isEditing('project', project.id) ? (
+                <span className="flex-1 min-w-0 flex" onClick={(event) => event.stopPropagation()}>{titleInput(project, 'project')}</span>
+              ) : (
+                <span className={`flex-1 min-w-0 truncate font-medium ${project.archived ? 'opacity-60 italic' : ''}`}>{project.name}</span>
+              )}
+              {!isEditing('project', project.id) && (
+                <>
+                  <span className="flex-shrink-0 text-[10px] text-zinc-600 group-hover/proj:hidden">{members.length || ''}</span>
+                  <span className="hidden group-hover/proj:flex items-center gap-0.5 flex-shrink-0" onClick={(event) => event.stopPropagation()}>
+                    <button type="button" title="New conversation in this project" onClick={() => onNew?.(bot.id, project.id)} className="p-0.5 text-zinc-500 hover:text-white">
+                      <FiPlus className="text-[10px]" />
+                    </button>
+                    <button type="button" title="Rename" onClick={() => startEditing('project', project.id, project.name)} className="p-0.5 text-zinc-500 hover:text-white">
+                      <FiEdit2 className="text-[10px]" />
+                    </button>
                     <button
                       type="button"
-                      title={conversation.archived ? 'Unarchive' : 'Archive'}
-                      onClick={() => onArchive?.(conversation, !conversation.archived)}
+                      title={project.archived ? 'Unarchive' : 'Archive'}
+                      onClick={() => onArchiveProject?.(project, !project.archived)}
                       className="p-0.5 text-zinc-500 hover:text-white"
                     >
-                      {conversation.archived ? <FiRotateCcw className="text-[10px]" /> : <FiArchive className="text-[10px]" />}
+                      {project.archived ? <FiRotateCcw className="text-[10px]" /> : <FiArchive className="text-[10px]" />}
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    title={conversation.id === bot.id ? 'Empty this conversation' : 'Delete'}
-                    onClick={() => {
-                      const question =
-                        conversation.id === bot.id
-                          ? `Empty "${title}"? Its messages are deleted; the conversation stays, as the bot's first one. This cannot be undone.`
-                          : `Delete "${title}"? Its messages are deleted. This cannot be undone.`;
-                      if (window.confirm(question)) onDelete?.(conversation);
-                    }}
-                    className="p-0.5 text-zinc-500 hover:text-rose-300"
-                  >
-                    <FiTrash2 className="text-[10px]" />
-                  </button>
-                </span>
-              </>
+                    <button
+                      type="button"
+                      title="Delete the project"
+                      onClick={() => {
+                        if (window.confirm(`Delete the project "${project.name}" and its log? Its conversations stay, outside any project. This cannot be undone.`)) {
+                          onDeleteProject?.(project);
+                        }
+                      }}
+                      className="p-0.5 text-zinc-500 hover:text-rose-300"
+                    >
+                      <FiTrash2 className="text-[10px]" />
+                    </button>
+                  </span>
+                </>
+              )}
+            </div>
+            {open && (
+              <div className="ml-3 pl-1.5 border-l border-[#232328] space-y-0.5">
+                {members.map(row)}
+                {!members.length && <p className="px-2 py-0.5 text-[10.5px] text-zinc-600">No conversations yet.</p>}
+              </div>
             )}
           </div>
         );
       })}
-      {(more > 0 || showAll) && (
-        <button
-          type="button"
-          onClick={() => setShowAll((v) => !v)}
-          className="w-full text-left px-2 py-0.5 text-[10.5px] text-zinc-600 hover:text-zinc-300"
-        >
-          {showAll ? 'Show fewer' : `Show all (${more} more${listed.some((c) => c.archived) ? ', archived included' : ''})`}
+
+      {looseShown.map(row)}
+      {loose.length > SHOWN_CONVERSATIONS && (
+        <button type="button" onClick={() => setShowAllLoose((v) => !v)} className="w-full text-left px-2 py-0.5 text-[10.5px] text-zinc-600 hover:text-zinc-300">
+          {showAllLoose ? 'Show fewer' : `Show all (${loose.length - SHOWN_CONVERSATIONS} more)`}
+        </button>
+      )}
+      {(archivedCount > 0 || showArchived) && (
+        <button type="button" onClick={() => setShowArchived((v) => !v)} className="w-full text-left px-2 py-0.5 text-[10.5px] text-zinc-600 hover:text-zinc-300">
+          {showArchived ? 'Hide archived' : `Show archived (${archivedCount})`}
         </button>
       )}
     </div>
@@ -243,6 +412,12 @@ export default function Sidebar({
   onRenameConversation,
   onArchiveConversation,
   onDeleteConversation,
+  onMoveConversation,
+  projects,
+  onNewProject,
+  onRenameProject,
+  onArchiveProject,
+  onDeleteProject,
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   // Results from inside the conversations, fetched a moment after typing stops.
@@ -354,6 +529,12 @@ export default function Sidebar({
           onRename={onRenameConversation}
           onArchive={onArchiveConversation}
           onDelete={onDeleteConversation}
+          onMove={onMoveConversation}
+          projects={projects}
+          onNewProject={onNewProject}
+          onRenameProject={onRenameProject}
+          onArchiveProject={onArchiveProject}
+          onDeleteProject={onDeleteProject}
         />
       )}
       </React.Fragment>

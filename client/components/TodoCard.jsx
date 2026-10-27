@@ -14,9 +14,11 @@ const STATE_STYLES = {
   done: 'border-emerald-500 bg-emerald-500/30 text-emerald-200',
 };
 
-export default function TodoCard({ bot, onSave }) {
+// `children` (the work notes) sit below the list in the same panel; `hasMore`
+// says they have something to show, which opens the panel like a list does.
+export default function TodoCard({ bot, onSave, children, hasMore = false }) {
   const items = Array.isArray(bot?.todo) ? bot.todo : [];
-  const [open, setOpen] = useState(items.length > 0);
+  const [open, setOpen] = useState(items.length > 0 || hasMore);
   const [draft, setDraft] = useState('');
   const [editing, setEditing] = useState(null); // { id, text }
   const [saving, setSaving] = useState(false);
@@ -26,13 +28,13 @@ export default function TodoCard({ bot, onSave }) {
     setEditing(null);
     setDraft('');
     setError(null);
-    setOpen((Array.isArray(bot?.todo) ? bot.todo : []).length > 0);
+    setOpen((Array.isArray(bot?.todo) ? bot.todo : []).length > 0 || hasMore);
   }, [bot?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   // A list that fills (the bot wrote it) opens the panel; emptying it does not close it.
   const count = items.length;
   useEffect(() => {
-    if (count > 0) setOpen(true);
-  }, [count > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (count > 0 || hasMore) setOpen(true);
+  }, [count > 0, hasMore]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!bot) return null;
   const done = items.filter((i) => i.state === 'done').length;
@@ -75,7 +77,7 @@ export default function TodoCard({ bot, onSave }) {
 
   if (!open) {
     return (
-      <aside className="flex-shrink-0 w-9 border-l border-[#1f1f23] bg-[#0b0b0d] flex flex-col items-center pt-3 z-10" aria-label="To-do list">
+      <aside className="flex-shrink-0 w-9 border-l border-[#1f1f23] bg-[#0b0b0d] flex flex-col items-center pt-3 z-10" aria-label="To-do list and work notes">
         <button
           type="button"
           onClick={() => setOpen(true)}
@@ -93,8 +95,8 @@ export default function TodoCard({ bot, onSave }) {
   }
 
   return (
-    <aside className="flex-shrink-0 w-72 border-l border-[#1f1f23] bg-[#0b0b0d] flex flex-col min-h-0 z-10" aria-label="To-do list">
-      <div className="flex flex-col min-h-0 flex-1 text-[11px] text-zinc-300">
+    <aside className="flex-shrink-0 w-72 border-l border-[#1f1f23] bg-[#0b0b0d] flex flex-col min-h-0 z-10" aria-label="To-do list and work notes">
+      <div className="flex flex-col min-h-0 flex-1 text-[11px] text-zinc-300 overflow-y-auto">
         <div>
           <button
             type="button"
@@ -111,7 +113,7 @@ export default function TodoCard({ bot, onSave }) {
           </button>
 
           {open && (
-            <div className="px-3 py-2.5 space-y-1.5 overflow-y-auto max-h-[calc(100vh-7rem)]">
+            <div className="px-3 py-2.5 space-y-1.5">
               {items.map((item) => (
                 <div key={item.id} className="group flex items-start gap-2">
                   <button
@@ -183,6 +185,7 @@ export default function TodoCard({ bot, onSave }) {
             </div>
           )}
         </div>
+        {children}
       </div>
     </aside>
   );

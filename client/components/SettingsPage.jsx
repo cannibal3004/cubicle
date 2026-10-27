@@ -93,16 +93,18 @@ export default function SettingsPage({
 }) {
   const [userName, setUserName] = useState("");
   const [userEmail, setUserEmail] = useState("");
+  // What every bot should know about this person; facts about a person live here, not in a bot's notes.
+  const [userAbout, setUserAbout] = useState("");
   const [section, setSection] = useState("account");
   const [profileState, setProfileState] = useState(""); // "", "saving", "saved", or an error
   const profileTimer = React.useRef(null);
-  const saveProfile = (name, email) => {
+  const saveProfile = (name, email, about) => {
     // Saved as you go, a moment after typing stops.
     if (profileTimer.current) clearTimeout(profileTimer.current);
     profileTimer.current = setTimeout(async () => {
       setProfileState("saving");
       try {
-        await updateProfile(name, email);
+        await updateProfile(name, email, about);
         setProfileState("saved");
         if (onProfileUpdate) onProfileUpdate(name);
         setTimeout(() => setProfileState(""), 1500);
@@ -159,6 +161,7 @@ export default function SettingsPage({
         .then((me) => {
           setUserName(me?.display_name || "");
           setUserEmail(me?.email || "");
+          setUserAbout(me?.about || "");
         })
         .catch(console.error);
 
@@ -381,7 +384,7 @@ export default function SettingsPage({
               value={userName}
               onChange={(e) => {
                 setUserName(e.target.value);
-                saveProfile(e.target.value, userEmail);
+                saveProfile(e.target.value, userEmail, userAbout);
               }}
               placeholder="Your name"
               className={inputClass}
@@ -393,10 +396,23 @@ export default function SettingsPage({
               value={userEmail}
               onChange={(e) => {
                 setUserEmail(e.target.value);
-                saveProfile(userName, e.target.value);
+                saveProfile(userName, e.target.value, userAbout);
               }}
               placeholder="you@example.com"
               className={inputClass}
+            />
+
+            <textarea
+              suppressHydrationWarning={true}
+              value={userAbout}
+              maxLength={2000}
+              rows={4}
+              onChange={(e) => {
+                setUserAbout(e.target.value);
+                saveProfile(userName, userEmail, e.target.value);
+              }}
+              placeholder="About you, for every bot: your role, how you like answers, anything they should always keep in mind."
+              className={`${inputClass} resize-y`}
             />
           </div>
 
