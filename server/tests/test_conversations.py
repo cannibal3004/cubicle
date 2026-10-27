@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from app.routers import chat as chat_router
 from app.routers import conversations as conversations_router
 from app.schemas.contracts import TurnRequest
-from app.services import bot_memory, conversations
+from app.services import bot_memory, conversation_titles, conversations
 from app.services import storage_service as storage_module
 from app.services.action_gateway import ActionInvocation
 from app.services.bot_todo import get_todo
@@ -127,6 +127,68 @@ class ConversationTests(chat_harness.ChatStreamRouteTests):
         self.assertEqual((scheduled["title"], conversations.for_purpose(self.bot, "scheduled")["id"]), ("Scheduled", scheduled["id"]))
         self.assertEqual(conversations.bot_id_of(scheduled["id"]), self.bot)
         self.assertIsNone(conversations.bot_id_of("cv-unknown"))
+
+
+class TitleTests(ConversationTests):
+    def _title_reply(self, text, seen):
+        async def stream(model, messages, system_prompt="", config=None, tools=None, one_shot=False):
+            seen.append({"model": model, "one_shot": one_shot, "prompt": messages[0]["content"]})
+            yield {"type": "content.delta", "delta": text}
+            yield {"type": "turn.completed", "ok": True}
+
+        return mock.patch.object(conversation_titles.llm_service if hasattr(conversation_titles, "llm_service") else chat_router.llm_service, "stream_chat_completion", stream)
+
+    def _exchange(self, thread_id, user="Can you check why the Nextcloud cron job keeps failing every night?", reply="The cron container lost its config mount."):
+        self.storage.add_message({"id": f"u-{thread_id}", "thread_id": thread_id, "bot_id": self.bot, "sender": "user", "text": user})
+        self.storage.add_message({"id": f"b-{thread_id}", "thread_id": thread_id, "bot_id": self.bot, "sender": "bot", "text": reply})
+
+    def test_a_model_names_the_conversation_after_its_first_exchange(self):
+        record = conversations.create(self.bot)
+        conversations.update(record["id"], {"title": "Can you check why the Nextcloud cron job…", "title_source": "first_message"})
+        seen = []
+        with self._title_reply('Title: "Nextcloud cron failures."', seen):
+            self.assertIsNone(asyncio.run(conversation_titles.generate(record["id"])))  # no reply yet: nothing to name
+            self._exchange(record["id"])
+            self.assertEqual(asyncio.run(conversation_titles.generate(record["id"])), "Nextcloud cron failures")
+        stored = conversations.get(record["id"])
+        self.assertEqual((stored["title"], stored["title_source"]), ("Nextcloud cron failures", "generated"))
+        self.assertTrue(seen[0]["one_shot"])
+        self.assertIn("lost its config mount", seen[0]["prompt"])
+        self.assertEqual(seen[0]["model"], self.storage.get_bots()[0]["model"])  # the bot's own model by default
+        with self._title_reply("Something else", seen):
+            self.assertIsNone(asyncio.run(conversation_titles.generate(record["id"])))  # titled once
+
+    def test_the_title_model_setting_the_users_title_and_purpose_titles_are_respected(self):
+        self.storage.save_settings({"title_model": "small-fast-model"})
+        named = conversations.create(self.bot)
+        self._exchange(named["id"])
+        seen = []
+        with self._title_reply("Cron job failures", seen):
+            asyncio.run(conversation_titles.generate(named["id"]))
+        self.assertEqual(seen[-1]["model"], "small-fast-model")
+
+        mine = asyncio.run(conversations_router.start_conversation(self.bot, conversations_router.ConversationInput(title="My own name")))
+        self._exchange(mine["id"])
+        scheduled = conversations.for_purpose(self.bot, "scheduled")
+        self._exchange(scheduled["id"])
+        with self._title_reply("Should not be used", seen):
+            self.assertIsNone(asyncio.run(conversation_titles.generate(mine["id"])))
+            self.assertIsNone(asyncio.run(conversation_titles.generate(scheduled["id"])))
+        self.assertEqual(conversations.get(mine["id"])["title"], "My own name")
+        self.assertEqual(conversations.get(scheduled["id"])["title"], "Scheduled")
+
+        # A failed attempt keeps the first-message title and is tried at most twice.
+        failing = conversations.create(self.bot)
+        self._exchange(failing["id"])
+        with self._title_reply("", seen):
+            asyncio.run(conversation_titles.generate(failing["id"]))
+            asyncio.run(conversation_titles.generate(failing["id"]))
+        self.assertFalse(conversation_titles.wants_title(conversations.get(failing["id"])))
+
+    def test_model_replies_are_cleaned_into_titles(self):
+        self.assertEqual(conversation_titles.clean_generated('**Title:** "Backup job audit."\nmore'), "Backup job audit")
+        self.assertEqual(conversation_titles.clean_generated("  'Disk space on Unraid'  "), "Disk space on Unraid")
+        self.assertEqual(conversation_titles.clean_generated(""), "")
 
 
 class ComputerTurnTests(unittest.TestCase):

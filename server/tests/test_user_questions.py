@@ -182,6 +182,7 @@ class AskUserTurnTests(unittest.TestCase):
             mock.patch.object(chat_router, "composio_service", NoComposio()),
             mock.patch.object(chat_router, "turn_manager", manager),
             mock.patch.object(chat_router, "_context_window_for", _fake_context_window),
+            mock.patch.object(chat_router.conversation_titles, "schedule", lambda thread_id: None),
             mock.patch.object(chat_router, "action_gateway", gateway),
             mock.patch.object(user_questions, "turn_manager", manager),
             mock.patch.object(user_questions, "question_broker", broker),

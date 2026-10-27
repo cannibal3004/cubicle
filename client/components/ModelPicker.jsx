@@ -75,6 +75,7 @@ export default function ModelPicker({
   align = 'right',
   direction = 'down',
   triggerClassName,
+  emptyLabel = 'Select Model',
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -122,7 +123,7 @@ export default function ModelPicker({
   const activeGroup = groups.find((g) => g.provider === activeProvider) || groups[0];
   const exactMatch = searching && models.some((m) => m.id === trimmedQuery);
 
-  const displayName = currentInfo?.name || currentModel || 'Select Model';
+  const displayName = currentInfo?.name || currentModel || emptyLabel;
   const displayProvider = currentInfo?.provider || (currentModel?.includes('/') ? currentModel.split('/')[0] : '');
   const displayColor = providerAccent(displayProvider || displayName);
 

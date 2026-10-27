@@ -115,6 +115,8 @@ def summary(record: Dict[str, Any], activity: Optional[Dict[str, Any]] = None) -
         "id": record["id"],
         "bot_id": record["bot_id"],
         "title": record.get("title") or "",
+        # first_message, generated (by a model after the first exchange), user, or fixed (Cubicle's own)
+        "title_source": record.get("title_source") or ("fixed" if record.get("purpose") else None),
         "purpose": record.get("purpose"),
         "archived": bool(record.get("archived")),
         "created_at": record.get("created_at"),
@@ -139,7 +141,12 @@ def list_for_bot(bot_id: str, storage: Optional[StorageService] = None) -> List[
             # Named after what it was started with (the bot's first conversation predates titles).
             first = next((m for m in storage.get_messages(thread_id=record["id"]) if m.get("sender") == "user" and m.get("text")), None)
             if first is not None:
-                records[index] = update(record["id"], {"title": title_from(first["text"])}, storage)
+                records[index] = update(record["id"], {"title": title_from(first["text"]), "title_source": "first_message"}, storage)
+    from app.services import conversation_titles  # here: it imports this module
+
+    for record in records:
+        if (activity.get(record["id"]) or {}).get("messages") and conversation_titles.wants_title(record):
+            conversation_titles.schedule(record["id"])  # one written before titles were generated
     listed = [summary(r, activity.get(r["id"])) for r in records]
     listed.sort(key=lambda c: str(c.get("last_activity") or ""), reverse=True)
     return listed
@@ -162,6 +169,9 @@ def create(bot_id: str, title: str = "", *, purpose: Optional[str] = None, stora
     record: Dict[str, Any] = {"id": new_id(), "bot_id": bot_id, "title": clean_title(title), "created_at": now, "updated_at": now, "todo": []}
     if purpose:
         record["purpose"] = purpose
+        record["title_source"] = "fixed"
+    elif record["title"]:
+        record["title_source"] = "user"
     storage.save_conversation(record)
     _seed_notes(record, bot, storage)
     return record

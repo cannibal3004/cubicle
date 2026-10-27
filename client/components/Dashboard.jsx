@@ -80,6 +80,9 @@ export default function Dashboard() {
   const [turnStates, setTurnStates] = useState({});
   const lastTurnStates = useRef({});
   const conversationsRef = useRef({});
+  // Conversations whose first reply just finished: a model is naming them in
+  // the background, so their bot's list is refreshed until the title arrives.
+  const awaitingTitles = useRef({});
   // Bots that appeared on the server (an orchestrator's bots_create, another
   // device) join the list; known ones keep their loaded state.
   const adoptNewBots = useCallback(() => {
@@ -156,9 +159,23 @@ export default function Dashboard() {
             .then((fresh) => setBots((prev) => prev.map((b) => (b.id === botId ? { ...b, ...fresh } : b))))
             .catch(() => {});
           loadConversations(botId);
+          const conversation = (conversationsRef.current[botId] || []).find((c) => c.id === threadId);
+          if (!conversation || !['generated', 'user', 'fixed'].includes(conversation.title_source)) {
+            awaitingTitles.current[threadId] = { botId, until: Date.now() + 90000 };
+          }
         }
       }
       if (finished) adoptNewBots(); // a turn may have created a bot
+      const titleBots = new Set();
+      for (const [threadId, wait] of Object.entries(awaitingTitles.current)) {
+        const conversation = (conversationsRef.current[wait.botId] || []).find((c) => c.id === threadId);
+        if (Date.now() > wait.until || (conversation && ['generated', 'user', 'fixed'].includes(conversation.title_source))) {
+          delete awaitingTitles.current[threadId];
+        } else if (!finished) {
+          titleBots.add(wait.botId);
+        }
+      }
+      titleBots.forEach((botId) => loadConversations(botId));
       setTurnStates((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
     };
     poll();

@@ -25,7 +25,7 @@ from app.services.approval_gate import approval_gate
 from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs
-from app.services import computer_turns, conversations
+from app.services import computer_turns, conversation_titles, conversations
 from app.services.context_builder import build_history_messages, cap_message_results, latest_compaction, live_messages, safe_arguments, trim_result_text
 from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
 from app.services import bot_memory as _bot_memory  # noqa: F401 - registers memory.read/write
@@ -310,7 +310,7 @@ async def send_message(req: TurnRequest):
         # A conversation is named after what it was started with, until the user renames it.
         record = conversations.get(req.thread_id)
         if record is not None and not record.get("title"):
-            conversations.update(req.thread_id, {"title": conversations.title_from(user_msg["text"])})
+            conversations.update(req.thread_id, {"title": conversations.title_from(user_msg["text"]), "title_source": "first_message"})
     # A new message starts a new branch: what was undone can no longer be redone.
     rewind_service.forget(req.thread_id)
     if user_msg.get("attachments"):
@@ -1421,6 +1421,9 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         }
         current_storage().add_message(bot_msg)
         recall.schedule_index(thread_id, bot_msg)
+        if not stopped:
+            # After the first exchange a model names the conversation, in the background.
+            conversation_titles.schedule(thread_id)
         if stopped:
             turn.emit({"type": "turn.cancelled", "botMsgId": bot_msg_id})
             raise asyncio.CancelledError()

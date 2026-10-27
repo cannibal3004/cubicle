@@ -316,6 +316,7 @@ class DemonstrationTurnTests(unittest.TestCase):
             mock.patch.object(chat_router, "composio_service", NoComposio()),
             mock.patch.object(chat_router, "turn_manager", TurnManager()),
             mock.patch.object(chat_router, "_context_window_for", _fake_context_window),
+            mock.patch.object(chat_router.conversation_titles, "schedule", lambda thread_id: None),
             mock.patch.object(chat_router.settings, "COMPUTER_PROVIDER", "docker"),  # the computer tools, and with them the procedures
         ]
         for p in patches:

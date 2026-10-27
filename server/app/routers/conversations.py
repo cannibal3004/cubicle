@@ -72,6 +72,9 @@ async def update_conversation(conversation_id: str, body: ConversationUpdate):
     changes: Dict[str, Any] = {}
     if body.title is not None:
         changes["title"] = conversations.clean_title(body.title)
+        # The user's title is never replaced; clearing it lets a model name the conversation again.
+        changes["title_source"] = "user" if changes["title"] else None
+        changes["title_tries"] = 0
     if body.archived is not None:
         if body.archived and _busy(conversation_id):
             turn_manager.cancel(conversation_id)  # an archived conversation does not keep working
@@ -88,6 +91,10 @@ async def update_conversation(conversation_id: str, body: ConversationUpdate):
             note = todo_note_message(conversation_id, todo, message_id=f"msg-{uuid.uuid4().hex[:6]}", bot_id=record["bot_id"])
     if changes:
         record = conversations.update(conversation_id, changes)
+    if body.title is not None and not record.get("title"):
+        from app.services import conversation_titles
+
+        conversation_titles.schedule(conversation_id)
     if note is not None:
         current_storage().add_message(note)
     return _summary(record)

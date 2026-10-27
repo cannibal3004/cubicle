@@ -128,6 +128,7 @@ class DelegationTests(unittest.TestCase):
             mock.patch.object(chat_router, "composio_service", NoComposio()),
             mock.patch.object(chat_router, "turn_manager", self.manager),
             mock.patch.object(chat_router, "_context_window_for", _fake_context_window),
+            mock.patch.object(chat_router.conversation_titles, "schedule", lambda thread_id: None),
             mock.patch.object(chat_router, "action_gateway", ActionGateway(workspace=WorkspaceService(workspace), approvals=mock.Mock(), audit=self.storage)),
         ]
         for p in self.patches:

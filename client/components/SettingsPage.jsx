@@ -136,6 +136,8 @@ export default function SettingsPage({
   const [showComposioKey, setShowComposioKey] = useState(false);
 
   const [defaultModel, setDefaultModel] = useState("");
+  // The model that names conversations after their first exchange; "" = each bot's own.
+  const [titleModel, setTitleModel] = useState("");
   const [savedField, setSavedField] = useState(null);
   const [saveError, setSaveError] = useState("");
 
@@ -179,6 +181,7 @@ export default function SettingsPage({
             setComposioApiKey("");
             setComposioConfigured(Boolean(data.composio_api_key_configured));
             setDefaultModel(data.default_model || "");
+            setTitleModel(data.title_model || "");
             setAutoApproval(data.auto_approval || "off");
             setDeciderUrl(data.decider_url || "");
             setDeciderThreshold(typeof data.decider_threshold === "number" ? data.decider_threshold : 0.2);
@@ -228,6 +231,7 @@ export default function SettingsPage({
               tool_selection_max: Math.max(0, Math.min(500, Math.round(Number(toolSelectionMax) || 0))),
               composio_api_key: composioApiKey,
               default_model: defaultModel,
+              title_model: titleModel.trim(),
               theme: "dark",
             }
           : { theme: "dark" }
@@ -553,6 +557,44 @@ export default function SettingsPage({
               </div>
               <SaveButton field="model" onClick={handleSaveModel} />
             </div>
+          </div>
+
+          {/* Conversation titles */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+              <span className="text-cyan-400">•</span> Conversation titles
+            </label>
+            {!admin && <div className={`${inputClass} font-mono text-cyan-300`}>{titleModel || "each bot's own model"}</div>}
+            <div className={`flex items-center gap-2 ${admin ? "" : "hidden"}`}>
+              <div className="flex-1 min-w-0">
+                <ModelPicker
+                  currentModel={titleModel}
+                  models={models}
+                  catalogError={catalogError}
+                  onRefresh={onRefreshModels}
+                  onSelectModel={setTitleModel}
+                  align="left"
+                  direction="up"
+                  emptyLabel="Each bot's own model"
+                  triggerClassName="w-full flex items-center gap-2 bg-[#222226] border border-[#2e2e34] rounded-xl px-3.5 py-2.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-400 transition cursor-pointer font-sans"
+                />
+              </div>
+              {titleModel && (
+                <button
+                  type="button"
+                  onClick={() => setTitleModel("")}
+                  className="px-2.5 py-2.5 rounded-xl text-[11px] text-zinc-400 hover:text-white"
+                  title="Use each bot's own model"
+                >
+                  Clear
+                </button>
+              )}
+              <SaveButton field="titles" onClick={() => persist("titles")} />
+            </div>
+            <p className="text-[11px] text-zinc-500">
+              After a conversation's first reply, this model names it in a few words. It waits for a free model slot, so it never slows a reply; a small,
+              fast model is plenty. Empty uses the conversation's bot's model.
+            </p>
           </div>
 
           {/* Reasoning effort */}

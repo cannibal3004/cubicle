@@ -45,6 +45,7 @@ SETTING_KEYS = {
     "embedding_model",
     "rerank_model",
     "tool_selection_max",
+    "title_model",
 }
 # App-wide keys live under the system owner and only admins change them;
 # every other key is personal to the account that saved it.
@@ -65,6 +66,7 @@ APP_SETTING_KEYS = {
     "embedding_model",
     "rerank_model",
     "tool_selection_max",
+    "title_model",
     "mcp_servers",
 }
 
