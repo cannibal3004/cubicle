@@ -440,7 +440,7 @@ async def _perform_action(
     try:
         if computer_turns.takes_turns(action_name):
             # The bot's other conversations share this computer: changes to it take turns.
-            async with computer_turns.computer_turn(bot_id, thread_id, action_request.preview[:160], on_wait=waiting):
+            async with computer_turns.computer_turn(bot_id, thread_id, _computer_label(action_request), on_wait=waiting):
                 action_result = await action_gateway.execute(action_request)
         else:
             action_result = await action_gateway.execute(action_request)
@@ -458,6 +458,17 @@ async def _perform_action(
     error = redact(action_result.error or "The action failed.")
     turn.emit({"type": "tool.failed", **base, "error": error})
     return {"status": "failed", "error": f"Action failed ({action_name}): {error}", "request": action_request, "gate": verdict}
+
+
+def _computer_label(action_request: Any) -> str:
+    """What an action does to the computer, as the waiting note names it: the command, the file, or the page."""
+    arguments = getattr(action_request, "arguments", None) or {}
+    for key in ("command", "path", "url"):
+        value = str(arguments.get(key) or "").strip()
+        if value:
+            value = " ".join(value.split())
+            return f"`{value[:100]}{'…' if len(value) > 100 else ''}`"
+    return getattr(action_request, "action", "") or "something"
 
 
 async def _context_window_for(llm_config, model: str) -> Optional[int]:

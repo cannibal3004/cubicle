@@ -976,6 +976,11 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
             {bot?.avatar || '🤖'}
           </div>
           <h2 className="font-bold text-sm text-zinc-100 tracking-wide truncate">{botTitle}</h2>
+          {conversation?.title && (
+            <span className="text-xs text-zinc-500 truncate min-w-0" title={conversation.title}>
+              · {conversation.title}
+            </span>
+          )}
           {bot && onEditBot && (
             <button
               type="button"
