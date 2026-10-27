@@ -49,7 +49,7 @@ def _scripted_stream(recorder, rounds):
     """Yield a different scripted event list on each call, recording inputs."""
     state = {"calls": 0}
 
-    async def stream_chat_completion(model, messages, system_prompt="", config=None, tools=None):
+    async def stream_chat_completion(model, messages, system_prompt="", config=None, tools=None, one_shot=False):
         index = min(state["calls"], len(rounds) - 1)
         state["calls"] += 1
         recorder.setdefault("rounds", []).append(
@@ -62,7 +62,7 @@ def _scripted_stream(recorder, rounds):
 
 
 def _fake_stream(recorder):
-    async def stream_chat_completion(model, messages, system_prompt="", config=None, tools=None):
+    async def stream_chat_completion(model, messages, system_prompt="", config=None, tools=None, one_shot=False):
         recorder["model"] = model
         recorder["messages"] = messages
         recorder["system_prompt"] = system_prompt

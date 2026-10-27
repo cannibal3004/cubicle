@@ -341,7 +341,7 @@ async def draft_suggestions(bot_id: str):
     messages = [{"role": "user", "content": f"{_draft_brief(bot)}\n\n{DRAFT_INSTRUCTION.format(count=count)}"}]
     pieces: List[str] = []
     try:
-        async for event in llm_service.stream_chat_completion(model=model, messages=messages, system_prompt="", config=config, tools=None):
+        async for event in llm_service.stream_chat_completion(model=model, messages=messages, system_prompt="", config=config, tools=None, one_shot=True):
             if event.get("type") == "content.delta":
                 pieces.append(event.get("delta") or "")
             elif event.get("type") == "turn.completed" and not event.get("ok", True):

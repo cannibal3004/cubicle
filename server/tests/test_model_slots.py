@@ -143,7 +143,7 @@ class SlotsInATurnTests(unittest.TestCase):
         async def scenario():
             release = asyncio.Event()
 
-            async def provider(model, messages, system_prompt="", config=None, tools=None):
+            async def provider(model, messages, system_prompt="", config=None, tools=None, one_shot=False):
                 async for event in _stream(release, "done"):
                     yield event
 

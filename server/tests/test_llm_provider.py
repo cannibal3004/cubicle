@@ -174,6 +174,13 @@ class RequestBuildingTests(unittest.TestCase):
         body = build_request_body("m", history, "", _config(reasoning_effort="low"))
         self.assertEqual(body["reasoning_effort"], "low")
 
+    def test_one_shot_requests_ask_the_server_not_to_cache_their_prompt(self):
+        history = [{"role": "user", "content": "hi"}]
+        self.assertNotIn("prompt_cache_policy", build_request_body("m", history, "", _config()))
+        self.assertEqual(build_request_body("m", history, "", _config(), one_shot=True)["prompt_cache_policy"], "no_store")
+        openrouter = _config(base_url="https://openrouter.ai/api/v1")
+        self.assertNotIn("prompt_cache_policy", build_request_body("m", history, "", openrouter, one_shot=True))
+
     def test_headers_omit_auth_for_keyless_local_servers(self):
         local = build_headers(_config(api_key="", base_url="http://localhost:11434/v1"))
         self.assertNotIn("Authorization", local)
@@ -368,6 +375,26 @@ class StreamingTests(unittest.TestCase):
         self.assertIn("HTTP 400", events[0]["delta"])
         self.assertIn("reasoning_effort", events[0]["delta"])
         self.assertEqual(events[1], {"type": "turn.completed", "ok": False})
+
+    def test_a_server_that_refuses_the_cache_hint_is_asked_again_without_it(self):
+        bodies = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            bodies.append(body)
+            if "prompt_cache_policy" in body:
+                return httpx.Response(400, json={"error": {"message": "Unrecognized request argument: prompt_cache_policy"}})
+            return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                                  content=_sse({"choices": [{"delta": {"content": "fine"}}]}))
+
+        config = _config(base_url="https://strict.test/v1")
+        with mock.patch("app.services.openai_compatible_service._NO_CACHE_POLICY", set()):
+            events = _collect(_service_with_handler(handler).stream_chat_completion(
+                "m", [{"role": "user", "content": "hi"}], "", config, one_shot=True))
+            self.assertEqual([e.get("delta") for e in events if e["type"] == "content.delta"], ["fine"])
+            self.assertEqual(["prompt_cache_policy" in b for b in bodies], [True, False])
+            # Not offered to that server again.
+            self.assertNotIn("prompt_cache_policy", build_request_body("m", [], "", config, one_shot=True))
 
     def test_mid_stream_error_object_stops_the_turn(self):
         def handler(request: httpx.Request) -> httpx.Response:
