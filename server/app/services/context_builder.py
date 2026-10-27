@@ -29,6 +29,9 @@ MEMORY_ELSEWHERE_NOTE = (
     "Your notes (memory) were changed in another of your conversations. Read them again with memory_read before you rely on them "
     "or change them, so you do not undo that change."
 )
+# Work notes (services/projects.py): where the project, or the conversation, stands.
+WORK_NOTES_ITEM_TYPE = "work_notes"
+WORK_NOTES_LEAD = "Your work notes at this point ({where}):"
 # A user edit of the bot's to-do list, recorded in the thread where it happened.
 TODO_ITEM_TYPE = "todo"
 TODO_LEAD = "Your to-do list at this point:"
@@ -59,8 +62,43 @@ def is_todo_note(message: Dict[str, Any]) -> bool:
     return message.get("sender") == "system" and message.get("item_type") == TODO_ITEM_TYPE
 
 
+def is_work_note(message: Dict[str, Any]) -> bool:
+    return message.get("sender") == "system" and message.get("item_type") == WORK_NOTES_ITEM_TYPE
+
+
 def _in_context(message: Dict[str, Any]) -> bool:
-    return message.get("sender") in ("user", "bot") or is_memory_note(message) or is_todo_note(message)
+    return message.get("sender") in ("user", "bot") or is_memory_note(message) or is_todo_note(message) or is_work_note(message)
+
+
+def _where(project: Any) -> str:
+    return f"project {project}" if project else "this conversation, which is in no project"
+
+
+def work_note_messages(note: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """How a work notes row is shown to the model, in place."""
+    text = note.get("text") or ""
+    payload = note.get("raw_payload") or {}
+    by, project = payload.get("by"), payload.get("project")
+    shown = text or "(empty)"
+    if by == "start":
+        body = f"This conversation is part of project {project}. Its work notes (where the work stands):\n\n{shown}"
+    elif by == "joined":
+        body = f"This conversation is now part of project {project}. Its work notes (where the work stands):\n\n{shown}"
+    elif by == "left":
+        body = f"This conversation is no longer part of project {project}. Its own work notes:\n\n{shown}"
+    elif by == "elsewhere":
+        body = (
+            f"The work notes of project {project} were changed in another conversation. Read them again with work_notes_read before "
+            "you rely on them or change them, so you do not undo that change."
+        )
+    elif by == "rewind":
+        body = f"The user rewound the conversation; messages after this point were removed. Your work notes ({_where(project)}) as they stand now:\n\n{shown}"
+    else:
+        body = f"The user edited your work notes ({_where(project)}). They now read:\n\n{shown}"
+    return [
+        {"role": "user", "content": body, "image_url": None},
+        {"role": "assistant", "content": "Noted.", "image_url": None},
+    ]
 
 
 def latest_compaction(history: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -178,7 +216,10 @@ def summary_messages(compaction: Dict[str, Any]) -> List[Dict[str, Any]]:
     memory = (compaction.get("raw_payload") or {}).get("memory")
     if memory:
         content = f"{content}\n\n{MEMORY_LEAD}\n\n{memory}"
-    todo = (compaction.get("raw_payload") or {}).get("todo")
+    payload = compaction.get("raw_payload") or {}
+    if payload.get("work_notes"):
+        content = f"{content}\n\n{WORK_NOTES_LEAD.format(where=_where(payload.get('project')))}\n\n{payload['work_notes']}"
+    todo = payload.get("todo")
     if todo:
         from app.services.bot_todo import render_todo
 
@@ -257,6 +298,9 @@ def build_history_messages(history: List[Dict[str, Any]], *, replay_tools: bool)
             continue
         if is_todo_note(message):
             messages.extend(todo_note_messages(message))
+            continue
+        if is_work_note(message):
+            messages.extend(work_note_messages(message))
             continue
         if sender != "bot":
             continue

@@ -154,7 +154,7 @@ class RewindTests(unittest.TestCase):
             {"id": "c2", "name": "todo_add", "status": "completed"},
         ])
         result = rewind.rewind(self.bot)
-        self.assertEqual(result["resynced"], {"notes": True, "todo": True})
+        self.assertEqual(result["resynced"], {"notes": True, "todo": True, "work_notes": False})
         rows = self.storage.get_messages(thread_id=self.bot)
         self.assertEqual([m["item_type"] for m in rows[2:]], ["memory", "todo"])
         self.assertEqual(rows[2]["raw_payload"]["by"], "rewind")

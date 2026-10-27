@@ -17,7 +17,7 @@ class ToolCatalogTests(unittest.TestCase):
     def test_tool_groups_follow_what_is_configured(self):
         names = lambda specs: [s.name for s in specs]  # noqa: E731
         base = names(available_tools(computer=False, github=False))
-        self.assertEqual(base, ["shared_folder_list", "shared_folder_read", "shared_folder_write", "shared_folder_delete", "share_file", "memory_read", "memory_write", "memory_edit", "todo_list", "todo_add", "todo_update", "schedule_list", "schedule_create", "schedule_delete", "ask_user", "mcp_list_servers", "mcp_add_server", "mcp_test_server", "mcp_remove_server"])
+        self.assertEqual(base, ["shared_folder_list", "shared_folder_read", "shared_folder_write", "shared_folder_delete", "share_file", "memory_read", "memory_write", "memory_edit", "work_notes_read", "work_notes_write", "work_notes_edit", "project_log", "project_log_read", "projects_list", "project_create", "project_join", "todo_list", "todo_add", "todo_update", "schedule_list", "schedule_create", "schedule_delete", "ask_user", "mcp_list_servers", "mcp_add_server", "mcp_test_server", "mcp_remove_server"])
         with_computer = names(available_tools(computer=True, github=False))
         self.assertIn("computer_screenshot", with_computer)
         self.assertNotIn("github_list_issues", with_computer)

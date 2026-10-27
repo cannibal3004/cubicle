@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.services import conversations
+from app.services import conversations, projects
 from app.services.bot_todo import TODO_MAX_ITEMS, TodoError, clean_todo, get_todo, todo_note_message
 from app.services.conversations import ConversationError
 from app.services.storage_service import current_storage
@@ -17,12 +17,17 @@ router = APIRouter(prefix="/api/v1", tags=["conversations"])
 
 class ConversationInput(BaseModel):
     title: str = Field(default="", max_length=conversations.TITLE_MAX_CHARS * 2)
+    project_id: Optional[str] = Field(default=None, max_length=40)
 
 
 class ConversationUpdate(BaseModel):
     title: Optional[str] = Field(default=None, max_length=conversations.TITLE_MAX_CHARS * 2)
     archived: Optional[bool] = None
     todo: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=TODO_MAX_ITEMS)
+    # Move it into a project; "" takes it out of its project.
+    project_id: Optional[str] = Field(default=None, max_length=40)
+    # Its own work notes (used while it is in no project).
+    work_notes: Optional[str] = Field(default=None, max_length=projects.WORK_NOTES_MAX_CHARS)
 
 
 def _record(conversation_id: str) -> Dict[str, Any]:
@@ -55,7 +60,7 @@ async def list_conversations(bot_id: str):
 async def start_conversation(bot_id: str, body: Optional[ConversationInput] = None):
     """A new conversation with the bot: empty, apart from the bot's notes, which every conversation shares."""
     try:
-        record = conversations.create(bot_id, body.title if body else "")
+        record = conversations.create(bot_id, body.title if body else "", project_id=(body.project_id or None) if body else None)
     except ConversationError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _summary(record)
@@ -89,8 +94,25 @@ async def update_conversation(conversation_id: str, body: ConversationUpdate):
             changes["todo"] = todo
             # Recorded in the conversation so the bot sees the edit where it happened.
             note = todo_note_message(conversation_id, todo, message_id=f"msg-{uuid.uuid4().hex[:6]}", bot_id=record["bot_id"])
+    work_note = None
+    if body.work_notes is not None:
+        try:
+            notes = projects.clean_work_notes(body.work_notes)
+        except projects.ProjectError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if notes != str(record.get("work_notes") or ""):
+            changes["work_notes"] = notes
+            # Shown to the bot where it happened, like an edit of its notes.
+            work_note = projects.work_note_message(conversation_id, notes, bot_id=record["bot_id"], by="user")
     if changes:
         record = conversations.update(conversation_id, changes)
+    if work_note is not None:
+        current_storage().add_message(work_note)
+    if body.project_id is not None:
+        try:
+            record = projects.join(conversation_id, body.project_id or None)
+        except projects.ProjectError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if body.title is not None and not record.get("title"):
         from app.services import conversation_titles
 

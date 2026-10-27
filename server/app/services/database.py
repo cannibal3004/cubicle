@@ -199,6 +199,26 @@ SCHEMA_MIGRATIONS = {
     11: """
         CREATE INDEX IF NOT EXISTS threads_owner_bot ON threads(owner_id, bot_id);
     """,
+    # Projects (services/projects.py): a bot's pieces of work, each with work
+    # notes and a log; and what a person wants every bot to know about them.
+    12: """
+        CREATE TABLE IF NOT EXISTS projects (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            bot_id TEXT NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS projects_owner_bot ON projects(owner_id, bot_id);
+        CREATE TABLE IF NOT EXISTS project_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS project_log_owner_project ON project_log(owner_id, project_id);
+        ALTER TABLE users ADD COLUMN about TEXT;
+    """,
 }
 
 OWNER_TABLES = (

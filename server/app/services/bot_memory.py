@@ -53,10 +53,10 @@ def clean_memory(text: Any) -> str:
         # running log here will hit any limit, and the fix is to move the log.
         raise MemoryError(
             f"Notes are limited to {MEMORY_MAX_CHARS} characters; this would make them {len(cleaned)}. "
-            "Notes are for standing facts: the goal, the user's rules, how things are set up and where they are, "
-            "the current watchlist, and a short latest status. Per-run logs and day-by-day reports belong in files in "
-            "your workspace, with at most a line of status here. Move or drop those sections with memory_edit (or "
-            "rewrite the notes with memory_write) and try again."
+            "Notes are for durable facts about your job: the systems you look after, access, house rules, how things "
+            "are done, lessons learned. Where a piece of work stands belongs in its project's work notes (work_notes_write), "
+            "and what happened along the way in its log (project_log); per-run reports belong in files in your workspace. "
+            "Move or drop those sections with memory_edit (or rewrite the notes with memory_write) and try again."
         )
     return cleaned
 

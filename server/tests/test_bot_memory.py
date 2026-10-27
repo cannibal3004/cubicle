@@ -146,7 +146,7 @@ class BotMemoryTests(unittest.TestCase):
         self.assertTrue(all(s.group == "memory" and not s.needs_approval for s in MEMORY_TOOLS))
         described = describe_tools(specs)
         self.assertIn("Your notes", described)
-        self.assertIn("memory_edit rather than rewriting", described)
+        self.assertIn("memory_edit changes one passage", described)
         write_spec = next(s for s in MEMORY_TOOLS if s.name == "memory_write")
         self.assertIn(f"at most {MEMORY_MAX_CHARS} characters", write_spec.description)
         with self.assertRaises(ToolCallError):

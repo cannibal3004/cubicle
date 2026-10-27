@@ -41,6 +41,8 @@ class TokenCreate(BaseModel):
 
 class ProfileUpdate(BaseModel):
     display_name: Optional[str] = Field(default=None, max_length=80)
+    # What every bot should know about this person (shown to the bots they talk to).
+    about: Optional[str] = Field(default=None, max_length=2000)
     email: Optional[str] = Field(default=None, max_length=200)
 
 
@@ -129,7 +131,7 @@ async def update_profile(body: ProfileUpdate, request: Request):
     """The name to be addressed by and the email to be reached at; both go to the bots."""
     user = _current_user(request)
     try:
-        return {"user": auth_service.accounts.update_profile(user["id"], body.display_name, body.email)}
+        return {"user": auth_service.accounts.update_profile(user["id"], body.display_name, body.email, body.about)}
     except AccountError as exc:
         raise _account_error(exc)
 

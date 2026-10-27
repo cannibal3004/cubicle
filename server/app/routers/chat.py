@@ -25,7 +25,7 @@ from app.services.approval_gate import approval_gate
 from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs
-from app.services import computer_turns, conversation_titles, conversations
+from app.services import computer_turns, conversation_titles, conversations, projects  # projects: registers its actions
 from app.services.context_builder import build_history_messages, cap_message_results, latest_compaction, live_messages, safe_arguments, trim_result_text
 from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
 from app.services import bot_memory as _bot_memory  # noqa: F401 - registers memory.read/write
@@ -727,6 +727,14 @@ async def attach_turn_context(
         counts["procedures"] = known.count("\n--- ")
         turn.emit({"type": "procedure.used", "botMsgId": bot_msg_id, "count": counts["procedures"]})
         blocks.append(known)
+    # Entries of the conversation's project log that match this message.
+    conversation = conversations.get(thread_id) or {}
+    if conversation.get("project_id"):
+        logged = _fresh_entries(await projects.log_context(conversation["project_id"], query), "--- ", seen)
+        if logged:
+            counts["log_entries"] = logged.count("--- from ")
+            turn.emit({"type": "project_log.used", "botMsgId": bot_msg_id, "count": counts["log_entries"]})
+            blocks.append(logged)
     # Past exchanges of this conversation that the compaction folded away but that match this message.
     recalled = _fresh_entries(await recalled_context(thread_id, query, history), "- ", seen)
     if recalled:
@@ -777,7 +785,7 @@ def describe_user() -> str:
         return ""
     name = (user.get("display_name") or "").strip()
     email = (user.get("email") or "").strip()
-    if not name and not email:
+    if not name and not email and not (user.get("about") or "").strip():
         return ""
     parts = []
     if name:
@@ -786,7 +794,12 @@ def describe_user() -> str:
         parts.append(f"The person you work for has the account {user.get('username')}.")
     if email:
         parts.append(f"Their email address is {email}; use it when they ask to be copied, notified or contacted, without asking for it again.")
-    return " ".join(parts) + "\n\n"
+    line = " ".join(parts) + "\n\n"
+    about = (user.get("about") or "").strip()
+    if about:
+        # What they want every bot to know about them; it belongs here, not in a bot's notes.
+        line += f"What they want you to know about them:\n{about}\n\n"
+    return line
 
 
 async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[str, Any]:
