@@ -19,12 +19,15 @@ tokens and in context.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
 from app.config import settings
 from app.services.action_gateway import ActionDefinition, ActionGateway, ActionInvocation, action_gateway
 from app.services.storage_service import StorageService, current_storage
+
+logger = logging.getLogger(__name__)
 
 MEMORY_MAX_CHARS = settings.BOT_MEMORY_MAX_CHARS
 MEMORY_ITEM_TYPE = "memory"
@@ -136,17 +139,19 @@ def edit_memory(bot_id: str, old_text: Any, new_text: Any, storage: Optional[Sto
     return {**saved, "excerpt": _excerpt(updated, at, min(len(updated), at + len(new_text)))}
 
 
-def memory_note_message(bot_id: str, text: str, *, message_id: str) -> Dict[str, Any]:
-    """The thread item recording that the user edited the notes."""
+def memory_note_message(thread_id: str, text: str, *, message_id: str, bot_id: Optional[str] = None, by: str = "user") -> Dict[str, Any]:
+    """A thread item about the notes: the user edited them ("user"), the state after an undo
+    ("rewind"), the notes a new conversation starts with ("start"), or word that another
+    conversation changed them ("elsewhere", no text)."""
     return {
         "id": message_id,
-        "thread_id": bot_id,
-        "bot_id": bot_id,
+        "thread_id": thread_id,
+        "bot_id": bot_id or thread_id,
         "sender": "system",
         "text": text,
         "created_at": datetime.now().isoformat(),
         "item_type": MEMORY_ITEM_TYPE,
-        "raw_payload": {"by": "user", "chars": len(text)},
+        "raw_payload": {"by": by, "chars": len(text)},
     }
 
 
@@ -157,18 +162,41 @@ def _bot_id(call: ActionInvocation) -> str:
     return bot_id
 
 
+def _thread_id(call: ActionInvocation) -> Optional[str]:
+    thread_id = call.arguments.get("thread_id")
+    return thread_id if isinstance(thread_id, str) and thread_id else None
+
+
+def _after_change(call: ActionInvocation, bot_id: str) -> None:
+    """The conversation that changed the notes has them; the bot's other conversations are told."""
+    from app.services import conversations
+
+    try:
+        conversations.notes_seen(_thread_id(call))
+        conversations.notes_changed(bot_id, _thread_id(call) or bot_id)
+    except Exception as exc:  # the change itself is saved
+        logger.warning("Could not tell the other conversations of %s about a notes change: %s", bot_id, exc)
+
+
 async def execute_read(call: ActionInvocation) -> Dict[str, Any]:
+    from app.services import conversations
+
     memory = get_memory(_bot_id(call))
+    conversations.notes_seen(_thread_id(call))
     return {"memory": memory, "chars": len(memory), "limit": MEMORY_MAX_CHARS}
 
 
 async def execute_write(call: ActionInvocation) -> Dict[str, Any]:
-    result = set_memory(_bot_id(call), call.arguments.get("text"))
+    bot_id = _bot_id(call)
+    result = set_memory(bot_id, call.arguments.get("text"))
+    _after_change(call, bot_id)
     return {**result, "limit": MEMORY_MAX_CHARS}
 
 
 async def execute_edit(call: ActionInvocation) -> Dict[str, Any]:
-    result = edit_memory(_bot_id(call), call.arguments.get("old_text"), call.arguments.get("new_text"))
+    bot_id = _bot_id(call)
+    result = edit_memory(bot_id, call.arguments.get("old_text"), call.arguments.get("new_text"))
+    _after_change(call, bot_id)
     return {**result, "limit": MEMORY_MAX_CHARS}
 
 

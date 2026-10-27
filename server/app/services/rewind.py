@@ -187,14 +187,18 @@ def _resync_rows(thread_id: str, info: Dict[str, Any], storage: StorageService) 
     from app.services.bot_memory import memory_note_message
     from app.services.bot_todo import todo_note_message
 
-    bot = _bot(storage, thread_id)
+    from app.services import conversations
+    from app.services.bot_todo import get_todo
+
+    bot_id = conversations.bot_id_of(thread_id, storage) or thread_id
+    bot = _bot(storage, bot_id)
     rows: List[Dict[str, Any]] = []
     if info["notes_changed"]:
-        row = memory_note_message(thread_id, str(bot.get("memory") or ""), message_id=f"msg-{uuid.uuid4().hex[:6]}")
+        row = memory_note_message(thread_id, str(bot.get("memory") or ""), message_id=f"msg-{uuid.uuid4().hex[:6]}", bot_id=bot_id)
         row["raw_payload"]["by"] = REWIND_BY
         rows.append(row)
     if info["todo_changed"]:
-        row = todo_note_message(thread_id, list(bot.get("todo") or []), message_id=f"msg-{uuid.uuid4().hex[:6]}")
+        row = todo_note_message(thread_id, get_todo(thread_id, storage), message_id=f"msg-{uuid.uuid4().hex[:6]}", bot_id=bot_id)
         row["raw_payload"]["by"] = REWIND_BY
         rows.append(row)
     return rows

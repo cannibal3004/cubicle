@@ -928,13 +928,35 @@ def _computer_invocation(action: str, bot_id: str, arguments: Dict[str, Any], pr
     )
 
 
+# Actions that belong to the conversation a call comes from, not just the bot.
+THREAD_ACTIONS = {"todo.list", "todo.add", "todo.update", "memory.read", "memory.write", "memory.edit", "user.ask"}
+
+
 def build_invocation(
     name: str,
     arguments: Dict[str, Any],
     bot_id: str,
     specs: Optional[List[ToolSpec]] = None,
+    thread_id: Optional[str] = None,
 ) -> Union[WorkspaceToolCall, ActionInvocation]:
-    """Validate a model tool call and build the gateway input for it."""
+    """Validate a model tool call and build the gateway input for it.
+
+    `thread_id` is the conversation the call comes from (the bot's id when
+    not given): the to-do list and questions are the conversation's, and a
+    change to the notes is announced in the bot's other conversations.
+    """
+    invocation = _build_invocation(name, arguments, bot_id, specs)
+    if isinstance(invocation, ActionInvocation) and invocation.name in THREAD_ACTIONS:
+        invocation = replace(invocation, arguments={**invocation.arguments, "thread_id": thread_id or bot_id})
+    return invocation
+
+
+def _build_invocation(
+    name: str,
+    arguments: Dict[str, Any],
+    bot_id: str,
+    specs: Optional[List[ToolSpec]] = None,
+) -> Union[WorkspaceToolCall, ActionInvocation]:
     name = current_name(name)  # a former name still works
     if name == "shared_folder_list":
         return WorkspaceToolCall("workspace.list", _string(arguments, "path", default=".", max_len=1000))

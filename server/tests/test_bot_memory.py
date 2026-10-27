@@ -154,7 +154,7 @@ class BotMemoryTests(unittest.TestCase):
         with self.assertRaises(ToolCallError):
             build_invocation("memory_write", {"text": "x" * (MEMORY_MAX_CHARS + 1)}, "bot-9")
         invocation = build_invocation("memory_write", {"text": "n" * 20}, "bot-9")
-        self.assertEqual(invocation.arguments, {"bot_id": "bot-9", "text": "n" * 20})
+        self.assertEqual(invocation.arguments, {"bot_id": "bot-9", "text": "n" * 20, "thread_id": "bot-9"})
         self.assertIn("20 characters", invocation.preview)
 
 

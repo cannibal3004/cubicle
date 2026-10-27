@@ -71,7 +71,9 @@ class Scheduler:
             if record["id"] in self._running_ids:
                 continue  # Its previous run has not finished yet.
             started += 1
-            current = turn_manager.current(record["bot_id"])
+            # Runs go to the bot's "Scheduled" conversation: busy means busy there.
+            with owner_context(record.get("owner_id")):
+                current = turn_manager.current(schedule_service.run_thread(record))
             if current is not None and not current.finished:
                 schedule_service.record_run(record["id"], "skipped", "a reply was still in progress", now=now)
                 logger.info("Schedule %s (%s) skipped: bot %s busy", record["id"], record["name"], record["bot_id"])
@@ -95,7 +97,7 @@ class Scheduler:
         """Start a schedule's run immediately (the editor's Run now). False when the bot is busy."""
         if self._run_turn is None or record["id"] in self._running_ids:
             return False
-        current = turn_manager.current(record["bot_id"])
+        current = turn_manager.current(schedule_service.run_thread(record))
         if current is not None and not current.finished:
             return False
         task = asyncio.get_running_loop().create_task(self._run({**record, "owner_id": get_current_owner()}))
@@ -113,9 +115,10 @@ class Scheduler:
     async def _run_owned(self, record: Dict[str, Any], now=None) -> None:
         schedule_id = record["id"]
         try:
-            message = schedule_service.scheduled_message(record, message_id=f"msg-{uuid.uuid4().hex[:6]}", now=now)
+            thread_id = schedule_service.run_thread(record)
+            message = schedule_service.scheduled_message(record, message_id=f"msg-{uuid.uuid4().hex[:6]}", now=now, thread_id=thread_id)
             try:
-                turn = await self._run_turn(record["bot_id"], message, record.get("owner_id"))
+                turn = await self._run_turn(thread_id, message, record.get("owner_id"))
             except TurnBusyError:
                 schedule_service.record_run(schedule_id, "skipped", "a reply was still in progress", now=now)
                 return

@@ -160,6 +160,8 @@ class AppSettingsSchema(BaseModel):
     llm_api_key_configured: bool = False
     composio_api_key_configured: bool = False
     default_model: str = Field(default_factory=lambda: settings.DEFAULT_MODEL)
+    # The model that names conversations after their first exchange; empty = the bot's own.
+    title_model: str = Field(default="", max_length=200)
     theme: str = "dark"
     # Connected apps whose tools are withheld from every bot (still connected).
     disabled_toolkits: List[str] = Field(default_factory=list)

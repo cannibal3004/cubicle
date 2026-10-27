@@ -194,6 +194,11 @@ SCHEMA_MIGRATIONS = {
         );
         CREATE INDEX IF NOT EXISTS rewinds_owner_thread ON rewinds(owner_id, thread_id);
     """,
+    # A bot's conversations (services/conversations.py) live in the threads table,
+    # which was created early on and never used until now.
+    11: """
+        CREATE INDEX IF NOT EXISTS threads_owner_bot ON threads(owner_id, bot_id);
+    """,
 }
 
 OWNER_TABLES = (

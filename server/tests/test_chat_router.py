@@ -135,6 +135,9 @@ class ChatStreamRouteTests(unittest.TestCase):
             mock.patch.object(chat_router, "composio_service", NoComposio()),
             mock.patch.object(chat_router, "turn_manager", manager or TurnManager()),
             mock.patch.object(chat_router, "_context_window_for", _fake_context_window),
+            # Conversation titles are written in the background by a model request of their own:
+            # not here, where the model's replies are scripted (tests/test_conversations covers them).
+            mock.patch.object(chat_router.conversation_titles, "schedule", lambda thread_id: None),
         ]
         if gateway is not None:
             patches.append(mock.patch.object(chat_router, "action_gateway", gateway))

@@ -18,7 +18,14 @@ import {
   createBot,
   updateBot,
   deleteBot,
+  fetchConversations,
+  createConversation,
+  updateConversation,
+  deleteConversation,
 } from '../lib/api';
+
+// Which conversation was open for each bot, remembered in this browser.
+const THREADS_KEY = 'cubicle.conversationByBot';
 import { establishSession, fetchAuthStatus, setAuthFailureHandler, fetchTurnsOverview } from '../lib/api';
 import LoginScreen from './LoginScreen';
 
@@ -34,11 +41,48 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'computer' | 'marketplace' | 'audit' | 'settings'
   // Transcripts are cached per bot so a reply that is still streaming for
   // one bot survives switching to another bot or another tab.
+  // Messages and streaming are kept per conversation (thread id; a bot's
+  // first conversation has the bot's own id).
   const [messagesByBot, setMessagesByBot] = useState({});
   const [streamingBots, setStreamingBots] = useState({});
+  // Each bot's conversations, most recently active first, and the one open for it.
+  const [conversationsByBot, setConversationsByBot] = useState({});
+  const [threadByBot, setThreadByBot] = useState({});
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(THREADS_KEY) || '{}');
+      if (saved && typeof saved === 'object') setThreadByBot(saved);
+    } catch {
+      // private window or blocked storage: start from each bot's latest conversation
+    }
+  }, []);
+  const rememberThread = useCallback((botId, threadId) => {
+    setThreadByBot((prev) => {
+      const next = { ...prev, [botId]: threadId };
+      try {
+        window.localStorage.setItem(THREADS_KEY, JSON.stringify(next));
+      } catch {
+        // not kept across reloads, which is fine
+      }
+      return next;
+    });
+  }, []);
+  const loadConversations = useCallback((botId) => {
+    if (!botId) return Promise.resolve([]);
+    return fetchConversations(botId)
+      .then((list) => {
+        setConversationsByBot((prev) => ({ ...prev, [botId]: list }));
+        return list;
+      })
+      .catch(() => []);
+  }, []);
   // The server's view of running turns and pending approvals, by bot.
   const [turnStates, setTurnStates] = useState({});
   const lastTurnStates = useRef({});
+  const conversationsRef = useRef({});
+  // Conversations whose first reply just finished: a model is naming them in
+  // the background, so their bot's list is refreshed until the title arrives.
+  const awaitingTitles = useRef({});
   // Bots that appeared on the server (an orchestrator's bots_create, another
   // device) join the list; known ones keep their loaded state.
   const adoptNewBots = useCallback(() => {
@@ -96,6 +140,11 @@ export default function Dashboard() {
       if (disposed) return;
       const next = {};
       for (const turn of overview.turns || []) next[turn.thread_id] = turn;
+      // A turn in a conversation this tab has not listed yet (a schedule's, another device's): list it.
+      const known = new Set(Object.values(conversationsRef.current).flat().map((c) => c.id));
+      for (const turn of overview.turns || []) {
+        if (!known.has(turn.thread_id) && turn.bot_id) loadConversations(turn.bot_id);
+      }
       // A turn that just finished (a scheduled run, or one driven from another
       // device) may have changed the bot's notes or to-do list: refresh that bot.
       const previous = lastTurnStates.current;
@@ -105,12 +154,28 @@ export default function Dashboard() {
         const now = next[threadId];
         if (turn.status === 'running' && (!now || now.status !== 'running')) {
           finished = true;
-          fetchBot(threadId)
-            .then((fresh) => setBots((prev) => prev.map((b) => (b.id === threadId ? { ...b, ...fresh } : b))))
+          const botId = turn.bot_id || threadId;
+          fetchBot(botId)
+            .then((fresh) => setBots((prev) => prev.map((b) => (b.id === botId ? { ...b, ...fresh } : b))))
             .catch(() => {});
+          loadConversations(botId);
+          const conversation = (conversationsRef.current[botId] || []).find((c) => c.id === threadId);
+          if (!conversation || !['generated', 'user', 'fixed'].includes(conversation.title_source)) {
+            awaitingTitles.current[threadId] = { botId, until: Date.now() + 90000 };
+          }
         }
       }
       if (finished) adoptNewBots(); // a turn may have created a bot
+      const titleBots = new Set();
+      for (const [threadId, wait] of Object.entries(awaitingTitles.current)) {
+        const conversation = (conversationsRef.current[wait.botId] || []).find((c) => c.id === threadId);
+        if (Date.now() > wait.until || (conversation && ['generated', 'user', 'fixed'].includes(conversation.title_source))) {
+          delete awaitingTitles.current[threadId];
+        } else if (!finished) {
+          titleBots.add(wait.botId);
+        }
+      }
+      titleBots.forEach((botId) => loadConversations(botId));
       setTurnStates((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
     };
     poll();
@@ -165,25 +230,120 @@ export default function Dashboard() {
     setStreamingBots((prev) => (Boolean(prev[botId]) === Boolean(value) ? prev : { ...prev, [botId]: Boolean(value) }));
   }, []);
 
-  const activeBotStreaming = Boolean(activeBotId && streamingBots[activeBotId]);
-
-  // Fetch chat history whenever the active bot changes, and again once a
-  // reply finishes so the cache picks up the persisted message ids. A bot
-  // that is mid-reply keeps its live transcript.
   useEffect(() => {
-    if (!activeBotId || activeBotStreaming) return;
+    if (authState === 'ready' && activeBotId) loadConversations(activeBotId);
+  }, [authState, activeBotId, loadConversations]);
+
+  // The open conversation: the one remembered for the bot, else its latest
+  // one the user started (scheduled runs and an orchestrator's tasks have
+  // conversations of their own), else its first.
+  const activeConversations = conversationsByBot[activeBotId] || [];
+  const rememberedThread = threadByBot[activeBotId];
+  const latestThread = (() => {
+    const open = activeConversations.filter((c) => !c.archived);
+    const typed = open.find((c) => !c.purpose) || open[0];
+    return typed ? typed.id : activeBotId;
+  })();
+  const activeThreadId = !activeBotId
+    ? ''
+    : rememberedThread && (!activeConversations.length || activeConversations.some((c) => c.id === rememberedThread))
+      ? rememberedThread
+      : latestThread;
+  const activeConversation = activeConversations.find((c) => c.id === activeThreadId) || null;
+
+  const activeBotStreaming = Boolean(activeThreadId && streamingBots[activeThreadId]);
+
+  // Fetch chat history whenever the open conversation changes, and again once
+  // a reply finishes so the cache picks up the persisted message ids. A
+  // conversation that is mid-reply keeps its live transcript.
+  useEffect(() => {
+    if (!activeThreadId || activeBotStreaming) return;
     let cancelled = false;
-    fetchChatHistory(activeBotId)
+    fetchChatHistory(activeThreadId)
       .then((history) => {
-        if (!cancelled) setMessagesFor(activeBotId, history);
+        if (!cancelled) setMessagesFor(activeThreadId, history);
       })
       .catch((err) => console.error('Failed to load history:', err));
     return () => {
       cancelled = true;
     };
-  }, [activeBotId, activeBotStreaming, setMessagesFor]);
+  }, [activeThreadId, activeBotStreaming, setMessagesFor]);
+
+  // ---- conversations ------------------------------------------------------------------
+
+  const ownerOf = (threadId) =>
+    Object.keys(conversationsByBot).find((botId) => (conversationsByBot[botId] || []).some((c) => c.id === threadId)) || activeBotId;
+
+  const mergeConversation = (botId, saved) =>
+    setConversationsByBot((prev) => {
+      const list = prev[botId] || [];
+      return { ...prev, [botId]: list.some((c) => c.id === saved.id) ? list.map((c) => (c.id === saved.id ? { ...c, ...saved } : c)) : [saved, ...list] };
+    });
+
+  const handleSelectConversation = (botId, threadId) => {
+    rememberThread(botId, threadId);
+    setActiveBotId(botId);
+    setActiveTab('chat');
+  };
+
+  const handleNewConversation = async (botId = activeBotId) => {
+    if (!botId) return null;
+    const created = await createConversation(botId);
+    mergeConversation(botId, created);
+    rememberThread(botId, created.id);
+    setActiveBotId(botId);
+    setActiveTab('chat');
+    return created;
+  };
+
+  // From the chat: { todo } from a tool result, { refresh: true } after a first
+  // message (the server names the conversation), or a saved edit ({ save: true }).
+  const handleConversationPatched = async (threadId, patch, options = {}) => {
+    const botId = ownerOf(threadId);
+    if (patch?.refresh) {
+      await loadConversations(botId);
+      return null;
+    }
+    if (options.save) {
+      const saved = await updateConversation(threadId, patch);
+      mergeConversation(botId, saved);
+      return saved;
+    }
+    setConversationsByBot((prev) => ({ ...prev, [botId]: (prev[botId] || []).map((c) => (c.id === threadId ? { ...c, ...patch } : c)) }));
+    return null;
+  };
+
+  const handleRenameConversation = async (conversation, title) => {
+    const saved = await updateConversation(conversation.id, { title });
+    mergeConversation(conversation.bot_id, saved);
+  };
+
+  const handleArchiveConversation = async (conversation, archived) => {
+    const saved = await updateConversation(conversation.id, { archived });
+    mergeConversation(conversation.bot_id, saved);
+    if (archived && conversation.id === activeThreadId) {
+      const next = (conversationsByBot[conversation.bot_id] || []).find((c) => !c.archived && c.id !== conversation.id);
+      rememberThread(conversation.bot_id, next ? next.id : conversation.bot_id);
+    }
+  };
+
+  const handleDeleteConversation = async (conversation) => {
+    await deleteConversation(conversation.id);
+    setMessagesByBot((prev) => {
+      const next = { ...prev };
+      delete next[conversation.id];
+      return next;
+    });
+    const list = await loadConversations(conversation.bot_id);
+    if (conversation.id === activeThreadId) {
+      const next = (list || []).find((c) => !c.archived && c.id !== conversation.id);
+      rememberThread(conversation.bot_id, next ? next.id : conversation.bot_id);
+    }
+  };
 
   const activeBot = bots.find((b) => b.id === activeBotId) || bots[0];
+
+  conversationsRef.current = conversationsByBot;
 
   const handleUpdateBotModel = async (botId, newModel) => {
     try {
@@ -245,7 +405,9 @@ export default function Dashboard() {
       selectNextVisible(list, bot.id);
       return list;
     });
-    setMessagesByBot((prev) => {
+    const gone = new Set([bot.id, ...(conversationsByBot[bot.id] || []).map((c) => c.id)]);
+    setMessagesByBot((prev) => Object.fromEntries(Object.entries(prev).filter(([threadId]) => !gone.has(threadId))));
+    setConversationsByBot((prev) => {
       const next = { ...prev };
       delete next[bot.id];
       return next;
@@ -289,6 +451,13 @@ export default function Dashboard() {
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         turnStates={turnStates}
+        conversations={activeConversations}
+        activeThreadId={activeThreadId}
+        onSelectConversation={handleSelectConversation}
+        onNewConversation={(botId) => handleNewConversation(botId).catch((err) => console.error('Could not start a conversation:', err))}
+        onRenameConversation={(c, title) => handleRenameConversation(c, title).catch((err) => console.error('Rename failed:', err))}
+        onArchiveConversation={(c, archived) => handleArchiveConversation(c, archived).catch((err) => console.error('Archive failed:', err))}
+        onDeleteConversation={(c) => handleDeleteConversation(c).catch((err) => window.alert(err.message || 'Could not delete the conversation.'))}
         onOpenSettings={() => setActiveTab((tab) => (tab === 'settings' ? 'chat' : 'settings'))}
         onOpenNewBot={() => setBotEditor({ mode: 'create' })}
         onEditBot={(bot) => setBotEditor({ mode: 'edit', bot })}
@@ -331,10 +500,14 @@ export default function Dashboard() {
         <div className={activeTab === 'chat' ? 'contents' : 'hidden'}>
           <ChatWindow
             bot={activeBot}
+            threadId={activeThreadId}
+            conversation={activeConversation}
+            onConversationPatched={handleConversationPatched}
+            onNewConversation={() => handleNewConversation(activeBotId)}
             models={models}
             catalogError={catalogError}
             onRefreshModels={refreshModels}
-            messages={activeBotId ? messagesByBot[activeBotId] || [] : []}
+            messages={activeThreadId ? messagesByBot[activeThreadId] || [] : []}
             setMessagesFor={setMessagesFor}
             streamingBots={streamingBots}
             onStreamingChange={handleStreamingChange}

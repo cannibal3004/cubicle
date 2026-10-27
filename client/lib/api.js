@@ -280,6 +280,46 @@ export async function fetchModels(refresh = false) {
   }
 }
 
+// ---- a bot's conversations -------------------------------------------------------------
+
+async function conversationRequest(path, options, failure) {
+  const res = await apiFetch(`${API_BASE_URL}${path}`, options);
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = (await res.json()).detail;
+    } catch {
+      // not JSON
+    }
+    throw new Error(typeof detail === 'string' && detail ? detail : failure);
+  }
+  return res.json();
+}
+
+export function fetchConversations(botId) {
+  return conversationRequest(`/bots/${encodeURIComponent(botId)}/conversations`, {}, 'Could not load the conversations.');
+}
+
+export function createConversation(botId, title = '') {
+  return conversationRequest(
+    `/bots/${encodeURIComponent(botId)}/conversations`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) },
+    'Could not start a conversation.'
+  );
+}
+
+export function updateConversation(conversationId, changes) {
+  return conversationRequest(
+    `/conversations/${encodeURIComponent(conversationId)}`,
+    { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) },
+    'Could not update the conversation.'
+  );
+}
+
+export function deleteConversation(conversationId) {
+  return conversationRequest(`/conversations/${encodeURIComponent(conversationId)}`, { method: 'DELETE' }, 'Could not delete the conversation.');
+}
+
 export async function fetchChatHistory(threadId) {
   try {
     const res = await apiFetch(`${API_BASE_URL}/chat/history/${threadId}`);

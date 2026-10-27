@@ -25,6 +25,7 @@ from app.services.approval_gate import approval_gate
 from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs
+from app.services import computer_turns, conversation_titles, conversations
 from app.services.context_builder import build_history_messages, cap_message_results, latest_compaction, live_messages, safe_arguments, trim_result_text
 from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
 from app.services import bot_memory as _bot_memory  # noqa: F401 - registers memory.read/write
@@ -143,10 +144,12 @@ def _model_accepts_images(model: str, llm_config) -> bool:
     return not (info is not None and info.supports_vision is False)
 
 
-def _ensure_thread(thread_id: str) -> None:
-    """Threads are bots; a bot that is not the caller's does not exist for them."""
-    if not any(bot.get("id") == thread_id for bot in current_storage().get_bots()):
+def _ensure_thread(thread_id: str) -> str:
+    """A conversation of one of the caller's bots; returns its bot's id. Anything else does not exist for them."""
+    bot_id = conversations.bot_id_of(thread_id)
+    if bot_id is None:
         raise HTTPException(status_code=404, detail="Bot not found")
+    return bot_id
 
 
 @router.get("/history/{thread_id}", response_model=List[Message])
@@ -267,12 +270,14 @@ async def redo_thread(thread_id: str):
 
 @router.post("/send")
 async def send_message(req: TurnRequest):
-    _ensure_thread(req.thread_id)
+    # The conversation decides the bot, whatever the client sent as bot_id.
+    bot_id = _ensure_thread(req.thread_id)
+    first_message = not any(m.get("sender") == "user" for m in current_storage().get_messages(thread_id=req.thread_id))
     # Store user message
     user_msg = {
         "id": f"msg-{uuid.uuid4().hex[:6]}",
         "thread_id": req.thread_id,
-        "bot_id": req.bot_id,
+        "bot_id": bot_id,
         "sender": "user",
         "text": req.user_text,
         "image_url": req.image_url,
@@ -286,13 +291,13 @@ async def send_message(req: TurnRequest):
         attached = []
         for ref in req.attachments:
             try:
-                shared = resolve_shared_file(ref.source, ref.path, req.bot_id)
+                shared = resolve_shared_file(ref.source, ref.path, bot_id)
             except FileShareError as exc:
                 raise HTTPException(status_code=400, detail=f"Attachment {ref.path}: {exc}")
-            attached.append(await attachment_service.attach(shared, req.bot_id))
+            attached.append(await attachment_service.attach(shared, bot_id))
         user_msg["attachments"] = attached
     if req.recording_id:
-        record = demonstrations.load_recording(req.bot_id, req.recording_id)
+        record = demonstrations.load_recording(bot_id, req.recording_id)
         if record is None:
             raise HTTPException(status_code=404, detail="That recording does not exist.")
         if not user_msg["text"].strip():
@@ -300,7 +305,12 @@ async def send_message(req: TurnRequest):
         user_msg["raw_payload"] = {"demonstration": demonstrations.summary(record)}
 
     current_storage().add_message(user_msg)
-    recall.schedule_index(req.bot_id, user_msg)
+    recall.schedule_index(req.thread_id, user_msg)
+    if first_message:
+        # A conversation is named after what it was started with, until the user renames it.
+        record = conversations.get(req.thread_id)
+        if record is not None and not record.get("title"):
+            conversations.update(req.thread_id, {"title": conversations.title_from(user_msg["text"]), "title_source": "first_message"})
     # A new message starts a new branch: what was undone can no longer be redone.
     rewind_service.forget(req.thread_id)
     if user_msg.get("attachments"):
@@ -318,6 +328,7 @@ async def _perform_action(
     gate_threshold: Optional[float] = None,
     trusted: Union[bool, str] = False,
     specs: Optional[List[Any]] = None,
+    bot_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run one governed action through the gateway, emitting events on the turn.
 
@@ -327,8 +338,9 @@ async def _perform_action(
     which the gate shows the decision model next to the proposed action.
     `trusted` means the user trusts this tool for this bot: no card, no gate.
     """
+    bot_id = bot_id or conversations.bot_id_of(thread_id) or thread_id
     try:
-        action_request, approval = action_gateway.open(thread_id, thread_id, action_call, **({"trusted": trusted} if trusted else {}))
+        action_request, approval = action_gateway.open(thread_id, bot_id, action_call, **({"trusted": trusted} if trusted else {}))
     except ActionPolicyError as exc:
         turn.emit({
             "type": "tool.failed",
@@ -373,7 +385,7 @@ async def _perform_action(
     if approval:
         card = {
             "request": action_request, "call": action_call, "call_name": call_name, "user_request": user_request,
-            "gate_mode": gate_mode, "specs": specs or [], "turn": turn, "base": base, "owner": get_current_owner(), "resolved_by": None,
+            "gate_mode": gate_mode, "specs": specs or [], "turn": turn, "base": base, "owner": get_current_owner(), "resolved_by": None, "bot_id": bot_id,
         }
         _open_cards.setdefault(thread_id, {})[action_request.request_id] = card
 
@@ -418,9 +430,20 @@ async def _perform_action(
     turn.emit({"type": "tool.started", **base, "action": action_request.model_dump()})
     # Whatever comes back is scrubbed of the user's secret values before the
     # model, the transcript or the screen sees it: a shell can print them.
-    redact = redactor_for(thread_id)
+    redact = redactor_for(bot_id)
+
+    def waiting(current: Dict[str, Any]) -> None:
+        other = conversations.get(current.get("thread_id") or "") or {}
+        where = f"\"{other['title']}\"" if other.get("title") else "another conversation"
+        turn.emit({"type": "tool.waiting", **base, "reason": f"Waiting for the computer: {where} is running {current.get('action') or 'something'}."})
+
     try:
-        action_result = await action_gateway.execute(action_request)
+        if computer_turns.takes_turns(action_name):
+            # The bot's other conversations share this computer: changes to it take turns.
+            async with computer_turns.computer_turn(bot_id, thread_id, _computer_label(action_request), on_wait=waiting):
+                action_result = await action_gateway.execute(action_request)
+        else:
+            action_result = await action_gateway.execute(action_request)
     except ActionGatewayError as exc:
         error = redact(str(exc))
         turn.emit({"type": "tool.failed", **base, "error": error})
@@ -435,6 +458,17 @@ async def _perform_action(
     error = redact(action_result.error or "The action failed.")
     turn.emit({"type": "tool.failed", **base, "error": error})
     return {"status": "failed", "error": f"Action failed ({action_name}): {error}", "request": action_request, "gate": verdict}
+
+
+def _computer_label(action_request: Any) -> str:
+    """What an action does to the computer, as the waiting note names it: the command, the file, or the page."""
+    arguments = getattr(action_request, "arguments", None) or {}
+    for key in ("command", "path", "url"):
+        value = str(arguments.get(key) or "").strip()
+        if value:
+            value = " ".join(value.split())
+            return f"`{value[:100]}{'…' if len(value) > 100 else ''}`"
+    return getattr(action_request, "action", "") or "something"
 
 
 async def _context_window_for(llm_config, model: str) -> Optional[int]:
@@ -464,10 +498,10 @@ logger = logging.getLogger(__name__)
 _open_cards: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
 
-def live_bot(thread_id: str, fallback: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+def live_bot(bot_id: str, fallback: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """The bot record as it is now (settings may have changed since the turn began)."""
     try:
-        return next((b for b in current_storage().get_bots() if b.get("id") == thread_id), None) or fallback
+        return next((b for b in current_storage().get_bots() if b.get("id") == bot_id), None) or fallback
     except Exception:
         return fallback
 
@@ -487,7 +521,7 @@ async def recheck_pending(thread_id: str) -> int:
     entries = [e for e in (_open_cards.get(thread_id) or {}).values() if e.get("owner") == owner and not e.get("resolved_by")]
     if not entries:
         return 0
-    bot = live_bot(thread_id)
+    bot = live_bot(entries[0].get("bot_id") or conversations.bot_id_of(thread_id) or thread_id)
     if bot is None:
         return 0
     allowed = 0
@@ -526,13 +560,22 @@ async def recheck_all_pending() -> int:
     return total
 
 
-def schedule_recheck(thread_id: Optional[str] = None) -> None:
+async def recheck_bot(bot_id: str) -> int:
+    """After a change to one bot's settings: the open cards in all of its conversations."""
+    total = 0
+    for thread_id, cards in list(_open_cards.items()):
+        if any(card.get("bot_id") == bot_id for card in cards.values()):
+            total += await recheck_pending(thread_id)
+    return total
+
+
+def schedule_recheck(bot_id: Optional[str] = None) -> None:
     """Re-check open cards in the background (from a settings save)."""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
-    loop.create_task(recheck_pending(thread_id) if thread_id else recheck_all_pending())
+    loop.create_task(recheck_bot(bot_id) if bot_id else recheck_all_pending())
 
 
 _LOOP_NUDGE = (
@@ -644,19 +687,18 @@ def _fresh_entries(block: str, marker: str, seen: str) -> str:
     return "\n".join([heading] + fresh) if fresh else ""
 
 
-def _store_tool_selection(bot_id: str, keep: Dict[str, Any]) -> None:
-    """Remember the bot's tool selection for this stretch of conversation."""
+def _store_tool_selection(thread_id: str, keep: Optional[Dict[str, Any]]) -> None:
+    """Remember the conversation's tool selection for this stretch of it."""
     try:
-        bots = current_storage().get_bots()
-        bot = next((b for b in bots if b.get("id") == bot_id), None)
-        if bot is not None:
-            bot["tool_selection"] = keep
-            current_storage().save_bots(bots)
+        if conversations.get(thread_id) is not None:
+            conversations.update(thread_id, {"tool_selection": keep})
     except Exception as exc:
-        logger.warning("Could not keep the tool selection of %s: %s", bot_id, exc)
+        logger.warning("Could not keep the tool selection of %s: %s", thread_id, exc)
 
 
-async def attach_turn_context(turn: Turn, thread_id: str, bot_msg_id: str, history: List[Dict[str, Any]], query: str) -> bool:
+async def attach_turn_context(
+    turn: Turn, thread_id: str, bot_msg_id: str, history: List[Dict[str, Any]], query: str, bot_id: Optional[str] = None
+) -> bool:
     """Look up the context for the latest user message and store it on that message. True when it was added."""
     latest = next((m for m in reversed(history) if m.get("sender") == "user"), None)
     if latest is None or not (query or "").strip():
@@ -673,18 +715,19 @@ async def attach_turn_context(turn: Turn, thread_id: str, bot_msg_id: str, histo
         for m in live_messages(history) if m.get("sender") == "user" and m is not latest
     )
     # Passages from long attachments that match this message: the inlined part of a file is only its beginning.
-    retrieved = _fresh_entries(await retrieved_context(thread_id, query), "--- ", seen)
+    bot_id = bot_id or thread_id
+    retrieved = _fresh_entries(await retrieved_context(bot_id, query), "--- ", seen)
     if retrieved:
         counts["passages"] = retrieved.count("--- from ")
         turn.emit({"type": "retrieval.used", "botMsgId": bot_msg_id, "count": counts["passages"]})
         blocks.append(retrieved)
     # Procedures the user showed the bot that match this message, in full.
-    known = _fresh_entries(await procedure_context(thread_id, query), "--- ", seen)
+    known = _fresh_entries(await procedure_context(bot_id, query), "--- ", seen)
     if known:
         counts["procedures"] = known.count("\n--- ")
         turn.emit({"type": "procedure.used", "botMsgId": bot_msg_id, "count": counts["procedures"]})
         blocks.append(known)
-    # Past exchanges that the compaction folded away but that match this message.
+    # Past exchanges of this conversation that the compaction folded away but that match this message.
     recalled = _fresh_entries(await recalled_context(thread_id, query, history), "- ", seen)
     if recalled:
         counts["recalled"] = recalled.count("\n- ")
@@ -710,7 +753,7 @@ async def procedure_context(bot_id: str, query: str) -> str:
 
 
 async def recalled_context(bot_id: str, query: str, history: List[Dict[str, Any]]) -> str:
-    """Earlier exchanges of this bot that match the message and are no longer in the context; "" when none."""
+    """Earlier exchanges of this conversation (`bot_id` is the thread id) that match the message and are no longer in the context; "" when none."""
     try:
         config = retrieval.current_config()
         if not config.enabled:
@@ -755,9 +798,11 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
     and at day resolution, and nothing per-turn goes in here.
     """
     bots = current_storage().get_bots()
-    current_bot = next((b for b in bots if b["id"] == thread_id), None)
+    bot_id = conversations.bot_id_of(thread_id)
+    current_bot = next((b for b in bots if b["id"] == bot_id), None)
     if current_bot is None:
         raise HTTPException(status_code=404, detail="Bot not found")
+    conversation = conversations.get(thread_id) or {}
     history = current_storage().get_messages(thread_id=thread_id)
 
     raw_prompt = current_bot["system_prompt"] if current_bot else "You are a helpful AI assistant."
@@ -788,7 +833,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         # catalog cannot be fetched, fall back to the two built-in GitHub tools.
         connector_specs = await connector_tool_specs(composio_service)
         # MCP servers the user runs join the same family as connected apps.
-        connector_specs = connector_specs + mcp_tool_specs(bot_id=thread_id)
+        connector_specs = connector_specs + mcp_tool_specs(bot_id=bot_id)
         tool_specs = available_tools(
             computer=settings.COMPUTER_PROVIDER == "docker",
             github=bool(composio_service.get_api_key()) and not connector_specs,
@@ -815,7 +860,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         latest_bot = next((m for m in reversed(history) if m.get("sender") == "bot" and m.get("text")), None)
         compaction = latest_compaction(history)
         try:
-            stored_selection = current_bot.get("tool_selection") if current_bot else None
+            stored_selection = conversation.get("tool_selection")
             tool_specs, selection, keep = await select_tools_kept(
                 tool_specs,
                 str(latest_user.get("text") or "") if latest_user else "",
@@ -831,7 +876,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
             selection = None
     tool_definitions = openai_tool_definitions(tool_specs) if tool_specs else None
     # The names of the user's secrets (set in the bot's computer), never the values.
-    tools_prompt = describe_tools(tool_specs, secret_names=names_for(thread_id), selection_note=selection.note() if selection else "")
+    tools_prompt = describe_tools(tool_specs, secret_names=names_for(bot_id), selection_note=selection.note() if selection else "")
     # The titles of what the user has shown this bot; procedure_read brings one back.
     shown = procedures.prompt_block(current_bot) if tool_specs else ""
     if shown:
@@ -842,6 +887,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
     return {
         "history": history,
         "current_bot": current_bot,
+        "bot_id": bot_id,
         "system_prompt": system_prompt,
         # What a turn sends as its system prompt before any per-turn context;
         # the compaction summary request sends exactly this so its prefix is
@@ -870,6 +916,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
     setup = await _turn_setup(thread_id, requested_model)
     history = setup["history"]
     current_bot = setup["current_bot"]
+    bot_id = setup["bot_id"]
     system_prompt = setup["system_prompt"]
     llm_config = setup["llm_config"]
     selected_model = setup["selected_model"]
@@ -962,10 +1009,10 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                 turn.emit({"type": "tool.failed", "tool": exc.tool, "error": str(exc)})
 
             if action_call:
-                bot_now = live_bot(thread_id, current_bot)
+                bot_now = live_bot(bot_id, current_bot)
                 outcome = await _perform_action(
                     turn, thread_id, action_call, gate_mode=approval_gate.mode_for(bot_now), user_request=last_user_text,
-                    gate_threshold=approval_gate.threshold_for(bot_now),
+                    gate_threshold=approval_gate.threshold_for(bot_now), bot_id=bot_id,
                 )
                 if outcome.get("status") == "completed":
                     tool_context = f"Action result ({action_call.name}): {_tool_result_text(_compact_result(outcome['result']))}"
@@ -983,7 +1030,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             # replayed the same on later turns, so the start of the prompt never
             # changes and the model server reuses its cache. A turn run again for
             # the same message reuses what was stored.
-            if await attach_turn_context(turn, thread_id, bot_msg_id, history, last_user_text):
+            if await attach_turn_context(turn, thread_id, bot_msg_id, history, last_user_text, bot_id=bot_id):
                 formatted_history = build_history_messages(history, replay_tools=replay_tools)
 
             # --- model turn, looping while it calls tools ------------------------
@@ -992,7 +1039,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             # message; the frames come once, on the turn that answers it.
             demonstration = demonstrations.pending_demonstration(history)
             if demonstration and _model_accepts_images(selected_model, llm_config):
-                frames = demonstrations.keyframe_message(thread_id, demonstration)
+                frames = demonstrations.keyframe_message(bot_id, demonstration)
                 if frames:
                     messages.append(frames)
                     turn.emit({"type": "demonstration.frames", "botMsgId": bot_msg_id, "count": sum(1 for p in frames["content"] if p.get("type") == "image_url")})
@@ -1254,7 +1301,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
 
                     try:
                         arguments = parse_arguments(call.get("arguments"))
-                        invocation = build_invocation(call_name, arguments, thread_id, specs=callable_specs)
+                        invocation = build_invocation(call_name, arguments, bot_id, specs=callable_specs, thread_id=thread_id)
                     except ToolCallError as exc:
                         error = str(exc)
                         if round_cut:
@@ -1268,11 +1315,11 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                     # The approval settings as they are now: the user may have
                     # trusted a tool, allowed a command or changed auto-approval
                     # since the turn began.
-                    bot_now = live_bot(thread_id, current_bot)
+                    bot_now = live_bot(bot_id, current_bot)
                     trusted = trusted_for(bot_now, call_name, arguments, callable_specs)
                     outcome = await _perform_action(
                         turn, thread_id, invocation, call_name=call_name, gate_mode=approval_gate.mode_for(bot_now), user_request=last_user_text,
-                        gate_threshold=approval_gate.threshold_for(bot_now), trusted=trusted, specs=callable_specs,
+                        gate_threshold=approval_gate.threshold_for(bot_now), trusted=trusted, specs=callable_specs, bot_id=bot_id,
                     )
 
                     status = outcome.get("status", "failed")
@@ -1296,7 +1343,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                             turn.emit({
                                 "type": "computer.takeover_requested",
                                 "botMsgId": bot_msg_id,
-                                "botId": thread_id,
+                                "botId": bot_id,
                                 "reason": str(arguments.get("reason") or ""),
                             })
                         if call_name == "share_file" and isinstance(result.get("attachment"), dict):
@@ -1364,7 +1411,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         bot_msg = {
             "id": bot_msg_id,
             "thread_id": thread_id,
-            "bot_id": thread_id,
+            "bot_id": bot_id,
             "sender": "bot",
             "text": _reply_text(text_pieces),
             "created_at": datetime.now().isoformat(),
@@ -1374,6 +1421,9 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         }
         current_storage().add_message(bot_msg)
         recall.schedule_index(thread_id, bot_msg)
+        if not stopped:
+            # After the first exchange a model names the conversation, in the background.
+            conversation_titles.schedule(thread_id)
         if stopped:
             turn.emit({"type": "turn.cancelled", "botMsgId": bot_msg_id})
             raise asyncio.CancelledError()
@@ -1383,9 +1433,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
 
 
 def _bot_id_for(thread_id: str) -> str:
-    bots = current_storage().get_bots()
-    bot = next((b for b in bots if b["id"] == thread_id), None)
-    return bot["id"] if bot else thread_id
+    return conversations.bot_id_of(thread_id) or thread_id
 
 
 # ---- turns ------------------------------------------------------------------
@@ -1393,9 +1441,9 @@ def _bot_id_for(thread_id: str) -> str:
 
 @router.get("/turns")
 async def list_turns():
-    """Running turns and pending approvals across the caller's bots (sidebar badges)."""
+    """Running turns and pending approvals across the caller's bots and their conversations (sidebar badges)."""
     mine = {bot.get("id") for bot in current_storage().get_bots()}
-    return {"turns": [turn for turn in turn_manager.overview() if turn.get("thread_id") in mine]}
+    return {"turns": [turn for turn in turn_manager.overview() if turn.get("bot_id") in mine]}
 
 
 @router.get("/turns/{thread_id}")
@@ -1405,20 +1453,21 @@ async def turn_status(thread_id: str):
     return {"turn": turn.to_dict() if turn else None}
 
 
-async def start_scheduled_turn(bot_id: str, message: Dict[str, Any], owner_id: Optional[str] = None) -> Turn:
-    """A schedule's run: store its prompt as the user's message and start the turn, as its owner.
+async def start_scheduled_turn(thread_id: str, message: Dict[str, Any], owner_id: Optional[str] = None) -> Turn:
+    """A message not typed by the user (a schedule's run, an orchestrator's task): store it and start the turn, as its owner.
 
-    Raises TurnBusyError while a reply is in progress, so the scheduler
-    records a skip instead of posting a message nobody answers.
+    `thread_id` is the conversation it goes to. Raises TurnBusyError while a
+    reply is in progress there, so the scheduler records a skip instead of
+    posting a message nobody answers.
     """
     with owner_context(owner_id) if owner_id else contextlib.nullcontext():
-        current = turn_manager.current(bot_id)
+        current = turn_manager.current(thread_id)
         if current is not None and not current.finished:
             raise TurnBusyError(current)
-        current_storage().add_message(message)
-        recall.schedule_index(bot_id, message)
-        runner, selected_model = await _build_turn_runner(bot_id, None)
-        return turn_manager.start(bot_id, _bot_id_for(bot_id), selected_model, runner)
+        current_storage().add_message({**message, "thread_id": thread_id})
+        recall.schedule_index(thread_id, message)
+        runner, selected_model = await _build_turn_runner(thread_id, None)
+        return turn_manager.start(thread_id, _bot_id_for(thread_id), selected_model, runner)
 
 
 @router.post("/turns/{thread_id}")

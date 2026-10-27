@@ -27,7 +27,7 @@ class AskUserInvocationTests(unittest.TestCase):
     def test_question_with_options(self):
         call = build_invocation("ask_user", {"question": "Which region?", "options": ["North", "South"]}, "bot-1")
         self.assertEqual(call.name, "user.ask")
-        self.assertEqual(call.arguments, {"bot_id": "bot-1", "question": "Which region?", "options": ["North", "South"], "allow_other": True})
+        self.assertEqual(call.arguments, {"bot_id": "bot-1", "question": "Which region?", "options": ["North", "South"], "allow_other": True, "thread_id": "bot-1"})
         self.assertEqual(call.preview, "Ask the user: Which region?")
 
     def test_free_text_question_always_allows_typing(self):
@@ -182,6 +182,7 @@ class AskUserTurnTests(unittest.TestCase):
             mock.patch.object(chat_router, "composio_service", NoComposio()),
             mock.patch.object(chat_router, "turn_manager", manager),
             mock.patch.object(chat_router, "_context_window_for", _fake_context_window),
+            mock.patch.object(chat_router.conversation_titles, "schedule", lambda thread_id: None),
             mock.patch.object(chat_router, "action_gateway", gateway),
             mock.patch.object(user_questions, "turn_manager", manager),
             mock.patch.object(user_questions, "question_broker", broker),

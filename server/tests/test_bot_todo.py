@@ -83,7 +83,7 @@ class BotTodoTests(unittest.TestCase):
         # A new item does not reuse a live id; it takes the next free number.
         result = add_todo(self.bot, "run the suite", self.storage)
         self.assertEqual([i["id"] for i in result["items"]], ["t2", "t3"])
-        self.assertTrue(next(b for b in self.storage.get_bots() if b["id"] == self.bot)["todo_updated_at"])
+        self.assertTrue(self.storage.get_conversation(self.bot)["todo_updated_at"])  # the list is the conversation's
 
         with self.assertRaisesRegex(TodoError, "no to-do item 't7'"):
             update_todo(self.bot, "t7", state="done", storage=self.storage)
@@ -105,7 +105,7 @@ class BotTodoTests(unittest.TestCase):
         with mock.patch.object(storage_module, "storage_service", self.storage):
             add = build_invocation("todo_add", {"items": ["a", " b "]}, self.bot)
             self.assertEqual(add.name, "todo.add")
-            self.assertEqual(add.arguments, {"bot_id": self.bot, "items": ["a", "b"]})
+            self.assertEqual(add.arguments, {"bot_id": self.bot, "items": ["a", "b"], "thread_id": self.bot})
             request, approval = gateway.open("t", self.bot, add)
             self.assertIsNone(approval)
             result = asyncio.run(gateway.execute(request))
@@ -114,7 +114,7 @@ class BotTodoTests(unittest.TestCase):
             self.assertEqual(len(result.result["items"]), 2)
 
             done = build_invocation("todo_update", {"id": "t1", "state": "Done"}, self.bot)
-            self.assertEqual(done.arguments, {"bot_id": self.bot, "id": "t1", "remove": False, "state": "done"})
+            self.assertEqual(done.arguments, {"bot_id": self.bot, "id": "t1", "remove": False, "state": "done", "thread_id": self.bot})
             request, approval = gateway.open("t", self.bot, done)
             self.assertIsNone(approval)
             result = asyncio.run(gateway.execute(request))
