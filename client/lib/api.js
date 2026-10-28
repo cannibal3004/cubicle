@@ -339,6 +339,21 @@ export function fetchProjectLog(projectId, limit = 100) {
   return conversationRequest(`/projects/${encodeURIComponent(projectId)}/log?limit=${limit}`, {}, 'Could not load the log.');
 }
 
+// The thinking levels to offer (the model's own) and the two Auto picks between; fetched once.
+let thinkingLevelsPromise = null;
+export function fetchThinkingLevels() {
+  if (!thinkingLevelsPromise) {
+    thinkingLevelsPromise = apiFetch(`${API_BASE_URL}/chat/thinking/levels`)
+      .then((res) => (res.ok ? res.json() : null))
+      .catch(() => null)
+      .then((data) => {
+        if (!data) thinkingLevelsPromise = null; // try again next time
+        return data;
+      });
+  }
+  return thinkingLevelsPromise;
+}
+
 export function updateConversation(conversationId, changes) {
   return conversationRequest(
     `/conversations/${encodeURIComponent(conversationId)}`,

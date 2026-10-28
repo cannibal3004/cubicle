@@ -84,6 +84,13 @@ services:
       DECIDER_URL: ${DECIDER_URL:-}
       DECIDER_THRESHOLD: ${DECIDER_THRESHOLD:-0.2}
       DECIDER_TIMEOUT_SECONDS: ${DECIDER_TIMEOUT_SECONDS:-15}
+      # Thinking: the levels the menus offer (the model's own), and the two
+      # Auto picks between, asking the same decision server.
+      THINKING_LEVELS: ${THINKING_LEVELS:-none,low,medium,high,xhigh}
+      THINKING_AUTO_LIGHT: ${THINKING_AUTO_LIGHT:-low}
+      THINKING_AUTO_DEEP: ${THINKING_AUTO_DEEP:-xhigh}
+      THINKING_STYLE: ${THINKING_STYLE:-field}
+      THINKING_HINT_BASE: ${THINKING_HINT_BASE:-medium}
       # Computer provider: fake (default) or docker (needs the `computer` profile).
       COMPUTER_PROVIDER: ${COMPUTER_PROVIDER:-fake}
       COMPUTER_DOCKER_IMAGE: ${COMPUTER_DOCKER_IMAGE:-cubicle-computer:2.13.0}

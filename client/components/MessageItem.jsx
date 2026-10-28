@@ -32,7 +32,7 @@ function formatMsgTime(createdAt) {
 // Collapsible "Thinking" block shown above an assistant reply. While the model
 // is still thinking (no answer text yet) it stays open and follows the stream;
 // once the answer starts it collapses unless the user has opened it.
-function ThinkingBlock({ reasoning, answerStarted, isStreaming }) {
+function ThinkingBlock({ reasoning, answerStarted, isStreaming, level }) {
   const [userToggled, setUserToggled] = useState(null);
   const bodyRef = useRef(null);
 
@@ -58,6 +58,11 @@ function ThinkingBlock({ reasoning, answerStarted, isStreaming }) {
       >
         <FiChevronRight className={`text-xs transition-transform duration-200 ${open ? 'rotate-90' : ''}`} />
         <span className="font-semibold tracking-wide">{label}</span>
+        {level?.level && (
+          <span className="text-[10px] text-zinc-500" title={level.auto ? 'Chosen for this message by Auto' : `Set by the ${level.source === 'app' ? 'App Settings' : level.source}`}>
+            {level.level}{level.auto ? ' · auto' : ''}
+          </span>
+        )}
         {liveThinking && <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />}
         <span className="ml-auto font-mono text-[10px] text-zinc-500">{words} words</span>
       </button>
@@ -469,6 +474,7 @@ function MessageItem({ message, botId, onEdit }) {
             reasoning={reasoning}
             answerStarted={Boolean(message.text)}
             isStreaming={Boolean(message.isStreaming)}
+            level={message.thinking || message.raw_payload?.thinking}
           />
         )}
         {toolCalls.length > 0 && !placed && <ToolCallList calls={toolCalls} />}

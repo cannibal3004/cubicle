@@ -28,6 +28,9 @@ class Bot(BaseModel):
     auto_approval: Literal["inherit", "off", "shadow", "on"] = "inherit"
     # The decider's risk threshold for this bot alone; None follows App Settings.
     gate_threshold: Optional[float] = None
+    # How hard the model thinks (services/thinking.py): "auto", an effort level,
+    # or empty to follow App Settings. A conversation can set its own.
+    thinking: Optional[str] = None
     # Tools (by name) this bot runs without an approval card, whatever the
     # auto-approval mode: the user's standing "yes" for this bot alone.
     trusted_tools: List[str] = Field(default_factory=list)

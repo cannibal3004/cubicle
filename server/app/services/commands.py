@@ -35,6 +35,13 @@ COMMANDS: Tuple[CommandSpec, ...] = (
     CommandSpec("compact", "/compact", "Summarize the older part of this conversation to free up context.", "client"),
     CommandSpec("model", "/model <model>", "Switch this bot's model. A unique part of the id is enough.", "client", args="<model>"),
     CommandSpec("auto", "/auto off|shadow|on|inherit", "Set this bot's auto-approval mode.", "client", args="off|shadow|on|inherit"),
+    CommandSpec(
+        "think",
+        "/think auto|off|<level>|default",
+        "Set how hard the model thinks in this conversation; default follows the bot's setting.",
+        "client",
+        args="auto|off|low|medium|xhigh|default",
+    ),
     CommandSpec("stop", "/stop", "Stop the reply that is streaming.", "client", while_streaming=True),
     CommandSpec("undo", "/undo", "Take back your last message and the reply to it; the message returns to the box to edit.", "client", while_streaming=True),
     CommandSpec("redo", "/redo", "Bring back what /undo or Edit removed, until you send something new.", "client"),
