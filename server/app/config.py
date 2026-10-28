@@ -126,6 +126,12 @@ class Settings:
     RERANK_MODEL: str = os.getenv("RERANK_MODEL", "").strip()
     RETRIEVAL_TOP_K: int = int(os.getenv("RETRIEVAL_TOP_K", "6"))
     RETRIEVAL_CHUNK_CHARS: int = int(os.getenv("RETRIEVAL_CHUNK_CHARS", "1200"))
+    # What a looked-up passage must score to be attached to a message: the
+    # reranker's relevance (0-1), or the embedding similarity when there is no
+    # reranker. Below them a passage is noise (an unrelated file scores ~0.0
+    # reranked and ~0.15-0.2 by embedding; a matching one 0.9+ and 0.35+).
+    RETRIEVAL_MIN_RERANK_SCORE: float = float(os.getenv("RETRIEVAL_MIN_RERANK_SCORE", "0.3"))
+    RETRIEVAL_MIN_SCORE: float = float(os.getenv("RETRIEVAL_MIN_SCORE", "0.3"))
     # When a bot could be offered more tools than this, the connected apps' tools
     # are narrowed to the ones that match the message (built-ins always stay).
     # 0 offers everything. App Settings (tool_selection_max) overrides it.

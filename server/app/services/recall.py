@@ -160,17 +160,9 @@ async def recall_for_turn(bot_id: str, query: str, history: List[Dict[str, Any]]
     hits = [hit for hit in hits if hit.meta.get("message_id") not in live_ids and hit.text.strip() != query.strip()]
     if not hits:
         return ""
-    if len(hits) > limit:
-        ranked = await retrieval.rerank(query, [hit.text for hit in hits], limit, config)
-        if ranked:
-            picked = []
-            for position, score in ranked[:limit]:
-                if 0 <= position < len(hits):
-                    hits[position].score = score
-                    picked.append(hits[position])
-            hits = picked
-        else:
-            hits = hits[:limit]
+    hits = await retrieval.relevant(query, hits, limit, config)
+    if not hits:
+        return ""
     hits.sort(key=lambda hit: hit.meta.get("created_at") or "")
     return render_recalled(hits)
 

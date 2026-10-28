@@ -659,7 +659,7 @@ async def retrieved_context(bot_id: str, query: str) -> str:
         config = retrieval.current_config()
         if not config.enabled:
             return ""
-        hits = await retrieval.retrieve(query, kind="attachment", ref_prefix=f"{bot_id}:", config=config)
+        hits = await retrieval.retrieve(query, kind="attachment", ref_prefix=f"{bot_id}:", config=config, relevant_only=True)
     except Exception as exc:  # never let retrieval fail a turn
         logger.warning("Retrieval failed for %s: %s", bot_id, exc)
         return ""
