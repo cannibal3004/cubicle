@@ -19,7 +19,7 @@ import logging
 
 from app.config import settings
 from app.services import retrieval
-from app.services.identity import get_current_owner, owner_context
+from app.services.identity import get_current_actor, get_current_owner, owner_context
 
 logger = logging.getLogger(__name__)
 from app.services.computer_provider import computer_id_for_bot
@@ -216,7 +216,8 @@ def schedule_indexing(bot_id: str, attachment: Dict[str, Any], text: str) -> Non
         return
     if not config.enabled:
         return
-    meta = {"name": attachment.get("name"), "bot_id": bot_id, "source": attachment.get("source"), "path": attachment.get("path")}
+    # Who attached it: on a shared bot, passages come back only in that person's conversations.
+    meta = {"name": attachment.get("name"), "bot_id": bot_id, "source": attachment.get("source"), "path": attachment.get("path"), "user_id": get_current_actor()}
     owner = get_current_owner()
 
     async def run() -> None:

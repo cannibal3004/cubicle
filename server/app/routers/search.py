@@ -2,7 +2,9 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.services import conversations, sharing
 from app.services import search as search_service
+from app.services.identity import get_current_actor
 from app.services.storage_service import current_storage
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
@@ -21,4 +23,13 @@ async def search(q: str = Query("", max_length=2000), bot_id: str = Query(""), l
         results = await search_service.search(query, bot_id=bot_id or None, limit=limit, bots=bots)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Search is unavailable: {exc}")
-    return {"query": query, "results": results}
+    # Messages from a teammate's conversations with one of the caller's shared bots stay theirs.
+    storage, actor = current_storage(), get_current_actor()
+
+    def visible(result):
+        if result.get("kind") != "message":
+            return True
+        record = conversations.get(str(result.get("bot_id") or ""), storage)
+        return record is None or sharing.visible(record, actor, storage.owner_id)
+
+    return {"query": query, "results": [r for r in results if visible(r)]}

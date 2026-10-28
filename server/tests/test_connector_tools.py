@@ -285,7 +285,7 @@ class InvocationTests(unittest.TestCase):
         self.assertEqual(call.name, WRITE_ACTION)
         self.assertEqual(call.arguments["tool"], "GMAIL_SEND_EMAIL")
         self.assertEqual(call.arguments["arguments"]["subject"], "Hi")
-        self.assertEqual(call.target, {"connector": "gmail", "tool": "GMAIL_SEND_EMAIL"})
+        self.assertEqual(call.target, {"connector": "gmail", "tool": "GMAIL_SEND_EMAIL", "bot_id": "bot-1"})
         self.assertTrue(call.preview.startswith("Gmail: Send Email (recipient_email=a@b.c, subject=Hi, body="))
         self.assertIn("...", call.preview)
 

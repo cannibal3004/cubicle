@@ -7,14 +7,17 @@ the action gateway: a tool Composio marks read-only runs without approval,
 anything else pauses for the user, exactly like the hand-written tools.
 """
 
+import contextlib
 import copy
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from app.config import settings
 from app.services.action_gateway import ActionDefinition, ActionInvocation, action_gateway
-from app.services.composio_service import ConnectorServiceError, composio_service
+from app.services import sharing
+from app.services.composio_service import ConnectorServiceError, as_account, composio_service
+from app.services.identity import acting_for_owner, get_current_actor, get_current_owner
 from app.services.llm_tools import ToolSpec
 
 logger = logging.getLogger(__name__)
@@ -184,6 +187,31 @@ async def connector_tool_specs(service: Any = None) -> List[ToolSpec]:
     return specs
 
 
+def _bot(call: ActionInvocation) -> Optional[Dict[str, Any]]:
+    from app.services.storage_service import current_storage
+
+    bot_id = (call.target or {}).get("bot_id")
+    return next((b for b in current_storage().get_bots() if b.get("id") == bot_id), None) if bot_id else None
+
+
+@contextlib.contextmanager
+def _connection(call: ActionInvocation, toolkit: str) -> Iterator[None]:
+    """Run inside the account whose connection this call uses; on a teammate's
+    turn that is the owner's or their own, as the bot's share settings say."""
+    if acting_for_owner():
+        yield
+        return
+    account = sharing.connection_for(_bot(call), toolkit)
+    if account is None:
+        raise ConnectorServiceError(f"{toolkit} is not shared with this bot's teammates.")
+    with as_account(account):
+        yield
+
+
+def _toolkit_of(slug: str, call: ActionInvocation) -> str:
+    return str((call.target or {}).get("connector") or slug.split("_", 1)[0]).lower()
+
+
 async def execute_composio_tool(call: ActionInvocation) -> Dict[str, Any]:
     arguments = call.arguments if isinstance(call.arguments, dict) else {}
     slug = arguments.get("tool")
@@ -191,12 +219,28 @@ async def execute_composio_tool(call: ActionInvocation) -> Dict[str, Any]:
     version = arguments.get("version")
     if not isinstance(slug, str) or not isinstance(payload, dict):
         raise ConnectorServiceError("The connector tool call is malformed.")
-    result = await composio_service.execute_tool(slug, payload, version=version if isinstance(version, str) else None)
-    if slug.upper().startswith("COMPOSIO_"):
-        # Connections may have changed (the bot connected an app for the
-        # user): the next turn lists toolkits afresh.
-        composio_service.forget_connections()
+    with _connection(call, _toolkit_of(slug, call)):
+        result = await composio_service.execute_tool(slug, payload, version=version if isinstance(version, str) else None)
+        if slug.upper().startswith("COMPOSIO_"):
+            # Connections may have changed (the bot connected an app for the
+            # user): the next turn lists toolkits afresh.
+            composio_service.forget_connections()
     return result
+
+
+async def shared_connector_specs(service: Any, bot: Optional[Dict[str, Any]]) -> List[ToolSpec]:
+    """A teammate's connected-app tools on a shared bot: the apps the owner shared
+    through their own connection, then the ones each person connects for themselves."""
+    chosen = sharing.share_settings(bot)["apps"]
+    theirs = {slug for slug, choice in chosen.items() if choice == sharing.OWNERS_CONNECTION}
+    own = {slug for slug, choice in chosen.items() if choice == sharing.OWN_CONNECTION} | {sharing.COMPOSIO_TOOLKIT}
+    specs: List[ToolSpec] = []
+    if theirs:
+        with as_account(get_current_owner()):
+            specs += [s for s in await connector_tool_specs(service) if (s.connector or {}).get("toolkit") in theirs]
+    with as_account(get_current_actor()):
+        specs += [s for s in await connector_tool_specs(service) if (s.connector or {}).get("toolkit") in own]
+    return specs
 
 
 async def connect_app(call: ActionInvocation) -> Dict[str, Any]:
@@ -205,8 +249,11 @@ async def connect_app(call: ActionInvocation) -> Dict[str, Any]:
     slug = str(arguments.get("toolkit") or "").strip().lower()
     if not slug:
         raise ConnectorServiceError("A toolkit slug is required.")
-    link = await composio_service.create_auth_link(slug)
-    composio_service.forget_connections()
+    if not acting_for_owner() and sharing.share_settings(_bot(call))["apps"].get(slug) != sharing.OWN_CONNECTION:
+        raise ConnectorServiceError(f"{slug} is not one of the apps this bot uses with each person's own account, so connecting it here would not help.")
+    with as_account(get_current_actor()):
+        link = await composio_service.create_auth_link(slug)
+        composio_service.forget_connections()
     if link.get("connected"):
         return {"toolkit": slug, "connected": True, "url": None, "note": "This app needs no sign-in; its tools are offered from your next turn."}
     return {
@@ -221,8 +268,10 @@ async def connect_app(call: ActionInvocation) -> Dict[str, Any]:
 async def connection_status(call: ActionInvocation) -> Dict[str, Any]:
     arguments = call.arguments if isinstance(call.arguments, dict) else {}
     slugs = [str(s).lower() for s in (arguments.get("toolkits") or []) if isinstance(s, str)]
-    composio_service.forget_connections()
-    return {"services": await composio_service.connection_status(slugs)}
+    # A teammate's own connections (the owner's are theirs to look after).
+    with as_account(get_current_actor()):
+        composio_service.forget_connections()
+        return {"services": await composio_service.connection_status(slugs)}
 
 
 action_gateway.register_action(

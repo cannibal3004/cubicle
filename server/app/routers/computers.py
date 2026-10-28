@@ -24,7 +24,7 @@ from app.services.secrets_service import redactor_for
 from app.services.identity import owner_context
 from app.services.storage_service import current_storage
 from app.services import computer_actions as _computer_actions  # noqa: F401 - registers actions
-from app.services import demonstrations
+from app.services import demonstrations, sharing
 
 
 router = APIRouter(prefix="/api/v1/computers", tags=["computers"])
@@ -254,8 +254,7 @@ async def computer_vnc(websocket: WebSocket, bot_id: str):
     if not user:
         await websocket.close(code=4401)
         return
-    with owner_context(user["id"]):
-        owned = any(bot.get("id") == bot_id for bot in current_storage().get_bots())
+    owned = sharing.bot_access(user["id"], bot_id) is not None  # theirs, or shared with them
     if not owned:
         await websocket.close(code=4404)
         return

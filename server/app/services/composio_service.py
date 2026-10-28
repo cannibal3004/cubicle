@@ -7,16 +7,33 @@ REST endpoints instead: auth configs, connected accounts, and
 `/tools/execute/{tool_slug}`.
 """
 
+import contextlib
+import contextvars
 import os
 import re
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 import httpx
 import time
 
 from app.config import settings
 from app.services.identity import LOCAL_USER_ID, get_current_owner
+from app.services import storage_service as storage_module
 from app.services.storage_service import StorageService, current_storage
+
+# Whose connections a call uses when not the current owner's: on a bot shared
+# with a teammate, an app the owner set to "each person's own" (sharing.py).
+_account: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("composio_account", default=None)
+
+
+@contextlib.contextmanager
+def as_account(account_id: Optional[str]) -> Iterator[None]:
+    """Use this account's Composio connections (and its app settings) inside the block."""
+    token = _account.set(account_id)
+    try:
+        yield
+    finally:
+        _account.reset(token)
 
 
 BACKEND_URL = "https://backend.composio.dev/api/v3"
@@ -84,7 +101,10 @@ class ComposioService:
 
     @property
     def storage(self) -> StorageService:
-        return self._storage or current_storage()
+        if self._storage is not None:
+            return self._storage
+        account = _account.get()
+        return storage_module.storage_service.for_owner(account) if account else current_storage()
 
     @property
     def user_id(self) -> str:
@@ -92,7 +112,7 @@ class ComposioService:
         The first account keeps the id it has always had; others get their own."""
         if self._user_id:
             return self._user_id
-        owner = get_current_owner()
+        owner = _account.get() or get_current_owner()
         return DEFAULT_USER_ID if owner == LOCAL_USER_ID else f"cubicle-{owner}"
 
     @property

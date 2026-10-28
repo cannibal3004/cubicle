@@ -7,6 +7,7 @@ import BotToolsSection from './BotToolsSection';
 import SecretsSection from './SecretsSection';
 import SchedulesSection from './SchedulesSection';
 import BotMcpSection from './BotMcpSection';
+import SharingSection from './SharingSection';
 import {
   draftBotSuggestions,
   fetchBotSecrets,
@@ -108,6 +109,7 @@ export default function BotEditorModal({
   onArchive,
   onDelete,
   onSortNotes,
+  onLeave,
 }) {
   const isEdit = Boolean(bot);
   const [name, setName] = useState('');
@@ -130,6 +132,9 @@ export default function BotEditorModal({
   const saveBotSecret = useCallback((name, value) => setBotSecret(botId, name, value), [botId]);
   const removeBotSecret = useCallback((name) => deleteBotSecret(botId, name), [botId]);
   const [showSchedules, setShowSchedules] = useState(false);
+  const [showSharing, setShowSharing] = useState(false);
+  // A bot someone shared with you: their bot, which you may not archive or delete.
+  const sharedWithMe = Boolean(bot?.shared);
   const loadSchedules = useCallback(() => fetchBotSchedules(botId), [botId]);
   const addSchedule = useCallback((schedule) => createBotSchedule(botId, schedule), [botId]);
   const changeSchedule = useCallback((id, changes) => updateBotSchedule(botId, id, changes), [botId]);
@@ -553,6 +558,27 @@ export default function BotEditorModal({
             </div>
           )}
 
+          {bot && !bot.orchestrator && (
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowSharing((v) => !v)}
+                className="flex items-center justify-between w-full text-left"
+                aria-expanded={showSharing}
+              >
+                <span className={labelClass + ' mb-0'}>Sharing</span>
+                <span className="text-[11px] text-zinc-500">
+                  {showSharing ? 'Hide' : sharedWithMe ? `Shared with you by ${bot.shared.owner_name}` : 'Teammates who can use this bot'}
+                </span>
+              </button>
+              {showSharing && (
+                <div className="mt-2">
+                  <SharingSection bot={bot} onLeave={onLeave} />
+                </div>
+              )}
+            </div>
+          )}
+
           {bot && (
             <div>
               <button
@@ -636,7 +662,7 @@ export default function BotEditorModal({
 
         <div className="flex items-center justify-between gap-2 px-5 py-4 border-t border-[#1f1f23]">
           <div className="flex items-center gap-1">
-            {isEdit && onArchive && (
+            {isEdit && onArchive && !sharedWithMe && (
               <button
                 type="button"
                 disabled={saving}
@@ -648,7 +674,7 @@ export default function BotEditorModal({
                 {bot.archived ? 'Unarchive' : 'Archive'}
               </button>
             )}
-            {isEdit && onDelete && (
+            {isEdit && onDelete && !sharedWithMe && (
               <button
                 type="button"
                 disabled={saving}

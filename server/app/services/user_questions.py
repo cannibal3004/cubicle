@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.services.action_gateway import ActionDefinition, ActionGateway, ActionInvocation, action_gateway
-from app.services.identity import get_current_owner
+from app.services.identity import get_current_actor, get_current_owner
 from app.services.turn_manager import turn_manager
 from app.services.approval_broker import card_timeout
 
@@ -41,17 +41,21 @@ class QuestionBroker:
     def __init__(self) -> None:
         self.pending: Dict[str, "asyncio.Future[Dict[str, Any]]"] = {}
         self.owners: Dict[str, str] = {}
+        self.actors: Dict[str, str] = {}
 
     def open(self, request_id: str) -> None:
         self.pending[request_id] = asyncio.get_running_loop().create_future()
         self.owners[request_id] = get_current_owner()
+        self.actors[request_id] = get_current_actor()
 
     def answer(self, request_id: str, answer: str, option_index: Optional[int] = None) -> bool:
         future = self.pending.get(request_id)
         if future is None or future.done():
             return False
-        if self.owners.get(request_id, get_current_owner()) != get_current_owner():
-            return False  # someone else's bot asked
+        # A question is for the person whose turn asked it, nobody else.
+        starter = self.actors.get(request_id) or self.owners.get(request_id)
+        if starter and get_current_actor() != starter:
+            return False
         future.set_result({"answer": answer, "option_index": option_index})
         return True
 
@@ -66,6 +70,7 @@ class QuestionBroker:
         finally:
             self.pending.pop(request_id, None)
             self.owners.pop(request_id, None)
+            self.actors.pop(request_id, None)
 
 
 question_broker = QuestionBroker()

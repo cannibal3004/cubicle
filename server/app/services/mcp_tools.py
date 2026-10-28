@@ -93,7 +93,7 @@ async def execute_mcp_tool(call: ActionInvocation) -> Dict[str, Any]:
     payload = arguments.get("arguments")
     if not isinstance(server_id, str) or not isinstance(tool, str) or not isinstance(payload, dict):
         raise McpError("The MCP tool call is malformed.")
-    result = await mcp_manager.call_tool(server_id, tool, payload)
+    result = await mcp_manager.call_tool(server_id, tool, payload, bot_id=_bot_of(call))
     if result.get("is_error"):
         raise McpError(result.get("text") or f"{tool} reported an error.")
     return {"server": server_id, "tool": tool, **result}

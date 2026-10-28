@@ -16,7 +16,8 @@ from app.services.command_rules import clean_rules
 from app.services.search import schedule_notes_index
 from app.services.bot_memory import MEMORY_MAX_CHARS, MemoryError, clean_memory, memory_note_message
 from app.services.bot_todo import TODO_MAX_ITEMS, TodoError, clean_todo, get_todo, todo_note_message
-from app.services import conversations
+from app.services import conversations, sharing
+from app.services.identity import acting_for_owner, get_current_actor, get_current_owner
 from app.services.computer_provider import ComputerProviderError, computer_id_for_bot, computer_provider
 from app.services.orchestrator import ensure_orchestrator
 from app.services import procedures as procedure_service
@@ -199,18 +200,34 @@ def _find(bots: List[Dict[str, Any]], bot_id: str) -> int:
     raise HTTPException(status_code=404, detail="Bot not found")
 
 
+# What only the owner sets on a shared bot: their own sidebar's pin and archive, and its role.
+OWNER_ONLY_FIELDS = {"pinned", "archived", "orchestrator"}
+
+
+def _as_seen(bot: Dict[str, Any]) -> Dict[str, Any]:
+    """The bot as the acting person sees it: marked when it is shared with them."""
+    if acting_for_owner():
+        return bot
+    from app.services.auth_service import auth_service
+
+    access = sharing.current_access(bot["id"])
+    owner = auth_service.accounts.get_user(get_current_owner()) or {}
+    return {**bot, "pinned": False, "shared": {"owner_id": access.owner_id, "owner_name": sharing.person_name(owner), "role": access.role}}
+
+
 @router.get("", response_model=List[Bot])
 async def get_bots():
     # Every account has an orchestrator; the first listing creates it.
     ensure_orchestrator(current_storage())
-    return current_storage().get_bots()
+    # Then the bots others shared with this person.
+    return current_storage().get_bots() + sharing.shared_bots(get_current_actor())
 
 
 @router.get("/{bot_id}", response_model=Bot)
 async def get_bot(bot_id: str):
     """One bot as it is now: the client refreshes notes and to-dos with this after a turn."""
     bots = current_storage().get_bots()
-    return bots[_find(bots, bot_id)]
+    return _as_seen(bots[_find(bots, bot_id)])
 
 
 @router.post("", response_model=Bot)
@@ -250,7 +267,7 @@ async def create_bot(bot_data: BotInput):
 def _announce_notes(bot_id: str, memory: str) -> None:
     """The user's edit of the notes, shown in each of the bot's conversations that has begun, and in
     its first one (which, unlike the others, does not start with the notes)."""
-    for item in conversations.list_for_bot(bot_id):
+    for item in conversations.list_for_bot(bot_id, everyone=True):
         if item["archived"] or (not item["messages"] and item["id"] != bot_id):
             continue
         current_storage().add_message(memory_note_message(item["id"], memory, message_id=f"msg-{uuid.uuid4().hex[:6]}", bot_id=bot_id))
@@ -262,6 +279,9 @@ async def update_bot(bot_id: str, updates: BotUpdate):
     bots = current_storage().get_bots()
     index = _find(bots, bot_id)
     changes = updates.model_dump(exclude_none=True)
+    if not acting_for_owner():
+        # A teammate changes the bot, not the owner's sidebar or what kind of bot it is.
+        changes = {key: value for key, value in changes.items() if key not in OWNER_ONLY_FIELDS}
     if "name" in changes:
         changes["name"] = changes["name"].strip()
         if not changes["name"]:
@@ -338,7 +358,7 @@ async def update_bot(bot_id: str, updates: BotUpdate):
         _announce_notes(bot_id, memory_note)
     if todo_note is not None:
         current_storage().add_message(todo_note)
-    return bots[index]
+    return _as_seen(bots[index])
 
 
 @router.post("/{bot_id}/suggestions/draft")
@@ -378,7 +398,7 @@ async def delete_bot(bot_id: str):
         pass  # No computer, or none running: nothing to stop.
     except Exception as exc:  # The deletion must not fail because a container misbehaves.
         logger.warning("Could not stop the computer for %s during deletion: %s", bot_id, exc)
-    deleted_messages = sum(conversations.delete(c["id"]) for c in conversations.list_for_bot(bot_id))
+    deleted_messages = sum(conversations.delete(c["id"]) for c in conversations.list_for_bot(bot_id, everyone=True))
     from app.services import projects
 
     for project in projects.list_for_bot(bot_id):
@@ -387,4 +407,5 @@ async def delete_bot(bot_id: str):
     current_storage().delete_bot_schedules(bot_id)
     bots.pop(index)
     current_storage().save_bots(bots)
+    sharing.forget_bot(get_current_owner(), bot_id)
     return {"status": "ok", "deleted_id": bot_id, "deleted_messages": deleted_messages}

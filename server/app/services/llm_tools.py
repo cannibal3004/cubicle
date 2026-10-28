@@ -1444,7 +1444,7 @@ def _build_invocation(
         return ActionInvocation(
             name="connector.connect",
             arguments={"toolkit": toolkit},
-            target={"toolkit": toolkit},
+            target={"toolkit": toolkit, "bot_id": bot_id},
             preview=f"Connect {toolkit} through Composio: the user gets a sign-in link",
         )
     if name == "connector_status":
@@ -1461,7 +1461,10 @@ def _build_invocation(
             if slug not in slugs:
                 slugs.append(slug)
         return ActionInvocation(
-            name="connector.status", arguments={"toolkits": slugs}, target={"toolkits": slugs}, preview=f"Check connections: {', '.join(slugs)}"
+            name="connector.status",
+            arguments={"toolkits": slugs},
+            target={"toolkits": slugs, "bot_id": bot_id},
+            preview=f"Check connections: {', '.join(slugs)}",
         )
     if name in PROJECT_CALLS:
         action, fields = PROJECT_CALLS[name]
@@ -1543,12 +1546,12 @@ def _build_invocation(
     if specs:
         spec = next((s for s in specs if s.name == name and s.connector), None)
         if spec is not None:
-            return connector_invocation(spec, arguments)
+            return connector_invocation(spec, arguments, bot_id)
 
     raise ToolCallError(unknown_message(name, [s.name for s in specs or []]))
 
 
-def connector_invocation(spec: ToolSpec, arguments: Dict[str, Any]) -> ActionInvocation:
+def connector_invocation(spec: ToolSpec, arguments: Dict[str, Any], bot_id: str = "") -> ActionInvocation:
     """Gateway input for a tool discovered from a connected app."""
     info = spec.connector or {}
     if not isinstance(arguments, dict):
@@ -1580,7 +1583,7 @@ def connector_invocation(spec: ToolSpec, arguments: Dict[str, Any]) -> ActionInv
         return ActionInvocation(
             name="mcp.read" if info.get("read_only") else "mcp.call",
             arguments={"server": mcp.get("server"), "tool": mcp.get("tool"), "arguments": arguments},
-            target={"mcp_server": mcp.get("server"), "tool": mcp.get("tool")},
+            target={"mcp_server": mcp.get("server"), "tool": mcp.get("tool"), "bot_id": bot_id or None},
             preview=preview[:300],
             display_arguments=arguments,
         )
@@ -1591,7 +1594,8 @@ def connector_invocation(spec: ToolSpec, arguments: Dict[str, Any]) -> ActionInv
     return ActionInvocation(
         name=action_name,
         arguments=gateway_arguments,
-        target={"connector": info.get("toolkit"), "tool": info["slug"]},
+        # The bot decides, on a teammate's turn, whose connection runs it.
+        target={"connector": info.get("toolkit"), "tool": info["slug"], "bot_id": bot_id},
         preview=preview[:300],
         display_arguments=arguments,
     )
