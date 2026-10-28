@@ -39,17 +39,20 @@ class SettingTests(unittest.TestCase):
         self.assertEqual(thinking.configured({"thinking": "low"}, {"thinking": "auto"}, "xhigh"), ("auto", "conversation"))
         # Auto's standing level (compactions, before the pick) is where the conversation last was.
         self.assertEqual(thinking.standing_level({"thinking": "auto"}, {"thinking_last": "low"}, ""), "low")
-        self.assertEqual(thinking.standing_level({"thinking": "auto"}, {}, ""), "high")
+        self.assertEqual(thinking.standing_level({"thinking": "auto"}, {}, ""), "xhigh")
+        # The menus offer what THINKING_LEVELS lists, in order.
+        with mock.patch.object(thinking.settings, "THINKING_LEVELS", "xhigh, low,medium,none"):
+            self.assertEqual(thinking.offered_levels(), ["none", "low", "medium", "xhigh"])
 
     def test_auto_leans_deep_and_is_sticky(self):
         # First pick: light only below 0.3.
         self.assertEqual(thinking.decide({"complex": 0.05, "stakes": 0.22}, "")[0], "low")
-        self.assertEqual(thinking.decide({"complex": 0.32, "stakes": 0.0}, "")[0], "high")
+        self.assertEqual(thinking.decide({"complex": 0.32, "stakes": 0.0}, "")[0], "xhigh")
         # After a deep turn it takes a clear no to go light; after a light turn a clear yes to go deep.
-        self.assertEqual(thinking.decide({"complex": 0.12, "stakes": 0.0}, "high")[0], "high")
-        self.assertEqual(thinking.decide({"complex": 0.05, "stakes": 0.02}, "high")[0], "low")
+        self.assertEqual(thinking.decide({"complex": 0.12, "stakes": 0.0}, "xhigh")[0], "xhigh")
+        self.assertEqual(thinking.decide({"complex": 0.05, "stakes": 0.02}, "xhigh")[0], "low")
         self.assertEqual(thinking.decide({"complex": 0.35, "stakes": 0.0}, "low")[0], "low")
-        self.assertEqual(thinking.decide({"complex": 0.6, "stakes": 0.0}, "low")[0], "high")
+        self.assertEqual(thinking.decide({"complex": 0.6, "stakes": 0.0}, "low")[0], "xhigh")
 
     def test_the_decider_sees_the_message_and_the_exchange_before_it_never_tool_output(self):
         history = [
@@ -73,10 +76,10 @@ class SettingTests(unittest.TestCase):
         with mock.patch.object(approval_gate, "_config", return_value={"url": "http://decider.test", "threshold": 0.2}), \
              mock.patch.object(approval_gate, "client_factory", _decider(error="unreachable")):
             self.assertEqual(asyncio.run(thinking.choose(bot, {"thinking_last": "low"}, history, "")).level, "low")
-            self.assertEqual(asyncio.run(thinking.choose(bot, {}, history, "")).level, "high")
+            self.assertEqual(asyncio.run(thinking.choose(bot, {}, history, "")).level, "xhigh")
         with mock.patch.object(approval_gate, "_config", return_value={"url": "", "threshold": 0.2}):
             pick = asyncio.run(thinking.choose(bot, {}, history, ""))
-        self.assertEqual((pick.level, pick.reason), ("high", "no decision server configured"))
+        self.assertEqual((pick.level, pick.reason), ("xhigh", "no decision server configured"))
         # A fixed setting asks nobody.
         self.assertEqual(asyncio.run(thinking.choose({"thinking": "medium"}, {}, history, "")).level, "medium")
 
@@ -122,7 +125,7 @@ class ThinkingTurnTests(chat_harness.ChatStreamRouteTests):
         # /think auto for this conversation: the decider says deep, then (sticky) a clear no goes light.
         asyncio.run(conversations_router.update_conversation(self.bot, conversations_router.ConversationUpdate(thinking="auto")))
         effort, _ = self._turn("debug this failing build", scores={"complex": 0.9, "stakes": 0.2})
-        self.assertEqual(effort, "high")
+        self.assertEqual(effort, "xhigh")
         effort, _ = self._turn("thanks!", scores={"complex": 0.02, "stakes": 0.01})
         self.assertEqual(effort, "low")
         self.assertEqual(conversations.get(self.bot)["thinking_last"], "low")
@@ -130,7 +133,7 @@ class ThinkingTurnTests(chat_harness.ChatStreamRouteTests):
         self.assertEqual((reply["raw_payload"]["thinking"]["level"], reply["raw_payload"]["thinking"]["auto"]), ("low", True))
 
         log = thinking.recent()
-        self.assertEqual([p["level"] for p in log[:4]], ["low", "high", "medium", ""])
+        self.assertEqual([p["level"] for p in log[:4]], ["low", "xhigh", "medium", ""])
         self.assertEqual((log[0]["outcome"]["rounds"], log[0]["outcome"]["cancelled"]), (1, False))
         self.assertEqual(log[0]["message_id"], reply["id"])
         # Taking the reply back marks its pick.

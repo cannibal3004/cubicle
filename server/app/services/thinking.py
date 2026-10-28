@@ -39,8 +39,6 @@ logger = logging.getLogger(__name__)
 
 AUTO = "auto"
 LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
-# What the composer and /think offer; any level above is accepted too.
-OFFERED = ("none", "low", "medium", "high", "xhigh")
 _ALIASES = {"off": "none", "default": "", "inherit": "", "bot": ""}
 
 # The questions, answered yes/no on the user's latest message. Each states its
@@ -89,7 +87,13 @@ def light_level() -> str:
 
 
 def deep_level() -> str:
-    return settings.THINKING_AUTO_DEEP or "high"
+    return settings.THINKING_AUTO_DEEP or "xhigh"
+
+
+def offered_levels() -> List[str]:
+    """What the menus and /think offer (THINKING_LEVELS); any level in LEVELS is accepted all the same."""
+    wanted = {part.strip() for part in settings.THINKING_LEVELS.split(",")}
+    return [level for level in LEVELS if level in wanted] or ["none", "low", "medium", "high", "xhigh"]
 
 
 def configured(bot: Optional[Dict[str, Any]], conversation: Optional[Dict[str, Any]], app_effort: str) -> Tuple[str, str]:

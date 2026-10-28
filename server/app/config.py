@@ -153,7 +153,11 @@ class Settings:
     # Thinking set to Auto picks one of these two reasoning efforts per message
     # (services/thinking.py), asking the same decision model.
     THINKING_AUTO_LIGHT: str = os.getenv("THINKING_AUTO_LIGHT", "low").strip().lower()
-    THINKING_AUTO_DEEP: str = os.getenv("THINKING_AUTO_DEEP", "high").strip().lower()
+    THINKING_AUTO_DEEP: str = os.getenv("THINKING_AUTO_DEEP", "xhigh").strip().lower()
+    # The levels the menus and /think offer: the ones the model understands
+    # (model servers do not say). Qwen3.8 Flash Next on halogen has low, medium
+    # and xhigh (its default), and "none" turns thinking off.
+    THINKING_LEVELS: str = os.getenv("THINKING_LEVELS", "none,low,medium,high,xhigh").strip().lower()
     # The decider, the embedding model and the reranker run on the model server's
     # NPU, which can crash and restart within seconds: each call gets this many
     # attempts, pausing these seconds between them (per-attempt timeouts are short).

@@ -2,18 +2,38 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { FiCheck, FiCpu } from 'react-icons/fi';
+import { fetchThinkingLevels } from '../lib/api';
 
 export const THINKING_LEVELS = [
   { value: 'auto', label: 'Auto', help: 'Chosen per message: light for quick asks, deep for real work' },
   { value: 'none', label: 'Off', help: 'No thinking: fastest' },
+  { value: 'minimal', label: 'Minimal' },
   { value: 'low', label: 'Low' },
   { value: 'medium', label: 'Medium' },
   { value: 'high', label: 'High' },
   { value: 'xhigh', label: 'Extra high' },
+  { value: 'max', label: 'Max' },
 ];
 
 export function thinkingLabel(value) {
   return THINKING_LEVELS.find((l) => l.value === value)?.label || value;
+}
+
+// The levels this server offers (THINKING_LEVELS: the ones its model has), Auto first.
+export function useThinkingLevels() {
+  const [offered, setOffered] = useState(null);
+  useEffect(() => {
+    let live = true;
+    fetchThinkingLevels().then((data) => {
+      if (live && data) setOffered(data);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  if (!offered) return THINKING_LEVELS.filter((l) => ['auto', 'none', 'low', 'medium', 'high', 'xhigh'].includes(l.value));
+  const help = `Chosen per message: ${thinkingLabel(offered.light).toLowerCase()} for quick asks, ${thinkingLabel(offered.deep).toLowerCase()} for real work`;
+  return THINKING_LEVELS.filter((l) => l.value === 'auto' || offered.levels.includes(l.value)).map((l) => (l.value === 'auto' ? { ...l, help } : l));
 }
 
 // How hard the model thinks in this conversation. "Default" follows the bot's
@@ -21,6 +41,7 @@ export function thinkingLabel(value) {
 // the conversation afresh (the model server caches each level separately).
 export default function ThinkingPicker({ conversation, bot, onChange }) {
   const [open, setOpen] = useState(false);
+  const levels = useThinkingLevels();
   const rootRef = useRef(null);
 
   useEffect(() => {
@@ -61,7 +82,7 @@ export default function ThinkingPicker({ conversation, bot, onChange }) {
       {open && (
         <div className="absolute right-0 top-full mt-1 z-50 w-64 rounded-xl border border-[#2b2b32] bg-[#141416] shadow-2xl py-1 text-xs">
           <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-zinc-500">Thinking in this conversation</div>
-          {[{ value: '', label: `Default (${botLabel})`, help: "Follow the bot's setting" }, ...THINKING_LEVELS].map((level) => (
+          {[{ value: '', label: `Default (${botLabel})`, help: "Follow the bot's setting" }, ...levels].map((level) => (
             <button
               key={level.value || 'default'}
               type="button"

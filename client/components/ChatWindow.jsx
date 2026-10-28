@@ -8,7 +8,7 @@ import CommandPicker from './CommandPicker';
 import ModelPicker from './ModelPicker';
 import ToolsPopover from './ToolsPopover';
 import ContextMeter from './ContextMeter';
-import ThinkingPicker, { THINKING_LEVELS, thinkingLabel } from './ThinkingPicker';
+import ThinkingPicker, { thinkingLabel, useThinkingLevels } from './ThinkingPicker';
 import TodoCard from './TodoCard';
 import WorkNotesSection from './WorkNotesSection';
 import MascotAvatar from './MascotAvatar';
@@ -707,6 +707,7 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
   };
 
   // This conversation's thinking setting ("" follows the bot's).
+  const thinkingLevels = useThinkingLevels();
   const setThinking = async (value) => {
     if (!threadId || !onConversationPatched) return;
     await onConversationPatched(threadId, { thinking: value }, { save: true });
@@ -772,9 +773,10 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
         const wanted = args.trim().toLowerCase();
         const value = { off: 'none', default: '' }[wanted] ?? wanted;
         const own = conversation?.thinking || '';
-        if (!wanted || !(value === '' || THINKING_LEVELS.some((l) => l.value === value))) {
+        if (!wanted || !(value === '' || thinkingLevels.some((l) => l.value === value))) {
           const now = own ? thinkingLabel(own) : `default (${bot?.thinking ? thinkingLabel(bot.thinking) : 'App Settings'})`;
-          addLocalMessage(`Thinking in this conversation: ${now}\nUsage: /think auto|off|low|medium|high|xhigh|default`, wanted !== '');
+          const usage = thinkingLevels.map((l) => (l.value === 'none' ? 'off' : l.value)).join('|');
+          addLocalMessage(`Thinking in this conversation: ${now}\nUsage: /think ${usage}|default`, wanted !== '');
           return;
         }
         try {

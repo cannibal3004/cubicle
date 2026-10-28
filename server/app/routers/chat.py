@@ -1526,6 +1526,12 @@ def _bot_id_for(thread_id: str) -> str:
 # ---- turns ------------------------------------------------------------------
 
 
+@router.get("/thinking/levels")
+async def thinking_levels():
+    """The thinking levels to offer, and the two Auto chooses between."""
+    return {"levels": thinking.offered_levels(), "light": thinking.light_level(), "deep": thinking.deep_level()}
+
+
 @router.get("/thinking/picks")
 async def thinking_picks(limit: int = Query(default=200, ge=1, le=1000)):
     """The latest thinking levels chosen per turn, with how each turn went (for tuning Auto)."""

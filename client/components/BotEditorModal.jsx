@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { FiX, FiArchive, FiTrash2, FiRotateCcw, FiAlertTriangle } from 'react-icons/fi';
 import ModelPicker from './ModelPicker';
-import { THINKING_LEVELS } from './ThinkingPicker';
+import { useThinkingLevels } from './ThinkingPicker';
 import BotToolsSection from './BotToolsSection';
 import SecretsSection from './SecretsSection';
 import SchedulesSection from './SchedulesSection';
@@ -120,6 +120,7 @@ export default function BotEditorModal({
   const [accent, setAccent] = useState(ACCENTS[0]);
   const [model, setModel] = useState('');
   const [thinking, setThinking] = useState('');
+  const thinkingLevels = useThinkingLevels();
   const [systemPrompt, setSystemPrompt] = useState('');
   const [orchestrator, setOrchestrator] = useState(false);
   const [memory, setMemory] = useState('');
@@ -369,7 +370,7 @@ export default function BotEditorModal({
             <label className={labelClass} htmlFor="bot-thinking">Thinking</label>
             <select id="bot-thinking" value={thinking} onChange={(e) => setThinking(e.target.value)} className={inputClass}>
               <option value="">Default (App Settings)</option>
-              {THINKING_LEVELS.map((level) => (
+              {thinkingLevels.map((level) => (
                 <option key={level.value} value={level.value}>
                   {level.label}
                   {level.help ? ` - ${level.help}` : ''}
