@@ -779,21 +779,34 @@ async def recalled_context(bot_id: str, query: str, history: List[Dict[str, Any]
 
 
 def describe_user() -> str:
-    """One line about the person the bot works for, from their profile; empty when unset."""
+    """One line about the person the bot works for, from their profile; empty when unset.
+
+    On a bot shared with them it is always there, saying whose bot it is: the
+    bot's notes are mostly about its owner, and must not be taken for them.
+    """
     try:
         from app.services.auth_service import auth_service
 
         user = auth_service.accounts.get_user(get_current_actor())
+        owner = None if acting_for_owner() else auth_service.accounts.get_user(get_current_owner())
     except Exception:
         return ""
     if not user:
         return ""
     name = (user.get("display_name") or "").strip()
     email = (user.get("email") or "").strip()
-    if not name and not email and not (user.get("about") or "").strip():
+    if not name and not email and not (user.get("about") or "").strip() and owner is None:
         return ""
     parts = []
-    if name:
+    if owner is not None:
+        owner_name = sharing.person_name(owner)
+        who = name or user.get("username")
+        parts.append(
+            f"You belong to {owner_name}, who shared you with teammates. In this conversation you work for {who} "
+            f"(account {user.get('username')}), not {owner_name}: your notes and history may be about {owner_name}, so do not take "
+            f"them for {who}. Address them as {who}."
+        )
+    elif name:
         parts.append(f"The person you work for is {name} (account {user.get('username')}); address them as {name}.")
     else:
         parts.append(f"The person you work for has the account {user.get('username')}.")

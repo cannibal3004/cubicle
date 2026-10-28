@@ -67,6 +67,8 @@ class Message(BaseModel):
     raw_payload: Optional[Dict[str, Any]] = None
     # Files the user attached: download-card fields plus where the bot finds them.
     attachments: Optional[List[Dict[str, Any]]] = None
+    # Who wrote a user message (an account id); on a shared bot, the teammate.
+    author_id: Optional[str] = None
 
 class AttachmentRef(BaseModel):
     """An uploaded file, named the way download cards name files."""

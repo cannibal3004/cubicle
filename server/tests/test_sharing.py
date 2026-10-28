@@ -113,7 +113,9 @@ class SharingTests(unittest.TestCase):
             # The bot knows who it is talking to.
             self.accounts.update_profile(self.bob["id"], display_name="Bob Smith")
             with self.request(self.bob["id"], path=f"/api/v1/chat/turns/{bob_thread}"):
-                self.assertIn("Bob Smith", chat_router.describe_user())
+                described = chat_router.describe_user()
+                self.assertIn("Bob Smith", described)
+                self.assertIn("You belong to jamie", described)  # his notes are not about Bob
 
         asyncio.run(scenario())
 
