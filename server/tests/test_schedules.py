@@ -384,6 +384,100 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)
             self.assertEqual(len(self.started), 1)
 
+    async def test_a_check_wakes_the_bot_only_with_a_new_report(self):
+        results = []
+
+        async def fake_check(record):
+            outcome = results.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        with mock.patch.object(storage_module, "storage_service", self.storage), mock.patch.object(
+            schedule_service, "app_timezone", lambda: TZ
+        ), mock.patch.object(schedule_service, "now_local", lambda tz=None: NOW), mock.patch.object(
+            scheduler_module, "turn_manager", self.manager
+        ), mock.patch.object(schedule_service, "run_check", fake_check):
+            created = create_schedule(
+                self.bot, "Nextcloud health", "Look into what the check found and fix it if you can.", {"kind": "every", "minutes": 5},
+                check={"script": "curl -fsS https://cloud.example/status.php >/dev/null || echo down"}, storage=self.storage, tz=TZ, now=NOW,
+            )
+            self.assertEqual(created["check"]["timeout_seconds"], schedule_service.CHECK_TIMEOUT_DEFAULT)
+            scheduler = Scheduler(tick_seconds=60)
+            scheduler.start(self._run_turn)
+            await scheduler.stop()
+
+            async def run(result):
+                results.append(result)
+                record = schedule_service.get_schedule(created["id"], self.storage)
+                await scheduler._run({**record, "owner_id": None})
+                return schedule_service.get_schedule(created["id"], self.storage)
+
+            quiet = await run({"exit_code": 0, "stdout": "", "stderr": "noise on stderr"})
+            self.assertEqual((quiet["last_status"], quiet["last_note"]), ("quiet", "nothing to report"))
+            self.assertEqual(self.started, [])
+
+            woke = await run({"exit_code": 0, "stdout": "down\n", "stderr": ""})
+            self.assertEqual(len(self.started), 1)
+            message = self.started[0][1]
+            self.assertTrue(message["text"].startswith("Look into what the check found"))
+            self.assertIn("The check reported:\n```\ndown\n```", message["text"])
+            self.assertTrue(message["raw_payload"]["scheduled"]["check"])
+            self.assertEqual((woke["last_status"], woke["last_note"], woke["last_report"]), ("completed", "down", "down"))
+
+            # The same report again does not wake it; a different one does.
+            same = await run({"exit_code": 0, "stdout": "down", "stderr": ""})
+            self.assertEqual((same["last_status"], len(self.started)), ("unchanged", 1))
+            failed = await run({"exit_code": 7, "stdout": "", "stderr": "curl: (7) Failed to connect"})
+            self.assertEqual(len(self.started), 2)
+            self.assertIn("[the check exited with code 7]\ncurl: (7) Failed to connect", self.started[1][1]["text"])
+            self.assertEqual(failed["last_note"], "[the check exited with code 7]")
+
+            # Quiet again forgets the report, so the same trouble returning is reported.
+            await run({"exit_code": 0, "stdout": "", "stderr": ""})
+            await run({"exit_code": 0, "stdout": "down", "stderr": ""})
+            self.assertEqual(len(self.started), 3)
+
+            # A check that cannot run at all is recorded and wakes nobody.
+            broken = await run(RuntimeError("the computer could not start"))
+            self.assertEqual((broken["last_status"], broken["last_note"]), ("check_failed", "the check could not run: the computer could not start"))
+            self.assertEqual(len(self.started), 3)
+
+            # Changing the script starts over; removing it makes a plain schedule again.
+            changed = update_schedule(created["id"], check={"script": "echo other"}, storage=self.storage, tz=TZ, now=NOW)
+            self.assertIsNone(changed["last_report"])
+            self.assertIsNone(update_schedule(created["id"], check=None, storage=self.storage, tz=TZ, now=NOW)["check"])
+            self.assertIsNone(update_schedule(created["id"], name="Renamed", storage=self.storage, tz=TZ, now=NOW)["check"])
+
+    def test_checks_are_validated(self):
+        self.assertIsNone(schedule_service.clean_check(None))
+        self.assertIsNone(schedule_service.clean_check({"script": "  "}))
+        self.assertEqual(schedule_service.clean_check("df -h"), {"script": "df -h", "timeout_seconds": schedule_service.CHECK_TIMEOUT_DEFAULT})
+        with self.assertRaises(ScheduleError):
+            schedule_service.clean_check({"script": "x", "timeout_seconds": 1000})
+        with self.assertRaises(ScheduleError):
+            schedule_service.clean_check({"script": "x" * (schedule_service.MAX_CHECK_CHARS + 1)})
+
+
+class ScheduleCheckToolTests(unittest.TestCase):
+    def test_create_and_update_take_a_check_and_show_it_for_approval(self):
+        create = build_invocation(
+            "schedule_create",
+            {"name": "Disk", "prompt": "Free some space.", "kind": "every", "minutes": 15, "check_script": "df --output=pcent / | tail -1 | awk '$1+0 > 90'"},
+            "bot-x",
+        )
+        self.assertEqual(create.arguments["check"]["script"], "df --output=pcent / | tail -1 | awk '$1+0 > 90'")
+        self.assertIn("run without asking each time", create.preview)
+        self.assertIn("awk", create.preview)
+        plain = build_invocation("schedule_create", {"name": "Digest", "prompt": "Summarise.", "kind": "daily", "time": "08:00"}, "bot-x")
+        self.assertIsNone(plain.arguments["check"])
+        update = build_invocation("schedule_update", {"id": "sch-1", "check_script": "", "enabled": False}, "bot-x")
+        self.assertEqual((update.arguments["check"], update.arguments["enabled"]), (None, False))
+        self.assertIn("no check", update.preview)
+        self.assertNotIn("cadence", build_invocation("schedule_update", {"id": "sch-1", "prompt": "New."}, "bot-x").arguments)
+        with self.assertRaises(ToolCallError):
+            build_invocation("schedule_update", {"id": "sch-1"}, "bot-x")
+
 
 if __name__ == "__main__":
     unittest.main()

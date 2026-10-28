@@ -26,7 +26,7 @@ from app.services.computer_provider import (
 from app.services.file_share import normalize_source
 from app.services.workspace_service import WorkspaceToolCall
 from app.services.bot_todo import STATES as TODO_STATES
-from app.services.schedule_service import ScheduleError, clean_cadence, describe_cadence
+from app.services.schedule_service import ScheduleError, clean_cadence, clean_check, describe_cadence
 
 
 class ToolCallError(ValueError):
@@ -491,7 +491,7 @@ TODO_TOOLS: List[ToolSpec] = [
 SCHEDULE_TOOLS: List[ToolSpec] = [
     ToolSpec(
         name="schedule_list",
-        description="Show your schedules: prompts set to run in this chat later, with the current time and timezone.",
+        description="Show your schedules (prompts set to run later in your Scheduled conversation, and their checks) with how each last ran, the current time and timezone.",
         parameters=_obj({}),
         group="schedule",
         needs_approval=False,
@@ -499,10 +499,12 @@ SCHEDULE_TOOLS: List[ToolSpec] = [
     ToolSpec(
         name="schedule_create",
         description=(
-            "Schedule a prompt to run in this chat later: once at a time (or in a number of minutes), every N minutes, daily at a time, "
-            "or weekly on chosen days at a time. The run starts a fresh turn with the prompt as the user's message, so the prompt must "
-            "say everything needed to do the job from scratch: what to do, where things are, what to report. Call schedule_list first "
-            "when the time matters; it gives the current time and timezone. The user approves each new schedule."
+            "Schedule a prompt to run later in your Scheduled conversation: once at a time (or in a number of minutes), every N minutes, "
+            "daily at a time, or weekly on chosen days at a time. The run starts a fresh turn with the prompt as the user's message, so the "
+            "prompt must say everything needed to do the job from scratch: what to do, where things are, what to report. To watch for "
+            "something, add check_script: a shell script run in your computer at each time without you, which wakes you (the prompt plus "
+            "what it printed) only when it prints something or fails, and only when that differs from its last report. Call schedule_list "
+            "first when the time matters; it gives the current time and timezone. The user approves each new schedule."
         ),
         parameters=_obj(
             {
@@ -514,8 +516,39 @@ SCHEDULE_TOOLS: List[ToolSpec] = [
                 "minutes": {"type": "integer", "description": "every: the interval in minutes (at least 5)"},
                 "time": {"type": "string", "description": "daily and weekly: the time of day, HH:MM"},
                 "days": {"type": "array", "items": {"type": "integer"}, "description": "weekly: the weekdays, 0 = Monday to 6 = Sunday"},
+                "check_script": {
+                    "type": "string",
+                    "description": "Optional shell script run first; print nothing and exit 0 when all is well, print what is wrong or new otherwise",
+                },
+                "check_timeout_seconds": {"type": "integer", "description": "How long the check may run, 5 to 300 (default 60)"},
             },
             ["name", "prompt", "kind"],
+        ),
+        group="schedule",
+        needs_approval=True,
+    ),
+    ToolSpec(
+        name="schedule_update",
+        description=(
+            "Change one of your schedules by id: its name, prompt, timing, check script (an empty check_script removes the check) or "
+            "whether it is enabled. Give only what changes; timing fields replace the whole timing. The user approves."
+        ),
+        parameters=_obj(
+            {
+                "id": {"type": "string", "description": "The schedule id, e.g. sch-1a2b3c4d"},
+                "name": {"type": "string"},
+                "prompt": {"type": "string"},
+                "kind": {"type": "string", "enum": ["once", "every", "daily", "weekly"]},
+                "at": {"type": "string"},
+                "in_minutes": {"type": "integer"},
+                "minutes": {"type": "integer"},
+                "time": {"type": "string"},
+                "days": {"type": "array", "items": {"type": "integer"}},
+                "check_script": {"type": "string", "description": "The new check script; empty to remove the check"},
+                "check_timeout_seconds": {"type": "integer"},
+                "enabled": {"type": "boolean"},
+            },
+            ["id"],
         ),
         group="schedule",
         needs_approval=True,
@@ -905,10 +938,14 @@ def describe_tools(
         )
     if "schedule" in groups:
         lines.append(
-            "- Schedules: schedule_create runs a prompt for you later in this chat, once or on a cadence, after the user approves it; "
-            "schedule_list shows them with the current time and timezone; schedule_delete removes one. Use them when the user asks to be "
-            "reminded, to check something later or to repeat a job. Write the prompt as a complete message to your future self: the run "
-            "starts a fresh turn in which only your notes and to-do list carry over."
+            "- Schedules: schedule_create runs a prompt for you later in your Scheduled conversation, once or on a cadence, after the user "
+            "approves it; schedule_list shows them with the current time and timezone; schedule_update changes one; schedule_delete removes "
+            "one. Use them when the user asks to be reminded, to check something later or to repeat a job. Write the prompt as a complete "
+            "message to your future self: the run starts a fresh turn in which only your notes carry over. To watch something often (a "
+            "service's health, a new image version, a disk filling up), give the schedule a check_script so you are only woken when there "
+            "is something to act on: it prints nothing when all is well, prints what is wrong or new otherwise, and never prints what "
+            "changes every run (times, counters), since an unchanged report is not given twice. Keep state it compares against in a file "
+            "in your home directory, and try the script with the terminal before scheduling it."
         )
     if "github" in groups:
         lines.append("- GitHub: github_list_issues and github_create_issue act through the user's connected GitHub account.")
@@ -1065,6 +1102,35 @@ def build_invocation(
     if isinstance(invocation, ActionInvocation) and invocation.name in THREAD_ACTIONS:
         invocation = replace(invocation, arguments={**invocation.arguments, "thread_id": thread_id or bot_id})
     return invocation
+
+
+def _schedule_cadence(arguments: Dict[str, Any], *, required: bool) -> Optional[Dict[str, Any]]:
+    """The cadence in a schedule tool's flat arguments, checked; None when none is given and none is required."""
+    kind = arguments.get("kind")
+    if not kind and not required:
+        return None
+    cadence: Dict[str, Any] = {"kind": _string(arguments, "kind", required=True, max_len=10).lower()}
+    for key in ("at", "in_minutes", "minutes", "time", "days"):
+        if arguments.get(key) not in (None, "", []):
+            cadence[key] = arguments.get(key)
+    try:
+        return clean_cadence(cadence)
+    except ScheduleError as exc:
+        raise ToolCallError(str(exc)) from exc
+
+
+def _schedule_check(arguments: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    try:
+        return clean_check({"script": arguments.get("check_script") or "", "timeout_seconds": arguments.get("check_timeout_seconds")})
+    except ScheduleError as exc:
+        raise ToolCallError(str(exc)) from exc
+
+
+def _check_preview(check: Optional[Dict[str, Any]]) -> str:
+    if not check:
+        return ""
+    script = check["script"] if len(check["script"]) <= 600 else check["script"][:600] + "..."
+    return f" · check (up to {check['timeout_seconds']}s), run without asking each time:\n{script}"
 
 
 def _build_invocation(
@@ -1299,19 +1365,41 @@ def _build_invocation(
     if name == "schedule_create":
         title = _string(arguments, "name", required=True, max_len=80)
         prompt = _string(arguments, "prompt", required=True, max_len=4000)
-        cadence: Dict[str, Any] = {"kind": _string(arguments, "kind", required=True, max_len=10).lower()}
-        for key in ("at", "in_minutes", "minutes", "time", "days"):
-            if arguments.get(key) not in (None, "", []):
-                cadence[key] = arguments.get(key)
-        try:
-            cleaned = clean_cadence(cadence)
-        except ScheduleError as exc:
-            raise ToolCallError(str(exc)) from exc
+        cleaned = _schedule_cadence(arguments, required=True)
+        check = _schedule_check(arguments)
         return ActionInvocation(
             name="schedule.create",
-            arguments={"bot_id": bot_id, "name": title, "prompt": prompt, "cadence": cleaned},
+            arguments={"bot_id": bot_id, "name": title, "prompt": prompt, "cadence": cleaned, "check": check},
             target={"bot_id": bot_id},
-            preview=f"Schedule '{title}' {describe_cadence(cleaned)} for {bot_id}: {prompt[:120]}",
+            preview=f"Schedule '{title}' {describe_cadence(cleaned)} for {bot_id}: {prompt[:120]}" + _check_preview(check),
+        )
+    if name == "schedule_update":
+        schedule_id = _string(arguments, "id", required=True, max_len=40)
+        changes: Dict[str, Any] = {}
+        described: List[str] = []
+        if arguments.get("name") not in (None, ""):
+            changes["name"] = _string(arguments, "name", max_len=80)
+            described.append(f"name '{changes['name']}'")
+        if arguments.get("prompt") not in (None, ""):
+            changes["prompt"] = _string(arguments, "prompt", max_len=4000)
+            described.append(f"prompt: {changes['prompt'][:120]}")
+        cadence = _schedule_cadence(arguments, required=False)
+        if cadence is not None:
+            changes["cadence"] = cadence
+            described.append(describe_cadence(cadence))
+        if "check_script" in arguments:
+            changes["check"] = _schedule_check(arguments)
+            described.append("no check" if changes["check"] is None else _check_preview(changes["check"]).lstrip(" ·"))
+        if isinstance(arguments.get("enabled"), bool):
+            changes["enabled"] = arguments["enabled"]
+            described.append("enabled" if arguments["enabled"] else "paused")
+        if not changes:
+            raise ToolCallError("Give at least one thing to change.")
+        return ActionInvocation(
+            name="schedule.update",
+            arguments={"bot_id": bot_id, "id": schedule_id, **changes},
+            target={"bot_id": bot_id},
+            preview=f"Change schedule {schedule_id} of {bot_id}: " + "; ".join(described),
         )
     if name == "schedule_delete":
         schedule_id = _string(arguments, "id", required=True, max_len=40)
