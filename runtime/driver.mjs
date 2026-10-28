@@ -256,8 +256,9 @@ const OUTPUT_HEAD_BYTES = 4000;
 const OUTPUT_TAIL_BYTES = 8000;
 const OUTPUT_FILE_MAX_BYTES = 50 * 1024 * 1024;
 const OUTPUT_DIR = path.join(home, '.cubicle-output');
-// Saved outputs kept; older ones are removed as new ones are made.
+// Saved outputs kept, by count and in all; the oldest go first.
 const OUTPUT_FILES_KEPT = 30;
+const OUTPUT_DIR_MAX_BYTES = 200 * 1024 * 1024;
 // After the shell exits, how long to wait for its output to close. A process
 // the command left running in the background (`server &`) keeps the output
 // open for as long as it runs; the command itself is finished.
@@ -289,12 +290,17 @@ function keep(stream, chunk) {
 }
 
 function shortened(stream) {
-  const head = Buffer.concat(stream.head);
+  let head = Buffer.concat(stream.head);
   let tail = Buffer.concat(stream.tail);
   if (tail.length > OUTPUT_TAIL_BYTES) tail = tail.subarray(tail.length - OUTPUT_TAIL_BYTES);
+  if (stream.size - head.length - tail.length <= 0) return Buffer.concat([head, tail]).toString('utf8');
+  // Whole lines on both sides of the gap, unless a line is longer than the room.
+  const lastBreak = head.lastIndexOf(10);
+  if (lastBreak > head.length / 2) head = head.subarray(0, lastBreak + 1);
+  const firstBreak = tail.indexOf(10);
+  if (firstBreak !== -1 && firstBreak < tail.length / 2) tail = tail.subarray(firstBreak + 1);
   const skipped = stream.size - head.length - tail.length;
-  if (skipped <= 0) return Buffer.concat([head, tail]).toString('utf8');
-  return `${head.toString('utf8')}\n[... ${skipped} bytes left out here; all of it is in the output file ...]\n${tail.toString('utf8')}`;
+  return `${head.toString('utf8')}[... ${skipped} bytes left out here; all of it is in the output file ...]\n${tail.toString('utf8')}`;
 }
 
 function outputPath(command) {
@@ -303,9 +309,16 @@ function outputPath(command) {
   return path.join(OUTPUT_DIR, `${stamp}-${slug}.log`);
 }
 
+// The newest file (the one being written) always stays.
 async function pruneOutputs() {
-  const names = (await readdir(OUTPUT_DIR)).filter((name) => name.endsWith('.log')).sort();
-  await Promise.all(names.slice(0, Math.max(0, names.length - OUTPUT_FILES_KEPT)).map((name) => unlink(path.join(OUTPUT_DIR, name)).catch(() => {})));
+  const names = (await readdir(OUTPUT_DIR)).filter((name) => name.endsWith('.log')).sort().reverse();
+  let total = 0;
+  for (const [index, name] of names.entries()) {
+    const file = path.join(OUTPUT_DIR, name);
+    const size = await stat(file).then((info) => info.size, () => 0);
+    total += size;
+    if (index > 0 && (index >= OUTPUT_FILES_KEPT || total > OUTPUT_DIR_MAX_BYTES)) await unlink(file).catch(() => {});
+  }
 }
 
 // Run one shell command and report what happened, telling apart: it
