@@ -8,6 +8,7 @@ import CommandPicker from './CommandPicker';
 import ModelPicker from './ModelPicker';
 import ToolsPopover from './ToolsPopover';
 import ContextMeter from './ContextMeter';
+import ThinkingPicker, { THINKING_LEVELS, thinkingLabel } from './ThinkingPicker';
 import TodoCard from './TodoCard';
 import WorkNotesSection from './WorkNotesSection';
 import MascotAvatar from './MascotAvatar';
@@ -377,6 +378,11 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
                   },
                 ]
           );
+        } else if (event.type === 'thinking.picked') {
+          // How hard the model thinks this turn: shown on the reply and in the header chip.
+          const thinking = { level: event.level, auto: event.auto, source: event.source };
+          updateMessages((prev) => prev.map((msg) => (msg.id === event.botMsgId ? { ...msg, thinking } : msg)));
+          if (event.level && onConversationPatched) onConversationPatched(threadKey, { thinking_last: event.level });
         } else if (event.type === 'request.opened') {
           setPendingApprovals((prev) => [
             ...prev.filter((approval) => approval.requestId !== event.requestId),
@@ -700,6 +706,12 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
     ]);
   };
 
+  // This conversation's thinking setting ("" follows the bot's).
+  const setThinking = async (value) => {
+    if (!threadId || !onConversationPatched) return;
+    await onConversationPatched(threadId, { thinking: value }, { save: true });
+  };
+
   const runClientCommand = async (spec, args) => {
     const botId = threadId;
     if (!botId) return;
@@ -753,6 +765,23 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
         } else {
           const shown = matches.slice(0, 8).map((m) => `  ${m.id}`).join('\n');
           addLocalMessage(`"${query}" matches ${matches.length} models. Be more specific:\n${shown}${matches.length > 8 ? '\n  ...' : ''}`, true);
+        }
+        return;
+      }
+      case 'think': {
+        const wanted = args.trim().toLowerCase();
+        const value = { off: 'none', default: '' }[wanted] ?? wanted;
+        const own = conversation?.thinking || '';
+        if (!wanted || !(value === '' || THINKING_LEVELS.some((l) => l.value === value))) {
+          const now = own ? thinkingLabel(own) : `default (${bot?.thinking ? thinkingLabel(bot.thinking) : 'App Settings'})`;
+          addLocalMessage(`Thinking in this conversation: ${now}\nUsage: /think auto|off|low|medium|high|xhigh|default`, wanted !== '');
+          return;
+        }
+        try {
+          await setThinking(value);
+          addLocalMessage(value ? `Thinking in this conversation: ${thinkingLabel(value)}.` : "Thinking in this conversation follows the bot's setting again.");
+        } catch (err) {
+          addLocalMessage(`Could not change the thinking: ${err.message}`, true);
         }
         return;
       }
@@ -1009,6 +1038,14 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
             onRefresh={onRefreshModels}
             onSelectModel={handleModelChange}
           />
+
+          {bot && onConversationPatched && (
+            <ThinkingPicker
+              conversation={conversation}
+              bot={bot}
+              onChange={(value) => setThinking(value).catch((err) => addLocalMessage(`Could not change the thinking: ${err.message}`, true))}
+            />
+          )}
 
           {bot && onUpdateBot && (
             <ToolsPopover

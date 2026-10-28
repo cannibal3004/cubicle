@@ -233,6 +233,20 @@ SCHEMA_MIGRATIONS = {
         );
         CREATE INDEX IF NOT EXISTS bot_members_member ON bot_members(member_id);
     """,
+    # How hard the model thought on each turn and how the turn went
+    # (services/thinking.py): the record for tuning the Auto choice.
+    14: """
+        CREATE TABLE IF NOT EXISTS thinking_picks (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS thinking_picks_owner ON thinking_picks(owner_id, created_at);
+        CREATE INDEX IF NOT EXISTS thinking_picks_message ON thinking_picks(owner_id, message_id);
+    """,
 }
 
 OWNER_TABLES = (

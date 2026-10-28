@@ -1,6 +1,8 @@
 import asyncio
 import contextlib
+import dataclasses
 import json
+import time
 import logging
 import uuid
 from datetime import datetime
@@ -25,7 +27,7 @@ from app.services.approval_gate import approval_gate
 from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs, shared_connector_specs
-from app.services import computer_turns, conversation_titles, conversations, projects, sharing  # projects: registers its actions
+from app.services import computer_turns, conversation_titles, conversations, projects, sharing, thinking  # projects: registers its actions
 from app.services.context_builder import build_history_messages, cap_message_results, latest_compaction, live_messages, safe_arguments, trim_result_text
 from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
 from app.services import bot_memory as _bot_memory  # noqa: F401 - registers memory.read/write
@@ -846,6 +848,13 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
     today = datetime.now().strftime("%A, %B %d, %Y")
     system_prompt = f"{raw_prompt}\n\n{describe_user(current_bot)}Today is {today}."
     llm_config = llm_service.current_llm_config()
+    # How hard the model thinks: the conversation's setting, the bot's, or the app's. For
+    # Auto the turn decides per message; until then (and for a compaction) the level the
+    # conversation last used, whose prompt cache is the warm one.
+    app_effort = llm_config.reasoning_effort
+    standing = thinking.standing_level(current_bot, conversation, app_effort)
+    if standing != llm_config.reasoning_effort:
+        llm_config = dataclasses.replace(llm_config, reasoning_effort=standing)
     selected_model = (
         requested_model
         or (current_bot.get("model") if current_bot else None)
@@ -939,6 +948,8 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         # served from the cache.
         "compaction_prompt": f"{system_prompt}\n\n{tools_prompt}" if tools_prompt else system_prompt,
         "llm_config": llm_config,
+        "app_effort": app_effort,
+        "conversation": conversation,
         "selected_model": selected_model,
         "formatted_history": formatted_history,
         "context_window": context_window,
@@ -976,8 +987,11 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
     replay_tools = llm_config.provider != "muapi"
 
     async def run(turn: Turn) -> None:
-        nonlocal formatted_history, history
+        nonlocal formatted_history, history, llm_config
         bot_msg_id = f"msg-{uuid.uuid4().hex[:6]}"
+        turn_started = time.monotonic()
+        stop_reason = ""
+        rounds = 0
         text_pieces: List[str] = []
         # Rounds cut because the model fell into a loop (see services/repetition).
         loop_cuts = 0
@@ -1038,11 +1052,27 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         # then is kept, so the chat and the next turn both see it.
         stopped = False
         round_text = ""
+        thinking_event: Optional[Dict[str, Any]] = None
+        pick_id = ""
         try:
             turn.emit({"type": "turn.started", "botMsgId": bot_msg_id, "model": selected_model, **({"toolSelection": setup["tool_selection"]} if setup.get("tool_selection") else {})})
 
             # --- compaction: the thread has outgrown its share of the window ------
             await compact_if_needed(last_prompt_tokens(history))
+
+            # --- how hard to think: fixed, or Auto deciding on this message (after any compaction,
+            # which goes with the level the conversation last used: its prompt cache is the warm one)
+            pick = await thinking.choose(current_bot, conversations.get(thread_id) or setup["conversation"], history, setup["app_effort"])
+            if pick.level != llm_config.reasoning_effort:
+                llm_config = dataclasses.replace(llm_config, reasoning_effort=pick.level)
+            pick_id = thinking.record(pick, thread_id=thread_id, message_id=bot_msg_id, bot_id=bot_id, model=selected_model)
+            thinking_event = pick.to_event()
+            turn.emit({"type": "thinking.picked", "botMsgId": bot_msg_id, **thinking_event})
+            if pick.level and (conversations.get(thread_id) or {}).get("thinking_last") != pick.level:
+                try:
+                    conversations.update(thread_id, {"thinking_last": pick.level})
+                except Exception as exc:
+                    logger.warning("Could not keep the thinking level of %s: %s", thread_id, exc)
 
             # --- explicit slash commands typed by the user ------------------------
             last_user_text = formatted_history[-1]["content"] if formatted_history else ""
@@ -1452,6 +1482,18 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             raw_payload["stray_calls"] = stray_runs
         if attachments:
             raw_payload["attachments"] = attachments
+        if thinking_event is not None:
+            if thinking_event["level"] or thinking_event["auto"]:
+                raw_payload["thinking"] = thinking_event  # shown on the reply; nothing to show when none was sent
+            thinking.finish(pick_id, {
+                "duration_ms": int((time.monotonic() - turn_started) * 1000),
+                "rounds": rounds,
+                "completion_tokens": usage_completion,
+                "tool_calls": len(tool_records),
+                "stopped_early": stop_reason or None,
+                "loop_cuts": loop_cuts,
+                "cancelled": stopped,
+            })
 
         bot_msg = {
             "id": bot_msg_id,
@@ -1482,6 +1524,12 @@ def _bot_id_for(thread_id: str) -> str:
 
 
 # ---- turns ------------------------------------------------------------------
+
+
+@router.get("/thinking/picks")
+async def thinking_picks(limit: int = Query(default=200, ge=1, le=1000)):
+    """The latest thinking levels chosen per turn, with how each turn went (for tuning Auto)."""
+    return {"picks": thinking.recent(limit)}
 
 
 @router.get("/turns")

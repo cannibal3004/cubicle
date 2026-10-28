@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { FiX, FiArchive, FiTrash2, FiRotateCcw, FiAlertTriangle } from 'react-icons/fi';
 import ModelPicker from './ModelPicker';
+import { THINKING_LEVELS } from './ThinkingPicker';
 import BotToolsSection from './BotToolsSection';
 import SecretsSection from './SecretsSection';
 import SchedulesSection from './SchedulesSection';
@@ -118,6 +119,7 @@ export default function BotEditorModal({
   const [avatar, setAvatar] = useState('🤖');
   const [accent, setAccent] = useState(ACCENTS[0]);
   const [model, setModel] = useState('');
+  const [thinking, setThinking] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [orchestrator, setOrchestrator] = useState(false);
   const [memory, setMemory] = useState('');
@@ -162,6 +164,7 @@ export default function BotEditorModal({
     setAvatar(bot?.avatar || '🤖');
     setAccent(bot?.accent_color || ACCENTS[0]);
     setModel(bot?.model || defaultModel || '');
+    setThinking(bot?.thinking || '');
     setSystemPrompt(bot?.system_prompt || '');
     setOrchestrator(Boolean(bot?.orchestrator));
     setMemory(bot?.memory || '');
@@ -196,6 +199,7 @@ export default function BotEditorModal({
         avatar: avatar.trim() || '🤖',
         accent_color: accent,
         model: model.trim(),
+        thinking,
         system_prompt: systemPrompt.trim(),
         orchestrator,
         tool_settings: toolSettings,
@@ -359,6 +363,23 @@ export default function BotEditorModal({
               triggerClassName="w-full justify-between bg-[#141417] border border-[#2a2a2f] rounded-lg px-3 py-2"
             />
             <p className="text-[11px] text-zinc-500 mt-1">Leave as is to use the default model. You can change it later from the chat header.</p>
+          </div>
+
+          <div>
+            <label className={labelClass} htmlFor="bot-thinking">Thinking</label>
+            <select id="bot-thinking" value={thinking} onChange={(e) => setThinking(e.target.value)} className={inputClass}>
+              <option value="">Default (App Settings)</option>
+              {THINKING_LEVELS.map((level) => (
+                <option key={level.value} value={level.value}>
+                  {level.label}
+                  {level.help ? ` - ${level.help}` : ''}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-zinc-500 mt-1">
+              How hard the model thinks before answering. Auto decides per message with the decision model. Each conversation can override it with
+              /think or the chip in the chat header.
+            </p>
           </div>
 
           <div>

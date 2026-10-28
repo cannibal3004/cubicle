@@ -16,7 +16,7 @@ from app.services.command_rules import clean_rules
 from app.services.search import schedule_notes_index
 from app.services.bot_memory import MEMORY_MAX_CHARS, MemoryError, clean_memory, memory_note_message
 from app.services.bot_todo import TODO_MAX_ITEMS, TodoError, clean_todo, get_todo, todo_note_message
-from app.services import conversations, sharing
+from app.services import conversations, sharing, thinking
 from app.services.identity import acting_for_owner, get_current_actor, get_current_owner
 from app.services.computer_provider import ComputerProviderError, computer_id_for_bot, computer_provider
 from app.services.orchestrator import ensure_orchestrator
@@ -33,7 +33,7 @@ MAX_SHORT = 200
 MAX_PROMPT = 20_000
 # Only these fields can be changed from the client; ids, counters, and
 # timestamps are the server's.
-EDITABLE_FIELDS = {"name", "role", "description", "avatar", "model", "accent_color", "system_prompt", "tools", "pinned", "tool_settings", "auto_approval", "gate_threshold", "trusted_tools", "allowed_commands", "procedures", "suggestions"}  # memory is handled separately
+EDITABLE_FIELDS = {"name", "role", "description", "avatar", "model", "accent_color", "system_prompt", "tools", "pinned", "tool_settings", "auto_approval", "gate_threshold", "trusted_tools", "allowed_commands", "procedures", "suggestions", "thinking"}  # memory is handled separately
 MAX_TOOL_SETTINGS_ENTRIES = 2000
 MAX_TRUSTED_TOOLS = 500
 _TOOL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -167,6 +167,7 @@ class BotInput(BaseModel):
     allowed_commands: List[str] = Field(default_factory=list)
     orchestrator: bool = False
     suggestions: List[str] = Field(default_factory=list)
+    thinking: str = Field(default="", max_length=20)
 
 
 class BotUpdate(BaseModel):
@@ -191,6 +192,8 @@ class BotUpdate(BaseModel):
     memory: Optional[str] = Field(default=None, max_length=MEMORY_MAX_CHARS)
     todo: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=TODO_MAX_ITEMS)
     suggestions: Optional[List[str]] = None
+    # How hard the model thinks: "auto", an effort level, or "" to follow App Settings.
+    thinking: Optional[str] = Field(default=None, max_length=20)
 
 
 def _find(bots: List[Dict[str, Any]], bot_id: str) -> int:
@@ -236,6 +239,10 @@ async def create_bot(bot_data: BotInput):
     if not name:
         raise HTTPException(status_code=422, detail="A bot needs a name.")
     model = (bot_data.model or "").strip() or llm_service.current_llm_config().default_model
+    try:
+        thinking_setting = thinking.clean_setting(bot_data.thinking)
+    except thinking.ThinkingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     bot = {
         "id": f"bot-{uuid.uuid4().hex[:6]}",
         "name": name,
@@ -253,6 +260,7 @@ async def create_bot(bot_data: BotInput):
         "allowed_commands": clean_allowed_commands(bot_data.allowed_commands),
         "orchestrator": bool(bot_data.orchestrator),
         "suggestions": clean_suggestions(bot_data.suggestions),
+        "thinking": thinking_setting,
         "pinned": False,
         "archived": False,
         "unread_count": 0,
@@ -296,6 +304,11 @@ async def update_bot(bot_id: str, updates: BotUpdate):
         changes["allowed_commands"] = clean_allowed_commands(changes["allowed_commands"])
     if "suggestions" in changes:
         changes["suggestions"] = clean_suggestions(changes["suggestions"])
+    if "thinking" in changes:
+        try:
+            changes["thinking"] = thinking.clean_setting(changes["thinking"])
+        except thinking.ThinkingError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     procedures_before = None
     if "procedures" in changes:
         try:

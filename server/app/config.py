@@ -150,6 +150,10 @@ class Settings:
     DECIDER_URL: str = os.getenv("DECIDER_URL", "").strip().rstrip("/")
     DECIDER_THRESHOLD: float = min(0.99, max(0.01, float(os.getenv("DECIDER_THRESHOLD", "0.2"))))
     DECIDER_TIMEOUT_SECONDS: float = float(os.getenv("DECIDER_TIMEOUT_SECONDS", "15"))
+    # Thinking set to Auto picks one of these two reasoning efforts per message
+    # (services/thinking.py), asking the same decision model.
+    THINKING_AUTO_LIGHT: str = os.getenv("THINKING_AUTO_LIGHT", "low").strip().lower()
+    THINKING_AUTO_DEEP: str = os.getenv("THINKING_AUTO_DEEP", "high").strip().lower()
     # The decider, the embedding model and the reranker run on the model server's
     # NPU, which can crash and restart within seconds: each call gets this many
     # attempts, pausing these seconds between them (per-attempt timeouts are short).

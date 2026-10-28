@@ -125,6 +125,9 @@ def summary(record: Dict[str, Any], activity: Optional[Dict[str, Any]] = None) -
         "messages": activity.get("messages", 0),
         "todo": list(record.get("todo") or []),
         "project_id": record.get("project_id"),
+        # Its own thinking setting ("" follows the bot) and the level its last turn used.
+        "thinking": record.get("thinking") or "",
+        "thinking_last": record.get("thinking_last") or "",
         # Its own work notes, used while it is in no project.
         "work_notes": str(record.get("work_notes") or ""),
     }

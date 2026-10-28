@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.services import conversations, projects
+from app.services import conversations, projects, thinking
 from app.services.bot_todo import TODO_MAX_ITEMS, TodoError, clean_todo, get_todo, todo_note_message
 from app.services.conversations import ConversationError
 from app.services.storage_service import current_storage
@@ -28,6 +28,8 @@ class ConversationUpdate(BaseModel):
     project_id: Optional[str] = Field(default=None, max_length=40)
     # Its own work notes (used while it is in no project).
     work_notes: Optional[str] = Field(default=None, max_length=projects.WORK_NOTES_MAX_CHARS)
+    # How hard the model thinks here: "auto", an effort level, or "" to follow the bot.
+    thinking: Optional[str] = Field(default=None, max_length=20)
 
 
 def _record(conversation_id: str) -> Dict[str, Any]:
@@ -80,6 +82,11 @@ async def update_conversation(conversation_id: str, body: ConversationUpdate):
         # The user's title is never replaced; clearing it lets a model name the conversation again.
         changes["title_source"] = "user" if changes["title"] else None
         changes["title_tries"] = 0
+    if body.thinking is not None:
+        try:
+            changes["thinking"] = thinking.clean_setting(body.thinking)
+        except thinking.ThinkingError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if body.archived is not None:
         if body.archived and _busy(conversation_id):
             turn_manager.cancel(conversation_id)  # an archived conversation does not keep working

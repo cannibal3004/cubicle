@@ -251,6 +251,10 @@ def rewind(thread_id: str, message_id: Optional[str] = None, storage: Optional[S
     }
     storage.push_rewind(thread_id, entry, keep=MAX_STACK)
     _unindex(thread_id, span)
+    # Replies taken back: the thinking log notes it (a sign the turn missed).
+    from app.services import thinking
+
+    thinking.mark_undone([str(m["id"]) for m in span if m.get("sender") == "bot"])
     return {
         "message": target,
         "removed": info["messages"],
