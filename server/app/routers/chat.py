@@ -663,6 +663,10 @@ async def retrieved_context(bot_id: str, query: str) -> str:
     except Exception as exc:  # never let retrieval fail a turn
         logger.warning("Retrieval failed for %s: %s", bot_id, exc)
         return ""
+    # Files are attached in someone's conversation: on a shared bot each person's
+    # turns get passages of their own files only (older entries are the owner's).
+    actor, owner = get_current_actor(), get_current_owner()
+    hits = [hit for hit in hits if (hit.meta.get("user_id") or owner) == actor]
     return retrieval.render_hits(
         hits,
         heading="Passages from the attached files that match this message (retrieved by similarity; the file itself holds the rest):",

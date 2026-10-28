@@ -163,6 +163,14 @@ class RetrieveTests(unittest.TestCase):
         self.assertIn("Heron", block)
         self.assertIn("plan.txt", block)
         self.assertEqual(asyncio.run(chat_router.retrieved_context("bot-2", "anything")), "")
+        # On a shared bot, a teammate's turn does not get passages of the owner's files.
+        from app.services.identity import actor_context
+
+        with mock.patch.object(chat_router.retrieval, "current_config", return_value=CONFIG), \
+             mock.patch.object(chat_router.retrieval, "embed_texts", fake_embed), \
+             mock.patch.object(chat_router.retrieval, "rerank", return_value=None), \
+             actor_context("teammate"):
+            self.assertEqual(asyncio.run(chat_router.retrieved_context("bot-1", "what is the code name and launch date")), "")
 
 
 if __name__ == "__main__":
