@@ -219,7 +219,7 @@ async def procedure_context(bot_id: str, query: str, *, limit: int = 2, config: 
     if not config.enabled or not (query or "").strip():
         return ""
     try:
-        hits = await retrieval.retrieve(query, kind=KIND, ref_prefix=f"{bot_id}:", limit=limit, config=config, storage=storage, embed=embed)
+        hits = await retrieval.retrieve(query, kind=KIND, ref_prefix=f"{bot_id}:", limit=limit, config=config, storage=storage, embed=embed, relevant_only=True)
     except Exception as exc:
         logger.warning("Procedure retrieval failed for %s: %s", bot_id, exc)
         return ""

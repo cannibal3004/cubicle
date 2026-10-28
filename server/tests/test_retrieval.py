@@ -108,6 +108,18 @@ class RetrieveTests(unittest.TestCase):
         block = render_hits(hits, heading="Relevant passages:")
         self.assertTrue(block.startswith("Relevant passages:\n--- from guide.md (part "))
         self.assertIn("Slack", block)
+        # Context added unasked keeps only what clears the floor: what the reranker scores
+        # low is dropped (an unrelated message gets nothing), and without a reranker the
+        # embedding similarity decides.
+        async def judging_rerank(query, documents, top_n, config=None):
+            return [(i, 0.97 if "refund" in d and "refund" in query else 0.01) for i, d in enumerate(documents)][:top_n]
+        with mock.patch.object(retrieval, "rerank", judging_rerank):
+            kept = asyncio.run(retrieve("when do I get a refund", kind="attachment", ref_prefix="bot-1:", limit=3, config=CONFIG, storage=self.storage, embed=fake_embed, relevant_only=True))
+            unrelated = asyncio.run(retrieve("what is my public IP address", kind="attachment", ref_prefix="bot-1:", limit=3, config=CONFIG, storage=self.storage, embed=fake_embed, relevant_only=True))
+        self.assertTrue(kept and all("refund" in hit.text for hit in kept))
+        self.assertEqual(unrelated, [])
+        with mock.patch.object(retrieval, "rerank", return_value=None), mock.patch.object(retrieval.settings, "RETRIEVAL_MIN_SCORE", 1.01):
+            self.assertEqual(asyncio.run(retrieve("refund", kind="attachment", ref_prefix="bot-1:", config=CONFIG, storage=self.storage, embed=fake_embed, relevant_only=True)), [])
         # Off, or nothing indexed for the prefix: nothing retrieved, no call made.
         off = RetrievalConfig(**{**CONFIG.__dict__, "enabled": False})
         self.assertEqual(asyncio.run(retrieve("refund", config=off, storage=self.storage, embed=fake_embed)), [])
