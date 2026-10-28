@@ -33,7 +33,9 @@ export function useThinkingLevels() {
   }, []);
   if (!offered) return THINKING_LEVELS.filter((l) => ['auto', 'none', 'low', 'medium', 'high', 'xhigh'].includes(l.value));
   const help = `Chosen per message: ${thinkingLabel(offered.light).toLowerCase()} for quick asks, ${thinkingLabel(offered.deep).toLowerCase()} for real work`;
-  return THINKING_LEVELS.filter((l) => l.value === 'auto' || offered.levels.includes(l.value)).map((l) => (l.value === 'auto' ? { ...l, help } : l));
+  const levels = THINKING_LEVELS.filter((l) => l.value === 'auto' || offered.levels.includes(l.value)).map((l) => (l.value === 'auto' ? { ...l, help } : l));
+  levels.style = offered.style;
+  return levels;
 }
 
 // How hard the model thinks in this conversation. "Default" follows the bot's
@@ -97,7 +99,9 @@ export default function ThinkingPicker({ conversation, bot, onChange }) {
             </button>
           ))}
           <p className="px-3 pt-1.5 pb-1 text-[10px] leading-snug text-zinc-500 border-t border-[#232328] mt-1">
-            A change makes the next reply re-read the conversation once, so it may start a little slower.
+            {levels.style === 'hint'
+              ? 'Switching to or from Off makes the next reply re-read the conversation once, so it may start a little slower.'
+              : 'A change makes the next reply re-read the conversation once, so it may start a little slower.'}
           </p>
         </div>
       )}

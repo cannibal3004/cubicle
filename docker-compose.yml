@@ -89,6 +89,8 @@ services:
       THINKING_LEVELS: ${THINKING_LEVELS:-none,low,medium,high,xhigh}
       THINKING_AUTO_LIGHT: ${THINKING_AUTO_LIGHT:-low}
       THINKING_AUTO_DEEP: ${THINKING_AUTO_DEEP:-xhigh}
+      THINKING_STYLE: ${THINKING_STYLE:-field}
+      THINKING_HINT_BASE: ${THINKING_HINT_BASE:-medium}
       # Computer provider: fake (default) or docker (needs the `computer` profile).
       COMPUTER_PROVIDER: ${COMPUTER_PROVIDER:-fake}
       COMPUTER_DOCKER_IMAGE: ${COMPUTER_DOCKER_IMAGE:-cubicle-computer:2.13.0}

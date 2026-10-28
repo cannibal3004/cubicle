@@ -142,6 +142,43 @@ class ThinkingTurnTests(chat_harness.ChatStreamRouteTests):
         rewind.rewind(self.bot, self.storage.get_messages(self.bot)[-2]["id"])
         self.assertTrue(thinking.recent()[0].get("undone"))
 
+    def test_the_hint_style_sends_one_level_and_says_the_rest_at_the_end_of_the_message(self):
+        with mock.patch.object(thinking.settings, "THINKING_STYLE", "field"):
+            self.assertEqual(thinking.wire("low"), ("low", None))
+        with mock.patch.object(thinking.settings, "THINKING_STYLE", "hint"):
+            self.assertEqual(thinking.wire("low"), ("medium", thinking.HINTS["low"]))
+            self.assertEqual(thinking.wire("high"), ("medium", thinking.HINTS["xhigh"]))  # folded as halogen folds it
+            self.assertEqual(thinking.wire("medium"), ("medium", None))
+            self.assertEqual(thinking.wire("none"), ("none", None))  # off is a different switch
+            self.assertEqual(thinking.wire(""), ("", None))
+            # Auto follows the decider every message: a change costs nothing.
+            self.assertEqual(thinking.decide({"complex": 0.2, "stakes": 0.0}, "xhigh", sticky=False)[0], "low")
+
+            sent = []
+
+            async def stream(model, messages, system_prompt="", config=None, tools=None, one_shot=False):
+                sent.append((config.reasoning_effort, [m["content"] for m in messages if m.get("role") == "user"]))
+                yield {"type": "content.delta", "delta": "Done."}
+                yield {"type": "turn.completed", "ok": True}
+
+            asyncio.run(bots_router.update_bot(self.bot, bots_router.BotUpdate(thinking="low")))
+            self.storage.add_message({"id": "h1", "thread_id": self.bot, "bot_id": self.bot, "sender": "user", "text": "quick question"})
+            self._run_turn(self.bot, stream=stream)
+            asyncio.run(conversations_router.update_conversation(self.bot, conversations_router.ConversationUpdate(thinking="xhigh")))
+            self.storage.add_message({"id": "h2", "thread_id": self.bot, "bot_id": self.bot, "sender": "user", "text": "now think hard"})
+            self._run_turn(self.bot, stream=stream)
+        (first_effort, first), (second_effort, second) = sent[0], sent[-1]
+        self.assertEqual((first_effort, second_effort), ("medium", "medium"))  # one cache for the conversation
+        self.assertTrue(first[-1].endswith(thinking.HINTS["low"]))
+        self.assertTrue(second[-1].endswith(thinking.HINTS["xhigh"]))
+        # The earlier message is replayed exactly as it was first sent, its hint included.
+        self.assertEqual(second[-2], first[-1])
+        stored = {m["id"]: m for m in self.storage.get_messages(self.bot)}
+        self.assertEqual(stored["h1"]["text"], "quick question")  # the user's words are untouched
+        self.assertEqual(stored["h1"]["raw_payload"]["thinking_hint"], thinking.HINTS["low"])
+        reply = self.storage.get_messages(self.bot)[-1]
+        self.assertEqual((reply["raw_payload"]["thinking"]["level"], reply["raw_payload"]["thinking"]["sent"]), ("xhigh", "medium"))
+
     def test_a_bad_setting_is_refused(self):
         from fastapi import HTTPException
 

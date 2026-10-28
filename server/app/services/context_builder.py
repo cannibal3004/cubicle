@@ -296,6 +296,10 @@ def build_history_messages(history: List[Dict[str, Any]], *, replay_tools: bool)
                 text = "\n\n".join(([text] if text.strip() else []) + blocks)
             if turn_context:
                 text = f"{text}\n\n{TURN_CONTEXT_LEAD}\n\n{turn_context}"
+            # How hard to think on this message (services/thinking.py, the hint style): last of all.
+            thinking_hint = (message.get("raw_payload") or {}).get("thinking_hint")
+            if thinking_hint:
+                text = f"{text}\n\n{thinking_hint}"
             messages.append({"role": "user", "content": text, "image_url": message.get("image_url")})
             continue
         if is_memory_note(message):

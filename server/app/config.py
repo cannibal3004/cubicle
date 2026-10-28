@@ -158,6 +158,13 @@ class Settings:
     # (model servers do not say). Qwen3.8 Flash Next on halogen has low, medium
     # and xhigh (its default), and "none" turns thinking off.
     THINKING_LEVELS: str = os.getenv("THINKING_LEVELS", "none,low,medium,high,xhigh").strip().lower()
+    # How a level reaches the model: "field" sends it as reasoning_effort; "hint"
+    # always sends THINKING_HINT_BASE and adds the level's instruction to the end
+    # of the user's message, so changing level keeps the prompt cache (for chat
+    # templates that turn the effort into a sentence near the top of the prompt,
+    # like Qwen3.8 Flash Next's; see services/thinking.py).
+    THINKING_STYLE: str = os.getenv("THINKING_STYLE", "field").strip().lower()
+    THINKING_HINT_BASE: str = os.getenv("THINKING_HINT_BASE", "medium").strip().lower()
     # The decider, the embedding model and the reranker run on the model server's
     # NPU, which can crash and restart within seconds: each call gets this many
     # attempts, pausing these seconds between them (per-attempt timeouts are short).

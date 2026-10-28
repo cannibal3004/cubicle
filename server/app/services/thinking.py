@@ -9,12 +9,24 @@ yes/no questions about the user's message, with the exchange before it for
 context ("do it" means whatever was just proposed), and picks a light or a
 deep level. It leans deep: light only when the answers are clearly no.
 
-Auto is sticky on purpose. halogen-flash-server keeps a separate prompt
-cache for each effort level (measured 2026-10-28): moving a conversation to
-a level it has not used re-reads the whole prompt, and moving back re-reads
-what came since. So Auto stays where the conversation is unless the decider
-is clear, and compaction sends the conversation's last level so its prefix
-still comes from the cache.
+How a level reaches the model (THINKING_STYLE):
+
+  field  sent as `reasoning_effort`. Qwen3.8 Flash Next's chat template turns
+         it into a sentence near the top of the prompt, so halogen-flash-server
+         keeps a separate prompt cache per level (measured 2026-10-28): moving
+         a conversation to a level it has not used re-reads all of it. Auto is
+         therefore sticky in this style, and compactions send the level the
+         conversation last used.
+  hint   always sends THINKING_HINT_BASE ("medium", the template's level with
+         no sentence) and puts the level's sentence, the template's own words,
+         at the end of the user's message, stored with it so later turns
+         replay it unchanged. One cache per conversation, so any change is
+         free and Auto follows the decider on every message. Measured the same
+         day: the cache kept growing while the hint flipped every turn, and
+         the hint steered thinking at least as much as the template's place
+         (mislabelled-boxes puzzle: 72 words with the low hint, 236 with
+         xhigh; the template's own low and xhigh: 160 and 186). "none" still
+         goes as reasoning_effort: it switches thinking off another way.
 
 Each turn's pick is logged with how the turn went (`thinking_picks`): the
 record for tuning the questions and thresholds before Auto becomes a default.
@@ -54,9 +66,9 @@ QUESTIONS: Dict[str, str] = {
         "as opposed to being easy to check and redo?"
     ),
 }
-# The highest answer decides. A first pick is light below FIRST; after a light
-# turn it takes UP or more to go deep, after a deep turn a clear no (below
-# DOWN) to go light. Going light is made hard on purpose: on a trivial reply
+# The highest answer decides: light below FIRST. When a change of level costs
+# a re-read (the field style), Auto is sticky: after a light turn it takes UP
+# or more to go deep, after a deep turn a clear no (below DOWN) to go light. Going light is made hard on purpose: on a trivial reply
 # a lower level saves little thinking, while a level the conversation has not
 # used yet re-reads all of it. Measured with decider-4b on 2026-10-28: quick
 # asks ("thanks", "what time is it in Tokyo", "curl ifconfig.me") scored
@@ -65,6 +77,19 @@ QUESTIONS: Dict[str, str] = {
 FIRST = 0.3
 UP = 0.4
 DOWN = 0.1
+
+FIELD = "field"
+HINT = "hint"
+# The instruction for each level in the hint style: Qwen3.8 Flash Next's chat
+# template's own sentences. Levels fold the way halogen folds them.
+HINTS: Dict[str, str] = {
+    "low": "Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to the conclusion without unnecessary elaboration.",
+    "xhigh": (
+        "Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible "
+        "alternatives, and prioritize correctness, consistency, and clarity in the final answer."
+    ),
+}
+FOLD = {"minimal": "low", "low": "low", "medium": "medium", "high": "xhigh", "xhigh": "xhigh", "max": "xhigh"}
 MESSAGE_CHARS = 2000
 CONTEXT_CHARS = 1000
 
@@ -88,6 +113,21 @@ def light_level() -> str:
 
 def deep_level() -> str:
     return settings.THINKING_AUTO_DEEP or "xhigh"
+
+
+def hint_style() -> bool:
+    return settings.THINKING_STYLE == HINT
+
+
+def wire(level: str) -> Tuple[str, Optional[str]]:
+    """(reasoning_effort to send, sentence for the end of the user's message) for a level."""
+    if not hint_style() or level in ("", "none"):
+        return level, None
+    base = settings.THINKING_HINT_BASE or "medium"
+    folded = FOLD.get(level, level)
+    if folded == FOLD.get(base, base):
+        return base, None
+    return base, HINTS.get(folded)
 
 
 def offered_levels() -> List[str]:
@@ -123,6 +163,9 @@ class Pick:
     setting: str                     # what was configured ("auto" or a level)
     source: str                      # conversation | bot | app
     auto: bool = False
+    # What reached the model: the reasoning_effort sent, and whether a hint went with the message.
+    sent: str = ""
+    hinted: bool = False
     previous: str = ""
     scores: Dict[str, float] = field(default_factory=dict)
     reason: str = ""
@@ -130,16 +173,20 @@ class Pick:
 
     def to_event(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {"level": self.level, "auto": self.auto, "source": self.source}
+        if self.hinted:
+            out.update({"sent": self.sent, "hinted": True})
         if self.auto:
             out.update({"scores": {k: round(v, 3) for k, v in self.scores.items()}, "reason": self.reason})
         return out
 
 
-def decide(scores: Dict[str, float], previous: str) -> Tuple[str, str]:
+def decide(scores: Dict[str, float], previous: str, sticky: bool = True) -> Tuple[str, str]:
     """(level, why) from the decider's answers and where the conversation was."""
     light, deep = light_level(), deep_level()
     top = max(scores, key=scores.get)
     value = scores[top]
+    if not sticky:
+        previous = ""
     if previous == deep:
         return (light, f"{top} {value:.2f} below {DOWN:g}") if value < DOWN else (deep, f"{top} {value:.2f}; staying {deep}")
     if previous == light:
@@ -198,7 +245,8 @@ async def choose(bot: Optional[Dict[str, Any]], conversation: Optional[Dict[str,
         return pick
     finally:
         pick.latency_ms = int((time.monotonic() - started) * 1000)
-    pick.level, pick.reason = decide(pick.scores, previous)
+    # A change of level is free when it travels as a hint.
+    pick.level, pick.reason = decide(pick.scores, previous, sticky=not hint_style())
     return pick
 
 

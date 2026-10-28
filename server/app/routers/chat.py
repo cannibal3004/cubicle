@@ -675,6 +675,29 @@ async def retrieved_context(bot_id: str, query: str) -> str:
     )
 
 
+def _store_thinking_hint(history: List[Dict[str, Any]], hint: Optional[str]) -> bool:
+    """Keep this turn's thinking hint on the latest user message (or drop an old one). True when it changed.
+
+    Only the latest message changes, at the very end of the prompt: earlier messages keep
+    the hints they were answered with, so the start of the prompt stays as cached."""
+    latest = next((m for m in reversed(history) if m.get("sender") == "user"), None)
+    if latest is None:
+        return False
+    payload = dict(latest.get("raw_payload") or {})
+    if payload.get("thinking_hint") == hint or (not hint and "thinking_hint" not in payload):
+        return False
+    if hint:
+        payload["thinking_hint"] = hint
+    else:
+        payload.pop("thinking_hint", None)
+    latest["raw_payload"] = payload
+    try:
+        current_storage().update_message(latest)
+    except Exception as exc:  # this turn still gets it; a later turn would replay without it
+        logger.warning("Could not store the thinking hint of %s: %s", latest.get("id"), exc)
+    return True
+
+
 def _fresh_entries(block: str, marker: str, seen: str) -> str:
     """The block without the entries already in `seen` (attached to an earlier message); "" when none is left.
 
@@ -852,7 +875,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
     # Auto the turn decides per message; until then (and for a compaction) the level the
     # conversation last used, whose prompt cache is the warm one.
     app_effort = llm_config.reasoning_effort
-    standing = thinking.standing_level(current_bot, conversation, app_effort)
+    standing = thinking.wire(thinking.standing_level(current_bot, conversation, app_effort))[0]
     if standing != llm_config.reasoning_effort:
         llm_config = dataclasses.replace(llm_config, reasoning_effort=standing)
     selected_model = (
@@ -1063,8 +1086,11 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             # --- how hard to think: fixed, or Auto deciding on this message (after any compaction,
             # which goes with the level the conversation last used: its prompt cache is the warm one)
             pick = await thinking.choose(current_bot, conversations.get(thread_id) or setup["conversation"], history, setup["app_effort"])
-            if pick.level != llm_config.reasoning_effort:
-                llm_config = dataclasses.replace(llm_config, reasoning_effort=pick.level)
+            # The level goes as reasoning_effort, or (hint style) as a sentence at the end of the message.
+            sent_effort, thinking_hint = thinking.wire(pick.level)
+            pick.sent, pick.hinted = sent_effort, bool(thinking_hint)
+            if sent_effort != llm_config.reasoning_effort:
+                llm_config = dataclasses.replace(llm_config, reasoning_effort=sent_effort)
             pick_id = thinking.record(pick, thread_id=thread_id, message_id=bot_msg_id, bot_id=bot_id, model=selected_model)
             thinking_event = pick.to_event()
             turn.emit({"type": "thinking.picked", "botMsgId": bot_msg_id, **thinking_event})
@@ -1105,7 +1131,11 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             # replayed the same on later turns, so the start of the prompt never
             # changes and the model server reuses its cache. A turn run again for
             # the same message reuses what was stored.
-            if await attach_turn_context(turn, thread_id, bot_msg_id, history, last_user_text, bot_id=bot_id):
+            # The thinking hint is stored on the message the same way (after the slash
+            # commands above have read the message as the user wrote it).
+            hint_changed = _store_thinking_hint(history, thinking_hint)
+            attached = await attach_turn_context(turn, thread_id, bot_msg_id, history, last_user_text, bot_id=bot_id)
+            if attached or hint_changed:
                 formatted_history = build_history_messages(history, replay_tools=replay_tools)
 
             # --- model turn, looping while it calls tools ------------------------
@@ -1529,7 +1559,13 @@ def _bot_id_for(thread_id: str) -> str:
 @router.get("/thinking/levels")
 async def thinking_levels():
     """The thinking levels to offer, and the two Auto chooses between."""
-    return {"levels": thinking.offered_levels(), "light": thinking.light_level(), "deep": thinking.deep_level()}
+    return {
+        "levels": thinking.offered_levels(),
+        "light": thinking.light_level(),
+        "deep": thinking.deep_level(),
+        # "hint": a change of level keeps the model server's prompt cache (except to or from off).
+        "style": settings.THINKING_STYLE,
+    }
 
 
 @router.get("/thinking/picks")
