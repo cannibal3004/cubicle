@@ -11,7 +11,7 @@ from app.routers import chat as chat_router
 from app.services import orchestrator
 from app.services import storage_service as storage_module
 from app.services.action_gateway import ActionGateway, ActionInvocation
-from app.services.context_builder import DELEGATED_LEAD, build_history_messages
+from app.services.context_builder import DELEGATED_LEAD, HANDBACK_LEAD, build_history_messages
 from app.services.llm_config import LLMConfig
 from app.services.llm_tools import ToolCallError, available_tools, build_invocation, describe_tools
 from app.services.orchestrator import OrchestratorError, delegated_message, ensure_orchestrator, is_orchestrator
@@ -193,6 +193,72 @@ class DelegationTests(unittest.TestCase):
                     await orchestrator.execute_send(_call("bots.send", self.cubie["id"], bot_id="bot-other", message="x"))
 
         asyncio.run(scenario())
+
+    def _gated_streams(self, gate, texts):
+        """The worker's reply waits for `gate`; later calls (the orchestrator's) answer at once, in order."""
+        calls = []
+
+        async def stream(model, messages, system_prompt="", config=None, tools=None):
+            calls.append(messages[-1]["content"] if messages else "")
+            if len(calls) == 1:
+                await gate.wait()
+            yield {"type": "content.delta", "delta": texts[min(len(calls), len(texts)) - 1]}
+            yield {"type": "turn.completed", "ok": True}
+
+        return stream, calls
+
+    def test_a_reply_after_the_wait_is_brought_back_to_the_conversation_that_sent_it(self):
+        gate = asyncio.Event()
+        stream, calls = self._gated_streams(gate, ["Patched all three hosts.", "Worker is done: all three hosts patched."])
+        cubie_thread = self.cubie["id"]
+
+        async def scenario():
+            with mock.patch.object(chat_router.llm_service, "stream_chat_completion", stream), mock.patch.object(orchestrator, "HANDBACK_POLL_SECONDS", 0.02):
+                started = await orchestrator.execute_send(
+                    _call("bots.send", self.cubie["id"], bot_id=self.worker["id"], message="Patch the hosts.", wait_seconds=0, thread_id=cubie_thread)
+                )
+                self.assertIn("posted into this conversation", started["note"])
+                gate.set()
+                for _ in range(200):
+                    turn = self.manager.current(cubie_thread)
+                    if turn is not None and turn.finished:
+                        break
+                    await asyncio.sleep(0.02)
+
+        asyncio.run(scenario())
+        messages = self.storage.get_messages(thread_id=cubie_thread)
+        handback = next(m for m in messages if (m.get("raw_payload") or {}).get("handback"))
+        self.assertEqual(handback["text"], "Patched all three hosts.")
+        self.assertEqual(handback["raw_payload"]["handback"]["from_name"], "Worker")
+        self.assertEqual(handback["raw_payload"]["handback"]["task"], "Patch the hosts.")
+        # Cubie was told who it is from, and answered.
+        self.assertTrue(calls[1].startswith(HANDBACK_LEAD.format(name="Worker", task="Patch the hosts.")))
+        self.assertEqual(messages[-1]["text"], "Worker is done: all three hosts patched.")
+        self.assertEqual(orchestrator._handbacks, {})
+
+    def test_a_reply_collected_with_bots_reply_is_not_brought_back(self):
+        gate = asyncio.Event()
+        stream, calls = self._gated_streams(gate, ["Done."])
+        cubie_thread = self.cubie["id"]
+
+        async def scenario():
+            with mock.patch.object(chat_router.llm_service, "stream_chat_completion", stream), mock.patch.object(orchestrator, "HANDBACK_POLL_SECONDS", 0.02):
+                # Cubie is busy in that conversation, so the reply has to wait for it.
+                busy = self.manager.start(cubie_thread, self.cubie["id"], "m", lambda turn: asyncio.sleep(0.3))
+                started = await orchestrator.execute_send(
+                    _call("bots.send", self.cubie["id"], bot_id=self.worker["id"], message="Quick job.", wait_seconds=0, thread_id=cubie_thread)
+                )
+                gate.set()
+                await asyncio.wait_for(self.manager.get(started["turn_id"]).task, 2)
+                reply = await orchestrator.execute_reply(_call("bots.reply", self.cubie["id"], bot_id=self.worker["id"], message_id=started["message_id"]))
+                self.assertEqual(reply["reply"], "Done.")
+                await asyncio.wait_for(busy.task, 2)
+                await asyncio.sleep(0.1)
+
+        asyncio.run(scenario())
+        self.assertFalse(any((m.get("raw_payload") or {}).get("handback") for m in self.storage.get_messages(thread_id=cubie_thread)))
+        self.assertEqual(len(calls), 1)  # only the worker's turn ran
+        self.assertEqual(orchestrator._handbacks, {})
 
 
 if __name__ == "__main__":

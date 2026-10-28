@@ -15,7 +15,8 @@ import net from 'node:net';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:http';
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { createWriteStream, mkdirSync } from 'node:fs';
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { constants as osConstants } from 'node:os';
 import { chromium } from 'playwright';
@@ -245,7 +246,18 @@ function commandEnv(extra, unset) {
   return env;
 }
 
-const OUTPUT_MAX_BYTES = 1024 * 1024;
+// Output longer than OUTPUT_INLINE_BYTES is saved in full to a file under
+// the home directory (which survives a stop and start), and the reply carries
+// the start and end of each stream with the file's path, so the bot can search
+// or read the rest instead of running the command again. A command whose
+// output passes OUTPUT_FILE_MAX_BYTES is stopped.
+const OUTPUT_INLINE_BYTES = 20000;
+const OUTPUT_HEAD_BYTES = 4000;
+const OUTPUT_TAIL_BYTES = 8000;
+const OUTPUT_FILE_MAX_BYTES = 50 * 1024 * 1024;
+const OUTPUT_DIR = path.join(home, '.cubicle-output');
+// Saved outputs kept; older ones are removed as new ones are made.
+const OUTPUT_FILES_KEPT = 30;
 // After the shell exits, how long to wait for its output to close. A process
 // the command left running in the background (`server &`) keeps the output
 // open for as long as it runs; the command itself is finished.
@@ -255,10 +267,51 @@ function signalNumber(signal) {
   return (signal && osConstants.signals[signal]) || 15;
 }
 
+// One stream's output as the reply shows it: its first bytes and its last ones.
+function capture() {
+  return { head: [], headSize: 0, tail: [], tailSize: 0, size: 0 };
+}
+
+function keep(stream, chunk) {
+  stream.size += chunk.length;
+  if (stream.headSize < OUTPUT_HEAD_BYTES) {
+    const part = chunk.subarray(0, OUTPUT_HEAD_BYTES - stream.headSize);
+    stream.head.push(part);
+    stream.headSize += part.length;
+    chunk = chunk.subarray(part.length);
+  }
+  if (!chunk.length) return;
+  stream.tail.push(chunk);
+  stream.tailSize += chunk.length;
+  while (stream.tail.length > 1 && stream.tailSize - stream.tail[0].length >= OUTPUT_TAIL_BYTES) {
+    stream.tailSize -= stream.tail.shift().length;
+  }
+}
+
+function shortened(stream) {
+  const head = Buffer.concat(stream.head);
+  let tail = Buffer.concat(stream.tail);
+  if (tail.length > OUTPUT_TAIL_BYTES) tail = tail.subarray(tail.length - OUTPUT_TAIL_BYTES);
+  const skipped = stream.size - head.length - tail.length;
+  if (skipped <= 0) return Buffer.concat([head, tail]).toString('utf8');
+  return `${head.toString('utf8')}\n[... ${skipped} bytes left out here; all of it is in the output file ...]\n${tail.toString('utf8')}`;
+}
+
+function outputPath(command) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const slug = command.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'output';
+  return path.join(OUTPUT_DIR, `${stamp}-${slug}.log`);
+}
+
+async function pruneOutputs() {
+  const names = (await readdir(OUTPUT_DIR)).filter((name) => name.endsWith('.log')).sort();
+  await Promise.all(names.slice(0, Math.max(0, names.length - OUTPUT_FILES_KEPT)).map((name) => unlink(path.join(OUTPUT_DIR, name)).catch(() => {})));
+}
+
 // Run one shell command and report what happened, telling apart: it
 // finished; it hit the time limit (we stopped it); something else killed the
 // shell (often `pkill -f` matching this very command); it finished but left
-// a background process attached to its output; its output passed 1 MB.
+// a background process attached to its output; its output passed 50 MB.
 function runShell(command, limit, env) {
   return new Promise((resolve, reject) => {
     let child;
@@ -269,9 +322,15 @@ function runShell(command, limit, env) {
       reject(error);
       return;
     }
-    const out = [];
-    const err = [];
+    // Everything, in the order printed, until it is long enough to go to a file.
+    const all = [];
+    const out = capture();
+    const err = capture();
     let size = 0;
+    let lines = 0;
+    let file = null;
+    let filePath = null;
+    let fileError = null;
     let overflow = false;
     let timedOut = false;
     let exit = null;
@@ -284,15 +343,33 @@ function runShell(command, limit, env) {
         try { child.kill(signal); } catch { /* gone */ }
       }
     };
-    const take = (into) => (chunk) => {
+    const startFile = () => {
+      filePath = outputPath(command);
+      try {
+        mkdirSync(OUTPUT_DIR, { recursive: true });
+        file = createWriteStream(filePath, { mode: 0o600 });
+        file.on('error', (error) => { fileError = error.message; });
+        for (const entry of all) file.write(entry.chunk);
+        pruneOutputs().catch(() => {});
+      } catch (error) {
+        fileError = error.message;
+      }
+    };
+    const take = (stream) => (chunk) => {
       if (overflow) return;
       size += chunk.length;
-      if (size > OUTPUT_MAX_BYTES) {
+      for (let at = chunk.indexOf(10); at !== -1; at = chunk.indexOf(10, at + 1)) lines += 1;
+      keep(stream, chunk);
+      if (filePath) {
+        if (file && !fileError) file.write(chunk);
+      } else {
+        all.push({ stream, chunk });
+        if (size > OUTPUT_INLINE_BYTES) startFile();
+      }
+      if (size > OUTPUT_FILE_MAX_BYTES) {
         overflow = true;
         killGroup('SIGTERM');
-        return;
       }
-      into.push(chunk);
     };
     child.stdout.on('data', take(out));
     child.stderr.on('data', take(err));
@@ -302,18 +379,45 @@ function runShell(command, limit, env) {
       setTimeout(() => killGroup('SIGKILL'), 2000).unref();
     }, limit);
 
+    // The reply: all of the output when short; otherwise the start and end
+    // of each stream and where the whole of it was saved.
+    const deliver = (result) => {
+      if (!filePath) {
+        resolve(result);
+        return;
+      }
+      const kb = Math.round(size / 1024);
+      const saved = fileError
+        ? { output_bytes: size, output_lines: lines, output_note: `The output was ${kb} KB (${lines} lines), so only the start and end of each stream are shown; saving all of it failed (${fileError}). Send the output to a file yourself and read the part you need.` }
+        : {
+            output_file: filePath,
+            output_bytes: size,
+            output_lines: lines,
+            output_note: `The output was ${kb} KB (${lines} lines), so only the start and end of each stream are shown. All of it, stdout and stderr in the order printed, is saved in ${filePath}. Search it (grep -n PATTERN ${filePath}), read a part (sed -n '100,200p' ${filePath}) or its end (tail -n 100 ${filePath}) instead of running the command again.`,
+          };
+      const done = () => resolve({ ...result, ...saved });
+      if (file && !file.destroyed) {
+        // 'close' follows the last write, or a failed one.
+        file.once('close', done);
+        file.end();
+      } else {
+        done();
+      }
+    };
+
     const finish = (how) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (grace) clearTimeout(grace);
-      const stdout = Buffer.concat(out).toString('utf8');
-      let stderr = Buffer.concat(err).toString('utf8');
+      const text = (stream) => (filePath ? shortened(stream) : Buffer.concat(all.filter((entry) => entry.stream === stream).map((entry) => entry.chunk)).toString('utf8'));
+      const stdout = text(out);
+      let stderr = text(err);
       const code = exit ? exit.code : null;
       const signal = exit ? exit.signal : null;
       if (timedOut) {
         const seconds = Math.round(limit / 1000);
-        resolve({
+        deliver({
           exit_code: 124,
           stdout,
           stderr: `${stderr}\n[command timed out after ${seconds}s and was stopped, with everything it started; the output above is what it had produced. For a long job, run it with background: true and check its log.]`.trim(),
@@ -322,16 +426,16 @@ function runShell(command, limit, env) {
         return;
       }
       if (overflow) {
-        resolve({
+        deliver({
           exit_code: code ?? 1,
           stdout,
-          stderr: `${stderr}\n[the output passed 1 MB and the command was stopped; send long output to a file and read the part you need]`.trim(),
+          stderr: `${stderr}\n[the output passed ${OUTPUT_FILE_MAX_BYTES / 1024 / 1024} MB and the command was stopped; what it printed until then is in the output file. Send output this long to a file of your own, or filter it in the command.]`.trim(),
           output_truncated: true,
         });
         return;
       }
       if (signal) {
-        resolve({
+        deliver({
           exit_code: 128 + signalNumber(signal),
           stdout,
           stderr: `${stderr}\n[the shell was killed by ${signal} before it finished; this was not a timeout. Something in the command killed it: \`pkill -f\` and \`killall\` also match this command itself when their pattern appears in it. Kill by PID (pgrep, then kill), or use a pattern that does not occur in the command.]`.trim(),
@@ -342,7 +446,7 @@ function runShell(command, limit, env) {
       if (how === 'held') {
         stderr = `${stderr}\n[the command finished, but a process it started in the background is still attached to its output and keeps running. Send a background process's output to a file (cmd > file 2>&1 &), or use background: true.]`.trim();
       }
-      resolve({ exit_code: code ?? 0, stdout, stderr, ...(how === 'held' ? { background_attached: true } : {}) });
+      deliver({ exit_code: code ?? 0, stdout, stderr, ...(how === 'held' ? { background_attached: true } : {}) });
     };
 
     child.on('error', (error) => {

@@ -48,6 +48,8 @@ REWIND_TODO_LEAD = "The user rewound the conversation; messages after this point
 SCHEDULED_LEAD = "[Scheduled task '{name}', run automatically at {at}. Nobody is reading live: do the job and reply with a report.]"
 # A task handed over by the orchestrator bot: the reply goes back to it.
 DELEGATED_LEAD = "[Task from {name}, the orchestrator bot, on the user's behalf. Do it as you would for the user; your reply goes back to {name}, who reports to the user.]"
+# A delegated bot's reply that came after the orchestrator stopped waiting.
+HANDBACK_LEAD = "[Reply from {name} to the task you handed it (\"{task}\"); it finished after you stopped waiting. This is not the user writing. Tell the user what came of it, briefly; they may not be reading live.]"
 
 
 def is_compaction(message: Dict[str, Any]) -> bool:
@@ -278,6 +280,9 @@ def build_history_messages(history: List[Dict[str, Any]], *, replay_tools: bool)
             delegated = (message.get("raw_payload") or {}).get("delegated")
             if isinstance(delegated, dict):
                 text = f"{DELEGATED_LEAD.format(name=delegated.get('from_name') or 'the orchestrator')}\n\n{text}"
+            handback = (message.get("raw_payload") or {}).get("handback")
+            if isinstance(handback, dict):
+                text = f"{HANDBACK_LEAD.format(name=handback.get('from_name') or 'the bot', task=handback.get('task') or '')}\n\n{text}"
             demonstration = (message.get("raw_payload") or {}).get("demonstration")
             if isinstance(demonstration, dict) and demonstration.get("text"):
                 from app.services.demonstrations import LEAD as DEMONSTRATION_LEAD

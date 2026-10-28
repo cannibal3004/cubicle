@@ -20,6 +20,10 @@ RUN apt-get update \
         dnsutils iputils-ping netcat-openbsd iproute2 traceroute \
         imagemagick ffmpeg tesseract-ocr qpdf libimage-exiftool-perl \
     && ln -s /usr/bin/fdfind /usr/local/bin/fd \
+    # ping asks for the raw-socket capability, which a computer never has,
+    # so the kernel would refuse to start it. Without the request it uses an
+    # ICMP datagram socket, which Docker allows any user.
+    && setcap -r /usr/bin/ping \
     && rm -rf /var/lib/apt/lists/*
 # Document converters for attached files: markitdown (PDF, Word, Excel,
 # PowerPoint to Markdown) for the bot's own use, and pdftotext above.
