@@ -73,8 +73,13 @@ QUESTIONS: Dict[str, str] = {
 # used yet re-reads all of it. Measured with decider-4b on 2026-10-28: quick
 # asks ("thanks", "what time is it in Tokyo", "curl ifconfig.me") scored
 # 0.03-0.32, real work (debugging, planning, code, "do it" after a plan,
-# deleting snapshots) 0.56-0.85.
-FIRST = 0.3
+# deleting snapshots) 0.46-0.85, "why does that work? walk me through it"
+# 0.30. Going deep by mistake is cheap (the model thinks briefly on a
+# "thanks" whatever the level); going light on real work is not. Telling the
+# decider to judge only the newest message fixed "thanks" after a long reply
+# (it once scored 0.95) but dropped "go ahead with step 3" to 0.23, so the
+# questions stay as they are.
+FIRST = 0.25
 UP = 0.4
 DOWN = 0.1
 

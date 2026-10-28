@@ -45,7 +45,7 @@ class SettingTests(unittest.TestCase):
             self.assertEqual(thinking.offered_levels(), ["none", "low", "medium", "xhigh"])
 
     def test_auto_leans_deep_and_is_sticky(self):
-        # First pick: light only below 0.3.
+        # First pick: light only below 0.25.
         self.assertEqual(thinking.decide({"complex": 0.05, "stakes": 0.22}, "")[0], "low")
         self.assertEqual(thinking.decide({"complex": 0.32, "stakes": 0.0}, "")[0], "xhigh")
         # After a deep turn it takes a clear no to go light; after a light turn a clear yes to go deep.
