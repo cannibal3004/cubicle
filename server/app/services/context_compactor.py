@@ -198,8 +198,17 @@ async def compact_thread(
     bot = next((b for b in storage.get_bots() if b.get("id") == bot_id), {})
     memory = str(bot.get("memory") or "")
     todo = get_todo(thread_id, storage)
+    from app.services import projects
+
+    try:
+        scope = projects.scope_of(thread_id, storage)
+        work_notes = projects.notes_of(scope)
+        project_name = scope["project"]["name"] if scope["kind"] == "project" else None
+    except projects.ProjectError:
+        work_notes, project_name = "", None
     # The summary carries the notes as they are now, so this conversation is up to date with them.
     conversations.notes_seen(thread_id, storage)
+    projects.seen(thread_id, storage)
 
     message = {
         "id": f"msg-{uuid.uuid4().hex[:6]}",
@@ -218,6 +227,8 @@ async def compact_thread(
             "summary_usage": usage or None,
             "memory": memory,
             "todo": todo,
+            "work_notes": work_notes,
+            "project": project_name,
         },
     }
     storage.add_message(message)

@@ -379,6 +379,10 @@ async def delete_bot(bot_id: str):
     except Exception as exc:  # The deletion must not fail because a container misbehaves.
         logger.warning("Could not stop the computer for %s during deletion: %s", bot_id, exc)
     deleted_messages = sum(conversations.delete(c["id"]) for c in conversations.list_for_bot(bot_id))
+    from app.services import projects
+
+    for project in projects.list_for_bot(bot_id):
+        projects.delete(project["id"])
     current_storage().delete_bot_secrets(bot_id)
     current_storage().delete_bot_schedules(bot_id)
     bots.pop(index)

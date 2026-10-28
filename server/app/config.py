@@ -66,6 +66,8 @@ class Settings:
     # How many items a bot's to-do list may hold. The list travels with every
     # todo tool result and every compaction, so this bounds that cost.
     BOT_TODO_MAX_ITEMS: int = int(os.getenv("BOT_TODO_MAX_ITEMS", "50"))
+    # Work notes: where a project (or a conversation without one) stands. Kept short on purpose.
+    BOT_WORK_NOTES_MAX_CHARS: int = int(os.getenv("BOT_WORK_NOTES_MAX_CHARS", "8000"))
     # Scheduled tasks: the zone their times are written in (TZ is the usual
     # name; SCHEDULE_TIMEZONE overrides it for schedules only), how often due
     # schedules are checked, and bounds. SCHEDULER_ENABLED=0 turns the loop off.

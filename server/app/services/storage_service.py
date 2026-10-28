@@ -411,6 +411,75 @@ class StorageService:
             }
         return activity
 
+    # ---- projects (services/projects.py) ----------------------------------
+
+    def get_projects(self, bot_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        with self.database.connect() as connection:
+            if bot_id:
+                rows = connection.execute(
+                    "SELECT payload FROM projects WHERE owner_id = ? AND bot_id = ? ORDER BY rowid", (self.owner_id, bot_id)
+                ).fetchall()
+            else:
+                rows = connection.execute("SELECT payload FROM projects WHERE owner_id = ? ORDER BY rowid", (self.owner_id,)).fetchall()
+        return [payload for row in rows if isinstance((payload := self._decode_payload(row[0])), dict)]
+
+    def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT payload FROM projects WHERE owner_id = ? AND id = ?", (self.owner_id, str(project_id or ""))
+            ).fetchone()
+        payload = self._decode_payload(row[0]) if row else None
+        return payload if isinstance(payload, dict) else None
+
+    def save_project(self, record: Dict[str, Any]) -> None:
+        if not isinstance(record, dict) or not record.get("id") or not record.get("bot_id"):
+            raise ValueError("A project needs an id and a bot id.")
+        with self.database.connect() as connection:
+            connection.execute(
+                "INSERT INTO projects(id, owner_id, bot_id, payload) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET bot_id = excluded.bot_id, payload = excluded.payload WHERE projects.owner_id = excluded.owner_id",
+                (str(record["id"]), self.owner_id, str(record["bot_id"]), json.dumps(record)),
+            )
+
+    def delete_project(self, project_id: str) -> bool:
+        with self.database.connect() as connection:
+            connection.execute("DELETE FROM project_log WHERE owner_id = ? AND project_id = ?", (self.owner_id, str(project_id or "")))
+            cursor = connection.execute("DELETE FROM projects WHERE owner_id = ? AND id = ?", (self.owner_id, str(project_id or "")))
+        return (cursor.rowcount or 0) > 0
+
+    def add_log_entry(self, project_id: str, entry: Dict[str, Any]) -> int:
+        """Append an entry to a project's log; returns its row id."""
+        with self.database.connect() as connection:
+            cursor = connection.execute(
+                "INSERT INTO project_log(owner_id, project_id, created_at, payload) VALUES (?, ?, ?, ?)",
+                (self.owner_id, str(project_id), str(entry.get("created_at") or _now()), json.dumps(entry)),
+            )
+        return int(cursor.lastrowid)
+
+    def get_log(self, project_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """A project's log, oldest first (the newest `limit` entries when given)."""
+        with self.database.connect() as connection:
+            if limit:
+                rows = connection.execute(
+                    "SELECT id, payload FROM (SELECT id, payload FROM project_log WHERE owner_id = ? AND project_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id",
+                    (self.owner_id, str(project_id), int(limit)),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT id, payload FROM project_log WHERE owner_id = ? AND project_id = ? ORDER BY id", (self.owner_id, str(project_id))
+                ).fetchall()
+        entries = []
+        for row_id, raw in rows:
+            payload = self._decode_payload(raw)
+            if isinstance(payload, dict):
+                entries.append({**payload, "id": int(row_id)})
+        return entries
+
+    def count_log(self, project_id: str) -> int:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT COUNT(*) FROM project_log WHERE owner_id = ? AND project_id = ?", (self.owner_id, str(project_id))).fetchone()
+        return int(row[0] or 0)
+
     # ---- named secrets for bot computers --------------------------------
 
     def list_secrets(self, scope: str, bot_id: str = "") -> List[Dict[str, Any]]:

@@ -19,6 +19,7 @@ GROUP_LABELS = {
     "procedures": "Procedures (shown by you)",
     "share": "File sharing",
     "memory": "Notes",
+    "projects": "Projects and work notes",
     "todo": "To-do list",
     "schedule": "Schedules",
     "github": "GitHub (built-in)",

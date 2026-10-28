@@ -22,7 +22,25 @@ import {
   createConversation,
   updateConversation,
   deleteConversation,
+  sendMessage,
+  startTurn,
+  fetchProjects,
+  createProject,
+  updateProject,
+  deleteProject,
 } from '../lib/api';
+
+// What the bot is asked in the conversation that sorts its notes into two tiers.
+const SORT_NOTES_REQUEST = `Your notes now come in two tiers, and I'd like you to sort the ones you have.
+
+1. Your notes (memory) are for durable facts about your job that every conversation needs: the systems you look after and how to reach them, access, house rules, how things are done here, lessons learned.
+2. Work notes say where one piece of work stands: status, decisions, next steps. Each project has its own. What happened along the way goes in the project's log.
+
+Please:
+- Read your notes (memory_read) and your projects (projects_list).
+- For each piece of ongoing work in your notes, create a project (project_create) with a short name, and give it work notes that say where it stands now (work_notes_write with project set to it). Move dated history about it into its log (project_log with project set to it), as a few entries rather than one long one. If you keep project folders or trackers in your workspace, use them too.
+- Then rewrite your notes (memory_write) so they keep only the durable facts. Nothing should be lost: what is neither durable nor current goes in a project's log.
+- Finish with a short summary: the projects you made and what stayed in your notes.`;
 
 // Which conversation was open for each bot, remembered in this browser.
 const THREADS_KEY = 'cubicle.conversationByBot';
@@ -66,6 +84,17 @@ export default function Dashboard() {
       }
       return next;
     });
+  }, []);
+  // Each bot's projects (pieces of work with work notes and a log).
+  const [projectsByBot, setProjectsByBot] = useState({});
+  const loadProjects = useCallback((botId) => {
+    if (!botId) return Promise.resolve([]);
+    return fetchProjects(botId)
+      .then((list) => {
+        setProjectsByBot((prev) => ({ ...prev, [botId]: list }));
+        return list;
+      })
+      .catch(() => []);
   }, []);
   const loadConversations = useCallback((botId) => {
     if (!botId) return Promise.resolve([]);
@@ -159,6 +188,7 @@ export default function Dashboard() {
             .then((fresh) => setBots((prev) => prev.map((b) => (b.id === botId ? { ...b, ...fresh } : b))))
             .catch(() => {});
           loadConversations(botId);
+          loadProjects(botId);
           const conversation = (conversationsRef.current[botId] || []).find((c) => c.id === threadId);
           if (!conversation || !['generated', 'user', 'fixed'].includes(conversation.title_source)) {
             awaitingTitles.current[threadId] = { botId, until: Date.now() + 90000 };
@@ -231,8 +261,11 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    if (authState === 'ready' && activeBotId) loadConversations(activeBotId);
-  }, [authState, activeBotId, loadConversations]);
+    if (authState === 'ready' && activeBotId) {
+      loadConversations(activeBotId);
+      loadProjects(activeBotId);
+    }
+  }, [authState, activeBotId, loadConversations, loadProjects]);
 
   // The open conversation: the one remembered for the bot, else its latest
   // one the user started (scheduled runs and an orchestrator's tasks have
@@ -250,6 +283,8 @@ export default function Dashboard() {
       ? rememberedThread
       : latestThread;
   const activeConversation = activeConversations.find((c) => c.id === activeThreadId) || null;
+  const activeProjects = projectsByBot[activeBotId] || [];
+  const activeProject = activeConversation?.project_id ? activeProjects.find((p) => p.id === activeConversation.project_id) || null : null;
 
   const activeBotStreaming = Boolean(activeThreadId && streamingBots[activeThreadId]);
 
@@ -286,9 +321,9 @@ export default function Dashboard() {
     setActiveTab('chat');
   };
 
-  const handleNewConversation = async (botId = activeBotId) => {
+  const handleNewConversation = async (botId = activeBotId, projectId = null) => {
     if (!botId) return null;
-    const created = await createConversation(botId);
+    const created = await createConversation(botId, '', projectId);
     mergeConversation(botId, created);
     rememberThread(botId, created.id);
     setActiveBotId(botId);
@@ -324,6 +359,55 @@ export default function Dashboard() {
     if (archived && conversation.id === activeThreadId) {
       const next = (conversationsByBot[conversation.bot_id] || []).find((c) => !c.archived && c.id !== conversation.id);
       rememberThread(conversation.bot_id, next ? next.id : conversation.bot_id);
+    }
+  };
+
+  // A conversation of its own in which the bot sorts its notes into notes and projects.
+  const handleSortNotes = async (bot) => {
+    const created = await createConversation(bot.id, 'Sorting notes into projects');
+    mergeConversation(bot.id, created);
+    await sendMessage(created.id, bot.id, SORT_NOTES_REQUEST);
+    await startTurn(created.id, null);
+    rememberThread(bot.id, created.id);
+    setActiveBotId(bot.id);
+    setActiveTab('chat');
+    setBotEditor(null);
+  };
+
+  // ---- projects --------------------------------------------------------------------------
+
+  const mergeProject = (botId, saved) =>
+    setProjectsByBot((prev) => {
+      const list = prev[botId] || [];
+      return { ...prev, [botId]: list.some((p) => p.id === saved.id) ? list.map((p) => (p.id === saved.id ? saved : p)) : [...list, saved] };
+    });
+
+  const handleNewProject = async (botId, name) => {
+    const created = await createProject(botId, name);
+    mergeProject(botId, created);
+    return created;
+  };
+
+  const handleRenameProject = async (project, name) => mergeProject(project.bot_id, await updateProject(project.id, { name }));
+  const handleArchiveProject = async (project, archived) => mergeProject(project.bot_id, await updateProject(project.id, { archived }));
+
+  const handleDeleteProject = async (project) => {
+    await deleteProject(project.id);
+    await Promise.all([loadProjects(project.bot_id), loadConversations(project.bot_id)]);
+  };
+
+  const handleMoveConversation = async (conversation, projectId) => {
+    const saved = await updateConversation(conversation.id, { project_id: projectId || '' });
+    mergeConversation(conversation.bot_id, saved);
+    loadProjects(conversation.bot_id);
+  };
+
+  // The panel's work notes: the project's, or the conversation's own.
+  const handleSaveWorkNotes = async (text) => {
+    if (activeProject) {
+      mergeProject(activeProject.bot_id, await updateProject(activeProject.id, { notes: text }));
+    } else if (activeConversation) {
+      mergeConversation(activeConversation.bot_id, await updateConversation(activeConversation.id, { work_notes: text }));
     }
   };
 
@@ -412,6 +496,11 @@ export default function Dashboard() {
       delete next[bot.id];
       return next;
     });
+    setProjectsByBot((prev) => {
+      const next = { ...prev };
+      delete next[bot.id];
+      return next;
+    });
     setBotToDelete(null);
     setBotEditor(null);
   };
@@ -454,10 +543,16 @@ export default function Dashboard() {
         conversations={activeConversations}
         activeThreadId={activeThreadId}
         onSelectConversation={handleSelectConversation}
-        onNewConversation={(botId) => handleNewConversation(botId).catch((err) => console.error('Could not start a conversation:', err))}
+        onNewConversation={(botId, projectId) => handleNewConversation(botId, projectId).catch((err) => console.error('Could not start a conversation:', err))}
         onRenameConversation={(c, title) => handleRenameConversation(c, title).catch((err) => console.error('Rename failed:', err))}
         onArchiveConversation={(c, archived) => handleArchiveConversation(c, archived).catch((err) => console.error('Archive failed:', err))}
         onDeleteConversation={(c) => handleDeleteConversation(c).catch((err) => window.alert(err.message || 'Could not delete the conversation.'))}
+        onMoveConversation={(c, projectId) => handleMoveConversation(c, projectId).catch((err) => window.alert(err.message || 'Could not move the conversation.'))}
+        projects={activeProjects}
+        onNewProject={(botId, name) => handleNewProject(botId, name).catch((err) => window.alert(err.message || 'Could not create the project.'))}
+        onRenameProject={(p, name) => handleRenameProject(p, name).catch((err) => window.alert(err.message || 'Could not rename the project.'))}
+        onArchiveProject={(p, archived) => handleArchiveProject(p, archived).catch((err) => console.error('Archive failed:', err))}
+        onDeleteProject={(p) => handleDeleteProject(p).catch((err) => window.alert(err.message || 'Could not delete the project.'))}
         onOpenSettings={() => setActiveTab((tab) => (tab === 'settings' ? 'chat' : 'settings'))}
         onOpenNewBot={() => setBotEditor({ mode: 'create' })}
         onEditBot={(bot) => setBotEditor({ mode: 'edit', bot })}
@@ -502,8 +597,14 @@ export default function Dashboard() {
             bot={activeBot}
             threadId={activeThreadId}
             conversation={activeConversation}
+            project={activeProject}
+            onProjectsChanged={(botId) => {
+              loadProjects(botId);
+              loadConversations(botId);
+            }}
+            onSaveWorkNotes={handleSaveWorkNotes}
             onConversationPatched={handleConversationPatched}
-            onNewConversation={() => handleNewConversation(activeBotId)}
+            onNewConversation={() => handleNewConversation(activeBotId, activeConversation?.project_id || null)}
             models={models}
             catalogError={catalogError}
             onRefreshModels={refreshModels}
@@ -567,6 +668,7 @@ export default function Dashboard() {
           onSave={handleSaveBot}
           onArchive={handleArchiveBot}
           onDelete={handleDeleteBot}
+          onSortNotes={(bot) => handleSortNotes(bot).catch((err) => window.alert(err.message || 'Could not start the conversation.'))}
         />
       )}
 

@@ -123,6 +123,9 @@ def summary(record: Dict[str, Any], activity: Optional[Dict[str, Any]] = None) -
         "last_activity": activity.get("last_activity") or record.get("created_at"),
         "messages": activity.get("messages", 0),
         "todo": list(record.get("todo") or []),
+        "project_id": record.get("project_id"),
+        # Its own work notes, used while it is in no project.
+        "work_notes": str(record.get("work_notes") or ""),
     }
 
 
@@ -160,7 +163,7 @@ def latest_for_bot(bot_id: str, storage: Optional[StorageService] = None) -> Dic
     return get(chosen, storage) or {"id": bot_id, "bot_id": bot_id}
 
 
-def create(bot_id: str, title: str = "", *, purpose: Optional[str] = None, storage: Optional[StorageService] = None) -> Dict[str, Any]:
+def create(bot_id: str, title: str = "", *, purpose: Optional[str] = None, project_id: Optional[str] = None, storage: Optional[StorageService] = None) -> Dict[str, Any]:
     storage = storage or current_storage()
     bot = _bot(storage, bot_id)
     if bot is None:
@@ -172,8 +175,17 @@ def create(bot_id: str, title: str = "", *, purpose: Optional[str] = None, stora
         record["title_source"] = "fixed"
     elif record["title"]:
         record["title_source"] = "user"
+    project = storage.get_project(project_id) if project_id else None
+    if project_id and (project is None or project.get("bot_id") != bot_id):
+        raise ConversationError("That project does not exist.")
+    if project is not None:
+        record["project_id"] = project["id"]
     storage.save_conversation(record)
     _seed_notes(record, bot, storage)
+    if project is not None:
+        from app.services.projects import work_note_message
+
+        storage.add_message(work_note_message(record["id"], str(project.get("notes") or ""), bot_id=bot_id, by="start", project_name=project["name"]))
     return record
 
 

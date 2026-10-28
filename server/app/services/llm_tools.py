@@ -288,7 +288,7 @@ GITHUB_TOOLS: List[ToolSpec] = [
 MEMORY_TOOLS: List[ToolSpec] = [
     ToolSpec(
         name="memory_read",
-        description="Show your notes: the document you keep for this bot across conversations and compactions.",
+        description="Show your notes: the document of durable facts about your job, shared by all your conversations.",
         parameters=_obj({}),
         group="memory",
         needs_approval=False,
@@ -297,9 +297,11 @@ MEMORY_TOOLS: List[ToolSpec] = [
         name="memory_write",
         description=(
             f"Replace your notes with new text (at most {settings.BOT_MEMORY_MAX_CHARS} characters; the result echoes the stored notes). "
-            "Keep what you will need again later and would otherwise have to rediscover: the project goal, decisions and the reasons, "
-            "where things are, how to run and test things, the user's preferences. Organise them as a document with headings so that "
-            "later changes can be made with memory_edit; use memory_write only to start the notes or to reorganise them. Drop what is no longer true."
+            "Your notes are durable facts about your job that every conversation needs and you would otherwise have to rediscover: the "
+            "systems you look after and how to reach them, house rules, how things are done here, lessons learned. Not the state of any "
+            "piece of work (work notes hold that), not a history of what was done (the project log), and nothing about one person or one "
+            "task. Organise them as a document with headings so that later changes can be made with memory_edit; use memory_write only to "
+            "start the notes or to reorganise them. Drop what is no longer true."
         ),
         parameters=_obj({"text": {"type": "string", "description": "The complete new notes"}}, ["text"]),
         group="memory",
@@ -321,6 +323,94 @@ MEMORY_TOOLS: List[ToolSpec] = [
             ["old_text", "new_text"],
         ),
         group="memory",
+        needs_approval=False,
+    ),
+]
+
+
+_PROJECT_ARG = {"type": "string", "description": "A project by name, when it is not the one this conversation is in (optional)"}
+
+PROJECT_TOOLS: List[ToolSpec] = [
+    ToolSpec(
+        name="work_notes_read",
+        description="Show your work notes: where the current piece of work stands. They are this conversation's project's, or this conversation's own when it is in no project.",
+        parameters=_obj({"project": _PROJECT_ARG}),
+        group="projects",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="work_notes_write",
+        description=(
+            f"Replace your work notes (at most {settings.BOT_WORK_NOTES_MAX_CHARS} characters): where the work stands now, what is decided, "
+            "what is next and what is blocked, as someone picking the work up would need it first. Keep them current, not cumulative: what "
+            "happened along the way goes to project_log, durable facts about your job to your notes (memory_edit). Use work_notes_edit for "
+            "smaller changes."
+        ),
+        parameters=_obj({"text": {"type": "string", "description": "The complete new work notes"}, "project": _PROJECT_ARG}, ["text"]),
+        group="projects",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="work_notes_edit",
+        description=(
+            "Change one passage of your work notes: old_text, copied exactly and matching once, is replaced by new_text (empty removes it)."
+        ),
+        parameters=_obj(
+            {
+                "old_text": {"type": "string", "description": "The exact passage to replace, copied from the current work notes"},
+                "new_text": {"type": "string", "description": "What it becomes; empty to remove the passage"},
+                "project": _PROJECT_ARG,
+            },
+            ["old_text", "new_text"],
+        ),
+        group="projects",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="project_log",
+        description=(
+            "Add a dated entry to the project's log: what was done, found or decided, in a few lines. The log stays out of your context; "
+            "entries come back when a later message matches them, or with project_log_read. Use it instead of piling history into your notes."
+        ),
+        parameters=_obj({"entry": {"type": "string", "description": "What happened, in a few lines"}, "project": _PROJECT_ARG}, ["entry"]),
+        group="projects",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="project_log_read",
+        description="Read the project's log: the newest entries, or the ones that match a query.",
+        parameters=_obj(
+            {
+                "query": {"type": "string", "description": "What to look for (optional; without it, the newest entries)"},
+                "limit": {"type": "integer", "description": "How many of the newest entries (default 8)"},
+                "project": _PROJECT_ARG,
+            }
+        ),
+        group="projects",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="projects_list",
+        description="List your projects: each one's status line, size of its work notes and log, and which one this conversation is in.",
+        parameters=_obj({}),
+        group="projects",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="project_create",
+        description="Create a project: a named piece of work with its own work notes and log. This conversation does not move into it; project_join does that.",
+        parameters=_obj(
+            {"name": {"type": "string", "description": "A short name"}, "work_notes": {"type": "string", "description": "Its starting work notes (optional)"}},
+            ["name"],
+        ),
+        group="projects",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="project_join",
+        description="Put this conversation in a project, so its work notes and log are this conversation's; an empty name takes it out of its project.",
+        parameters=_obj({"name": {"type": "string", "description": "The project's name; empty to leave the current one"}}, ["name"]),
+        group="projects",
         needs_approval=False,
     ),
 ]
@@ -626,6 +716,7 @@ def available_tools(
         specs.extend(PROCEDURE_TOOLS)
     specs.extend(SHARE_TOOLS)
     specs.extend(MEMORY_TOOLS)
+    specs.extend(PROJECT_TOOLS)
     specs.extend(TODO_TOOLS)
     specs.extend(SCHEDULE_TOOLS)
     specs.extend(QUESTION_TOOLS)
@@ -769,11 +860,19 @@ def describe_tools(
         )
     if "memory" in groups:
         lines.append(
-            "- Your notes: a document that persists across conversations and compactions. memory_read shows it, memory_edit changes one "
-            "passage, memory_write replaces the whole document. Your own writes and edits stay visible in the conversation, the user's edits "
-            "appear as notes, and after a compaction the current notes come with the summary, so you do not need to read them at the start "
-            "of every turn. Update them when something durable changes (the goal, a decision, where things are, how to run things), not for "
-            "transient state, and change the passage concerned with memory_edit rather than rewriting everything."
+            "- Your notes: durable facts about your job, shared by all your conversations (the systems you look after, access, house "
+            "rules, how things are done, lessons learned). memory_read shows them, memory_edit changes one passage, memory_write replaces "
+            "the whole document. A new conversation starts with them, the user's edits appear as notes, and after a compaction the current "
+            "notes come with the summary, so you do not need to read them at the start of every turn. Keep out of them anything about one "
+            "piece of work, one person or one day: those belong in work notes or the project log."
+        )
+    if "projects" in groups:
+        lines.append(
+            "- Projects and work notes: a project is a named piece of work. Its work notes say where it stands (status, decisions, next "
+            "steps), kept current rather than added to; its log (project_log) records what happened, dated, and stays out of your "
+            "context until a message matches it. A conversation is in one project or none; without one, the work notes are the "
+            "conversation's own. projects_list shows the projects, project_join moves this conversation into one, project_create starts "
+            "one. When the work notes change in another conversation of the same project you are told, so read them before relying on them."
         )
     if "procedures" in groups:
         lines.append(
@@ -928,8 +1027,24 @@ def _computer_invocation(action: str, bot_id: str, arguments: Dict[str, Any], pr
     )
 
 
+# The project tools: action name, and each argument with (required, max length).
+PROJECT_CALLS: Dict[str, Any] = {
+    "work_notes_read": ("work_notes.read", {"project": (False, 200)}),
+    "work_notes_write": ("work_notes.write", {"text": (True, settings.BOT_WORK_NOTES_MAX_CHARS + 2000), "project": (False, 200)}),
+    "work_notes_edit": ("work_notes.edit", {"old_text": (True, settings.BOT_WORK_NOTES_MAX_CHARS), "new_text": (False, settings.BOT_WORK_NOTES_MAX_CHARS), "project": (False, 200)}),
+    "project_log": ("project_log.add", {"entry": (True, 6000), "project": (False, 200)}),
+    "project_log_read": ("project_log.read", {"query": (False, 1000), "limit": (False, 10), "project": (False, 200)}),
+    "projects_list": ("projects.list", {}),
+    "project_create": ("projects.create", {"name": (True, 200), "work_notes": (False, settings.BOT_WORK_NOTES_MAX_CHARS + 2000)}),
+    "project_join": ("projects.join", {"name": (False, 200)}),
+}
+
 # Actions that belong to the conversation a call comes from, not just the bot.
-THREAD_ACTIONS = {"todo.list", "todo.add", "todo.update", "memory.read", "memory.write", "memory.edit", "user.ask"}
+THREAD_ACTIONS = {
+    "todo.list", "todo.add", "todo.update", "memory.read", "memory.write", "memory.edit", "user.ask",
+    "projects.list", "projects.create", "projects.join", "work_notes.read", "work_notes.write", "work_notes.edit",
+    "project_log.add", "project_log.read",
+}
 
 
 def build_invocation(
@@ -1259,6 +1374,17 @@ def _build_invocation(
         return ActionInvocation(
             name="connector.status", arguments={"toolkits": slugs}, target={"toolkits": slugs}, preview=f"Check connections: {', '.join(slugs)}"
         )
+    if name in PROJECT_CALLS:
+        action, fields = PROJECT_CALLS[name]
+        payload: Dict[str, Any] = {"bot_id": bot_id}
+        for field, (required, max_len) in fields.items():
+            value = _string(arguments, field, required=required, default="", max_len=max_len) if field != "limit" else arguments.get("limit")
+            if value not in (None, ""):
+                payload[field] = value
+        if name == "project_join" and "name" not in payload:
+            payload["name"] = ""
+        what = payload.get("name") or payload.get("project") or ""
+        return ActionInvocation(name=action, arguments=payload, target={"bot_id": bot_id}, preview=f"{name.replace('_', ' ')}{f' ({what})' if what else ''}")
     if name == "memory_read":
         return ActionInvocation(
             name="memory.read", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the notes of {bot_id}"

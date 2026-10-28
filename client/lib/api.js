@@ -106,7 +106,8 @@ async function accountJson(path, options = {}) {
 const jsonBody = (body) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
 export const fetchAccount = () => accountJson('/auth/me');
-export const updateProfile = (displayName, email) => accountJson('/auth/profile', jsonBody({ display_name: displayName, email }));
+export const updateProfile = (displayName, email, about) =>
+  accountJson('/auth/profile', jsonBody({ display_name: displayName, email, ...(about !== undefined ? { about } : {}) }));
 export const changePassword = (currentPassword, newPassword) =>
   accountJson('/auth/password', jsonBody({ current_password: currentPassword, new_password: newPassword }));
 export const startTotp = () => accountJson('/auth/totp/start', { method: 'POST' });
@@ -300,12 +301,42 @@ export function fetchConversations(botId) {
   return conversationRequest(`/bots/${encodeURIComponent(botId)}/conversations`, {}, 'Could not load the conversations.');
 }
 
-export function createConversation(botId, title = '') {
+export function createConversation(botId, title = '', projectId = null) {
   return conversationRequest(
     `/bots/${encodeURIComponent(botId)}/conversations`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) },
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, ...(projectId ? { project_id: projectId } : {}) }) },
     'Could not start a conversation.'
   );
+}
+
+// ---- a bot's projects ---------------------------------------------------------------------
+
+export function fetchProjects(botId) {
+  return conversationRequest(`/bots/${encodeURIComponent(botId)}/projects`, {}, 'Could not load the projects.');
+}
+
+export function createProject(botId, name, notes = '') {
+  return conversationRequest(
+    `/bots/${encodeURIComponent(botId)}/projects`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, notes }) },
+    'Could not create the project.'
+  );
+}
+
+export function updateProject(projectId, changes) {
+  return conversationRequest(
+    `/projects/${encodeURIComponent(projectId)}`,
+    { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) },
+    'Could not update the project.'
+  );
+}
+
+export function deleteProject(projectId) {
+  return conversationRequest(`/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' }, 'Could not delete the project.');
+}
+
+export function fetchProjectLog(projectId, limit = 100) {
+  return conversationRequest(`/projects/${encodeURIComponent(projectId)}/log?limit=${limit}`, {}, 'Could not load the log.');
 }
 
 export function updateConversation(conversationId, changes) {

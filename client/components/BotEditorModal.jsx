@@ -107,6 +107,7 @@ export default function BotEditorModal({
   onSave,
   onArchive,
   onDelete,
+  onSortNotes,
 }) {
   const isEdit = Boolean(bot);
   const [name, setName] = useState('');
@@ -455,7 +456,20 @@ export default function BotEditorModal({
                 maxLength={bot.memory_limit || 16000}
                 className={`${inputClass} font-mono text-xs leading-relaxed resize-y min-h-[100px]`}
               />
-              <p className="text-[11px] text-zinc-500 mt-1">The bot keeps these across conversations and compactions. Your edits are shown to it in the chat.</p>
+              <p className="text-[11px] text-zinc-500 mt-1">
+                Durable facts about the bot's job, shared by all its conversations. Where a piece of work stands goes in that project's work notes,
+                and its history in the project's log. Your edits are shown to the bot in the chat.
+              </p>
+              {onSortNotes && memory.trim() && (
+                <button
+                  type="button"
+                  onClick={() => onSortNotes(bot)}
+                  className="mt-1.5 text-[11px] text-amber-300 hover:text-white"
+                  title="Starts a conversation in which the bot moves project status into projects and history into their logs"
+                >
+                  Have the bot sort these into notes and projects…
+                </button>
+              )}
             </div>
           )}
 

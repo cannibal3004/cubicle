@@ -30,6 +30,7 @@ PASSWORD_MIN_LENGTH = 12
 PASSWORD_MAX_LENGTH = 200
 USERNAME_MIN_LENGTH = 2
 USERNAME_MAX_LENGTH = 40
+ABOUT_MAX_CHARS = 2000
 TOKEN_PREFIX = "cbt_"
 RECOVERY_CODE_COUNT = 8
 # Lockout: this many failed passwords for one username within the window
@@ -102,11 +103,11 @@ class AccountStore:
     def _row_to_user(row: Any) -> Dict[str, Any]:
         keys = ("id", "username", "role", "created_at", "password_hash", "totp_secret", "totp_enabled",
                 "totp_pending", "recovery_codes", "totp_last_step", "disabled", "updated_at", "last_login_at",
-                "display_name", "email")
+                "display_name", "email", "about")
         return dict(zip(keys, row))
 
     _USER_COLUMNS = ("id, username, role, created_at, password_hash, totp_secret, totp_enabled, totp_pending, "
-                     "recovery_codes, totp_last_step, disabled, updated_at, last_login_at, display_name, email")
+                     "recovery_codes, totp_last_step, disabled, updated_at, last_login_at, display_name, email, about")
 
     def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
         with self.database.connect() as connection:
@@ -137,6 +138,7 @@ class AccountStore:
             "last_login_at": user.get("last_login_at"),
             "display_name": user.get("display_name") or "",
             "email": user.get("email") or "",
+            "about": user.get("about") or "",
         }
 
     def setup_required(self) -> bool:
@@ -177,9 +179,11 @@ class AccountStore:
             )
         return self.get_user(user_id)
 
-    def update_profile(self, user_id: str, display_name: Optional[str] = None, email: Optional[str] = None) -> Dict[str, Any]:
-        """The name the person wants to be called and the address to reach them at."""
+    def update_profile(self, user_id: str, display_name: Optional[str] = None, email: Optional[str] = None, about: Optional[str] = None) -> Dict[str, Any]:
+        """The name the person wants to be called, the address to reach them at, and what every bot should know about them."""
         changes = {}
+        if about is not None:
+            changes["about"] = str(about).replace("\r\n", "\n").strip()[:ABOUT_MAX_CHARS]
         if display_name is not None:
             name = " ".join(str(display_name).split())[:80]
             changes["display_name"] = name

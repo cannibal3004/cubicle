@@ -40,12 +40,13 @@ REWIND_BY = "rewind"
 MAX_STACK = 20
 NOTES_TOOLS = {"memory_write", "memory_edit"}
 TODO_TOOLS = {"todo_add", "todo_update"}
+WORK_NOTES_TOOLS = {"work_notes_write", "work_notes_edit", "project_join"}
 # Built-in tools that only look; anything else that completed may have changed something.
 READ_ONLY_TOOLS = {
     "shared_folder_list", "shared_folder_read", "computer_start", "computer_screenshot", "computer_files_list",
     "computer_read_file", "list_files", "read_file", "github_list_issues", "memory_read", "procedure_read", "todo_list", "schedule_list",
     "ask_user", "bots_list", "bots_status", "bots_reply", "connector_status", "mcp_list_servers", "mcp_test_server",
-    "computer_request_takeover", "composio_search_tools",
+    "computer_request_takeover", "composio_search_tools", "work_notes_read", "project_log_read", "projects_list",
 }
 # Words in an app tool's name that mark it as a read (gmail_fetch_emails, notion_search, ...).
 _READ_WORDS = {"list", "get", "fetch", "read", "search", "find", "query", "describe", "status", "lookup", "retrieve", "view", "show", "check"}
@@ -119,7 +120,7 @@ def _arguments(record: Dict[str, Any]) -> Dict[str, Any]:
 def _is_read(name: str) -> bool:
     if name in READ_ONLY_TOOLS:
         return True
-    if name.startswith(("computer_", "shared_folder_", "memory_", "todo_", "schedule_", "bots_", "mcp_", "procedure_", "share_", "github_", "connector_")):
+    if name.startswith(("computer_", "shared_folder_", "memory_", "todo_", "schedule_", "bots_", "mcp_", "procedure_", "share_", "github_", "connector_", "work_notes_", "project")):
         return False  # a built-in that is not in the read list changes something
     words = set(_WORD.findall(name.lower()))
     return bool(words & _READ_WORDS)
@@ -143,11 +144,13 @@ def _summary(name: str, args: Dict[str, Any]) -> str:
 def describe_span(span: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Counts, the actions that stay done, and whether notes or the to-do list changed."""
     actions: List[Dict[str, str]] = []
-    notes_changed = todo_changed = False
+    notes_changed = todo_changed = work_notes_changed = False
     for message in span:
         item_type = message.get("item_type")
         if message.get("sender") == "system" and item_type == "memory":
             notes_changed = True
+        if message.get("sender") == "system" and item_type == "work_notes":
+            work_notes_changed = True
         if message.get("sender") == "system" and item_type == "todo":
             todo_changed = True
         if message.get("sender") != "bot":
@@ -162,11 +165,15 @@ def describe_span(span: List[Dict[str, Any]]) -> Dict[str, Any]:
             if name in TODO_TOOLS:
                 todo_changed = True
                 continue
+            if name in WORK_NOTES_TOOLS:
+                work_notes_changed = True
+                continue
             if not name or _is_read(name):
                 continue
             actions.append({"tool": name, "summary": _summary(name, _arguments(record))})
     visible = [m for m in span if m.get("sender") in ("user", "bot")]
-    return {"messages": len(visible), "rows": len(span), "actions": actions, "notes_changed": notes_changed, "todo_changed": todo_changed}
+    return {"messages": len(visible), "rows": len(span), "actions": actions, "notes_changed": notes_changed, "todo_changed": todo_changed,
+            "work_notes_changed": work_notes_changed}
 
 
 def preview(thread_id: str, message_id: Optional[str] = None, storage: Optional[StorageService] = None) -> Dict[str, Any]:
@@ -201,6 +208,17 @@ def _resync_rows(thread_id: str, info: Dict[str, Any], storage: StorageService) 
         row = todo_note_message(thread_id, get_todo(thread_id, storage), message_id=f"msg-{uuid.uuid4().hex[:6]}", bot_id=bot_id)
         row["raw_payload"]["by"] = REWIND_BY
         rows.append(row)
+    if info.get("work_notes_changed"):
+        from app.services import projects
+
+        try:
+            scope = projects.scope_of(thread_id, storage)
+            rows.append(projects.work_note_message(
+                thread_id, projects.notes_of(scope), bot_id=bot_id, by=REWIND_BY,
+                project_name=scope["project"]["name"] if scope["kind"] == "project" else None,
+            ))
+        except projects.ProjectError:
+            pass
     return rows
 
 
@@ -237,7 +255,7 @@ def rewind(thread_id: str, message_id: Optional[str] = None, storage: Optional[S
         "message": target,
         "removed": info["messages"],
         "actions": info["actions"],
-        "resynced": {"notes": info["notes_changed"], "todo": info["todo_changed"]},
+        "resynced": {"notes": info["notes_changed"], "todo": info["todo_changed"], "work_notes": info.get("work_notes_changed", False)},
         "redo": redo_state(thread_id, storage),
     }
 
