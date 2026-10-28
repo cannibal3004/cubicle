@@ -325,7 +325,7 @@ async def log_context(project_id: str, query: str, storage: Optional[StorageServ
         config = retrieval.current_config()
         if not config.enabled:
             return ""
-        hits = await retrieval.retrieve(query, kind=LOG_KIND, ref_prefix=f"{project_id}:", config=config, storage=storage)
+        hits = await retrieval.retrieve(query, kind=LOG_KIND, ref_prefix=f"{project_id}:", config=config, storage=storage, relevant_only=True)
     except Exception as exc:  # never let it fail a turn
         logger.warning("Project log retrieval failed for %s: %s", project_id, exc)
         return ""

@@ -322,8 +322,31 @@ async def index_text(kind: str, ref: str, text: str, *, meta: Optional[Dict[str,
     return index_for(storage).add(kind, ref, chunks, vectors, model=config.embedding_model, meta=meta)
 
 
-async def retrieve(query: str, *, kind: Optional[str] = None, ref_prefix: Optional[str] = None, limit: Optional[int] = None, config: Optional[RetrievalConfig] = None, storage=None, embed: Optional[Callable] = None, use_reranker: bool = True) -> List[Hit]:
-    """The chunks most relevant to `query`: embedding search, then the reranker when there is one."""
+async def relevant(query: str, hits: List[Hit], limit: int, config: Optional[RetrievalConfig] = None) -> List[Hit]:
+    """The hits that really match `query`, best first, at most `limit`.
+
+    Search always returns its nearest chunks, however far they are; context
+    added to a message unasked must earn its place. The reranker judges when
+    there is one, else the embedding similarity, each against its own floor.
+    """
+    if not hits:
+        return []
+    ranked = await rerank(query, [hit.text for hit in hits], limit, config)
+    if ranked:
+        picked = []
+        for position, score in sorted(ranked, key=lambda item: -item[1])[:limit]:
+            if 0 <= position < len(hits) and score >= settings.RETRIEVAL_MIN_RERANK_SCORE:
+                hit = hits[position]
+                hit.score = score
+                picked.append(hit)
+        return picked
+    return [hit for hit in hits if hit.score >= settings.RETRIEVAL_MIN_SCORE][:limit]
+
+
+async def retrieve(query: str, *, kind: Optional[str] = None, ref_prefix: Optional[str] = None, limit: Optional[int] = None, config: Optional[RetrievalConfig] = None, storage=None, embed: Optional[Callable] = None, use_reranker: bool = True, relevant_only: bool = False) -> List[Hit]:
+    """The chunks most relevant to `query`: embedding search, then the reranker when there is one.
+
+    With `relevant_only`, only the ones that clear the relevance floor (see `relevant`), possibly none."""
     config = config or current_config()
     query = (query or "").strip()
     if not config.enabled or not query:
@@ -340,6 +363,8 @@ async def retrieve(query: str, *, kind: Optional[str] = None, ref_prefix: Option
     candidates = index.search(query_vector, kind=kind, ref_prefix=ref_prefix, limit=min(max(limit * 3, 12), RERANK_MAX_DOCUMENTS))
     if not candidates:
         return []
+    if relevant_only:
+        return await relevant(query, candidates, limit, config)
     if use_reranker and len(candidates) > limit:
         ranked = await rerank(query, [hit.text for hit in candidates], limit, config)
         if ranked:
