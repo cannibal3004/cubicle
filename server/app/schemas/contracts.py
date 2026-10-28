@@ -16,6 +16,8 @@ class Bot(BaseModel):
     pinned: bool = False
     archived: bool = False
     archived_at: Optional[str] = None
+    # Set on a bot someone shared with the viewer: {owner_id, owner_name, role}.
+    shared: Optional[Dict[str, Any]] = None
     # Which tools this bot may use: {"groups": {id: bool}, "toolkits":
     # {slug: bool}, "tools": {name: bool}}; anything absent is enabled,
     # except a connected app that is off by default (disabled_toolkits),

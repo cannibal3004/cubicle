@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
-from app.services.identity import LOCAL_USER_ID, get_current_owner, owner_context
+from app.services.identity import LOCAL_USER_ID, acting_for_owner, get_current_owner, owner_context
 from app.services.storage_service import StorageService, current_storage, storage_service
 
 logger = logging.getLogger(__name__)
@@ -607,7 +607,8 @@ class McpManager:
 
     def records(self, bot_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """System servers, the current account's own, and (given a bot) that bot's."""
-        found = self.store.list() + self.user_store.list()
+        # A teammate on a shared bot does not get the owner's own servers (their accounts).
+        found = self.store.list() + (self.user_store.list() if acting_for_owner() else [])
         if bot_id:
             found += self.bot_store(bot_id).list()
         return found

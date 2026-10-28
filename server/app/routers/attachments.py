@@ -3,7 +3,7 @@
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.config import settings
-from app.services import attachments
+from app.services import attachments, sharing
 
 router = APIRouter(prefix="/api/v1/attachments", tags=["attachments"])
 
@@ -24,6 +24,8 @@ async def upload_attachment(file: UploadFile = File(...), bot_id: str = Form("")
             raise HTTPException(status_code=413, detail=f"The file is larger than the {limit // (1024 * 1024)} MB attachment limit.")
         chunks.append(chunk)
     try:
+        if bot_id.strip():
+            sharing.enter_bot(bot_id.strip())  # a bot shared with them keeps the file with its owner's
         record = attachments.save_upload(bot_id.strip() or None, file.filename or "", b"".join(chunks))
     except attachments.AttachmentError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

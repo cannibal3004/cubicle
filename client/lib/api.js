@@ -875,6 +875,37 @@ export async function deleteBotSchedule(botId, scheduleId) {
   return secretsCall(`/bots/${encodeURIComponent(botId)}/schedules/${encodeURIComponent(scheduleId)}`, { method: 'DELETE' });
 }
 
+// ---- sharing a bot -----------------------------------------------------------------------------
+
+export async function fetchBotMembers(botId) {
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/members`);
+}
+
+export async function addBotMember(botId, username, role = 'member') {
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/members`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, role }),
+  });
+}
+
+export async function changeBotMember(botId, userId, role) {
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/members/${encodeURIComponent(userId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  });
+}
+
+// userId 'me' leaves a bot shared with you.
+export async function removeBotMember(botId, userId) {
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' });
+}
+
+export async function fetchPeople() {
+  return secretsCall('/people');
+}
+
 export async function runBotSchedule(botId, scheduleId) {
   return secretsCall(`/bots/${encodeURIComponent(botId)}/schedules/${encodeURIComponent(scheduleId)}/run`, { method: 'POST' });
 }

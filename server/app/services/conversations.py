@@ -21,6 +21,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from app.services.identity import acting_for_owner, get_current_actor
 from app.services.storage_service import StorageService, current_storage
 
 logger = logging.getLogger(__name__)
@@ -129,8 +130,9 @@ def summary(record: Dict[str, Any], activity: Optional[Dict[str, Any]] = None) -
     }
 
 
-def list_for_bot(bot_id: str, storage: Optional[StorageService] = None) -> List[Dict[str, Any]]:
-    """The bot's conversations, most recently active first."""
+def list_for_bot(bot_id: str, storage: Optional[StorageService] = None, *, everyone: bool = False) -> List[Dict[str, Any]]:
+    """The acting person's conversations with the bot, most recently active first; `everyone`
+    lists all of them, teammates' too (for notices and deletion, never for showing)."""
     storage = storage or current_storage()
     bot = _bot(storage, bot_id)
     if bot is None:
@@ -138,6 +140,12 @@ def list_for_bot(bot_id: str, storage: Optional[StorageService] = None) -> List[
     records = storage.get_conversations(bot_id)
     if not any(r.get("id") == bot_id for r in records):
         records.insert(0, _default_record(bot))
+    # Only the person's own: the owner's (no user_id) for the owner, a teammate's for them.
+    actor = get_current_actor()
+    if not everyone:
+        records = [r for r in records if (r.get("user_id") or storage.owner_id) == actor]
+    if not records:
+        records = [create(bot_id, "", storage=storage)]  # a teammate's first conversation with a shared bot
     activity = storage.thread_activity()
     for index, record in enumerate(records):
         if not record.get("title") and (activity.get(record["id"]) or {}).get("messages"):
@@ -170,6 +178,9 @@ def create(bot_id: str, title: str = "", *, purpose: Optional[str] = None, proje
         raise ConversationError("Bot not found")
     now = _now()
     record: Dict[str, Any] = {"id": new_id(), "bot_id": bot_id, "title": clean_title(title), "created_at": now, "updated_at": now, "todo": []}
+    if not purpose and not acting_for_owner():
+        # A teammate's conversation with a shared bot is theirs alone.
+        record["user_id"] = get_current_actor()
     if purpose:
         record["purpose"] = purpose
         record["title_source"] = "fixed"

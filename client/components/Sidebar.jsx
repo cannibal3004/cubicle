@@ -10,6 +10,7 @@ import {
   FiMoreHorizontal,
   FiEdit2,
   FiArchive,
+  FiLogOut,
   FiRotateCcw,
   FiTrash2,
   FiChevronRight,
@@ -32,7 +33,7 @@ function BotAvatar({ bot, size = 'md' }) {
 
 // Per-bot actions, shown on hover. Rendered inline so a click on it does
 // not also select the bot.
-function BotMenu({ bot, onEdit, onArchive, onDelete, onOpenChange }) {
+function BotMenu({ bot, onEdit, onArchive, onDelete, onLeave, onOpenChange }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -67,12 +68,20 @@ function BotMenu({ bot, onEdit, onArchive, onDelete, onOpenChange }) {
           <button type="button" className={`${item} text-zinc-200 hover:bg-[#26262b]`} onClick={() => { setOpen(false); onEdit(bot); }}>
             <FiEdit2 /> Edit
           </button>
-          <button type="button" className={`${item} text-zinc-200 hover:bg-[#26262b]`} onClick={() => { setOpen(false); onArchive(bot, !bot.archived); }}>
-            {bot.archived ? <FiRotateCcw /> : <FiArchive />} {bot.archived ? 'Unarchive' : 'Archive'}
-          </button>
-          <button type="button" className={`${item} text-rose-400 hover:bg-rose-500/10`} onClick={() => { setOpen(false); onDelete(bot); }}>
-            <FiTrash2 /> Delete…
-          </button>
+          {bot.shared ? (
+            <button type="button" className={`${item} text-rose-400 hover:bg-rose-500/10`} onClick={() => { setOpen(false); onLeave?.(bot); }}>
+              <FiLogOut /> Leave…
+            </button>
+          ) : (
+            <>
+              <button type="button" className={`${item} text-zinc-200 hover:bg-[#26262b]`} onClick={() => { setOpen(false); onArchive(bot, !bot.archived); }}>
+                {bot.archived ? <FiRotateCcw /> : <FiArchive />} {bot.archived ? 'Unarchive' : 'Archive'}
+              </button>
+              <button type="button" className={`${item} text-rose-400 hover:bg-rose-500/10`} onClick={() => { setOpen(false); onDelete(bot); }}>
+                <FiTrash2 /> Delete…
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -404,6 +413,7 @@ export default function Sidebar({
   onEditBot,
   onArchiveBot,
   onDeleteBot,
+  onLeaveBot,
   turnStates,
   conversations,
   activeThreadId,
@@ -458,8 +468,10 @@ export default function Sidebar({
 
   const all = bots || [];
   const [openMenuFor, setOpenMenuFor] = useState(null);
-  const active = all.filter((bot) => !bot.archived && matches(bot));
-  const archived = all.filter((bot) => bot.archived && matches(bot));
+  const active = all.filter((bot) => !bot.archived && !bot.shared && matches(bot));
+  const archived = all.filter((bot) => bot.archived && !bot.shared && matches(bot));
+  // Bots teammates shared with this person, under a heading of their own.
+  const sharedWithMe = all.filter((bot) => bot.shared && matches(bot));
   const archivedOpen = showArchived || (term && archived.length > 0);
 
   const renderBot = (bot) => {
@@ -508,12 +520,14 @@ export default function Sidebar({
                 onEdit={onEditBot}
                 onArchive={onArchiveBot}
                 onDelete={onDeleteBot}
+                onLeave={onLeaveBot}
                 onOpenChange={(isOpen) => setOpenMenuFor((current) => (isOpen ? bot.id : current === bot.id ? null : current))}
               />
             </div>
           </div>
 
           <p className={`text-[11px] truncate mt-0.5 text-zinc-400 group-hover:text-zinc-300 ${bot.archived ? 'opacity-70' : ''}`}>
+            {bot.shared ? `${bot.shared.owner_name}'s · ` : ''}
             {bot.role || bot.description || 'General Intelligence'}
           </p>
         </div>
@@ -578,6 +592,15 @@ export default function Sidebar({
       <div className="flex-1 overflow-y-auto px-2 space-y-1.5">
         {active.map(renderBot)}
 
+        {sharedWithMe.length > 0 && (
+          <div className="pt-2">
+            <div className="px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-500" title="Teammates' bots you can use; your conversations with them are your own">
+              Shared with me
+            </div>
+            <div className="space-y-1.5 mt-1">{sharedWithMe.map(renderBot)}</div>
+          </div>
+        )}
+
         {all.length === 0 && (
           <div className="px-3 py-8 text-center">
             <p className="text-xs text-zinc-400">No bots yet.</p>
@@ -590,7 +613,7 @@ export default function Sidebar({
             </button>
           </div>
         )}
-        {all.length > 0 && active.length === 0 && archived.length === 0 && !(found && found.results.length) && (
+        {all.length > 0 && active.length === 0 && archived.length === 0 && sharedWithMe.length === 0 && !(found && found.results.length) && (
           <p className="px-3 py-6 text-center text-xs text-zinc-500">{searching ? 'Searching…' : `Nothing matches “${searchTerm}”.`}</p>
         )}
 

@@ -219,6 +219,20 @@ SCHEMA_MIGRATIONS = {
         CREATE INDEX IF NOT EXISTS project_log_owner_project ON project_log(owner_id, project_id);
         ALTER TABLE users ADD COLUMN about TEXT;
     """,
+    # Bots shared with teammates (services/sharing.py): who besides the owner
+    # may use a bot, as a member or a bot admin.
+    13: """
+        CREATE TABLE IF NOT EXISTS bot_members (
+            owner_id TEXT NOT NULL,
+            bot_id TEXT NOT NULL,
+            member_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            added_by TEXT NOT NULL,
+            added_at TEXT NOT NULL,
+            PRIMARY KEY (owner_id, bot_id, member_id)
+        );
+        CREATE INDEX IF NOT EXISTS bot_members_member ON bot_members(member_id);
+    """,
 }
 
 OWNER_TABLES = (

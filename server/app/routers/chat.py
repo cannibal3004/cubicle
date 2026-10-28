@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Union
 from app.config import settings
 from app.schemas.contracts import TurnRequest, Message
 from app.services.command_rules import describe_for_card, script_allowed
-from app.services.identity import get_current_owner, owner_context
+from app.services.identity import acting_for_owner, get_current_actor, get_current_owner, owner_context
 from app.services.storage_service import current_storage
 from app.services import llm_service
 from app.services.action_gateway import (
@@ -25,7 +25,7 @@ from app.services.approval_gate import approval_gate
 from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs
-from app.services import computer_turns, conversation_titles, conversations, projects  # projects: registers its actions
+from app.services import computer_turns, conversation_titles, conversations, projects, sharing  # projects: registers its actions
 from app.services.context_builder import build_history_messages, cap_message_results, latest_compaction, live_messages, safe_arguments, trim_result_text
 from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
 from app.services import bot_memory as _bot_memory  # noqa: F401 - registers memory.read/write
@@ -145,11 +145,14 @@ def _model_accepts_images(model: str, llm_config) -> bool:
 
 
 def _ensure_thread(thread_id: str) -> str:
-    """A conversation of one of the caller's bots; returns its bot's id. Anything else does not exist for them."""
-    bot_id = conversations.bot_id_of(thread_id)
-    if bot_id is None:
+    """A conversation the caller may open, of their own bot or one shared with them; returns its bot's id.
+
+    Anything else, someone else's conversation included, does not exist for them.
+    """
+    access = sharing.enter_thread(thread_id)
+    if access is None:
         raise HTTPException(status_code=404, detail="Bot not found")
-    return bot_id
+    return access.bot_id
 
 
 @router.get("/history/{thread_id}", response_model=List[Message])
@@ -283,7 +286,9 @@ async def send_message(req: TurnRequest):
         "image_url": req.image_url,
         "created_at": datetime.now().isoformat(),
         "model": req.model or llm_service.current_llm_config().default_model,
-        "item_type": "user_text"
+        "item_type": "user_text",
+        # Who wrote it: on a shared bot, the teammate rather than the owner.
+        "author_id": get_current_actor(),
     }
     if req.attachments:
         if len(req.attachments) > attachment_service.MAX_PER_MESSAGE:
@@ -778,7 +783,7 @@ def describe_user() -> str:
     try:
         from app.services.auth_service import auth_service
 
-        user = auth_service.accounts.get_user(get_current_owner())
+        user = auth_service.accounts.get_user(get_current_actor())
     except Exception:
         return ""
     if not user:
@@ -844,14 +849,17 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
     if tools_enabled:
         # Every app connected through Composio becomes a set of tools. If the
         # catalog cannot be fetched, fall back to the two built-in GitHub tools.
-        connector_specs = await connector_tool_specs(composio_service)
+        # A teammate on a shared bot gets none of the owner's connected apps
+        # (the owner's accounts); the bot's own MCP servers are part of the bot.
+        owners_apps = acting_for_owner()
+        connector_specs = await connector_tool_specs(composio_service) if owners_apps else []
         # MCP servers the user runs join the same family as connected apps.
         connector_specs = connector_specs + mcp_tool_specs(bot_id=bot_id)
         tool_specs = available_tools(
             computer=settings.COMPUTER_PROVIDER == "docker",
-            github=bool(composio_service.get_api_key()) and not connector_specs,
+            github=owners_apps and bool(composio_service.get_api_key()) and not connector_specs,
             connectors=connector_specs,
-            connector_management=bool(composio_service.get_api_key()),
+            connector_management=owners_apps and bool(composio_service.get_api_key()),
             orchestrator=bool(current_bot.get("orchestrator")),
         )
         # The bot's own tool choices, over the apps that are off by default.
@@ -1454,9 +1462,10 @@ def _bot_id_for(thread_id: str) -> str:
 
 @router.get("/turns")
 async def list_turns():
-    """Running turns and pending approvals across the caller's bots and their conversations (sidebar badges)."""
-    mine = {bot.get("id") for bot in current_storage().get_bots()}
-    return {"turns": [turn for turn in turn_manager.overview() if turn.get("bot_id") in mine]}
+    """Running turns and pending approvals in the caller's conversations, with their own bots and
+    bots shared with them (sidebar badges); a teammate's conversations are not the owner's to see."""
+    actor = get_current_actor()
+    return {"turns": [turn for turn in turn_manager.overview() if sharing.thread_access(actor, turn.get("thread_id")) is not None]}
 
 
 @router.get("/turns/{thread_id}")

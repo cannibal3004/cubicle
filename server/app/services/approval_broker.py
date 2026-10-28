@@ -5,7 +5,8 @@ from typing import Any, Dict, Optional
 import uuid
 
 from app.config import settings
-from app.services.identity import get_current_owner
+from app.services.identity import get_current_actor, get_current_owner
+from app.services import storage_service as storage_module
 from app.services.storage_service import current_storage
 
 
@@ -18,6 +19,8 @@ class PendingApproval:
     request_id: str
     future: asyncio.Future
     owner_id: str = ""
+    # Whose turn opened it: the owner, or a teammate on a shared bot.
+    actor_id: str = ""
 
 
 def card_timeout() -> Optional[float]:
@@ -37,6 +40,14 @@ def card_timeout() -> Optional[float]:
     return None if seconds <= 0 else seconds
 
 
+def may_answer(owner_id: str, actor_id: str) -> bool:
+    """Whether the person acting may answer a card opened in a turn of `actor_id` on a bot of `owner_id`."""
+    if not owner_id:
+        return True
+    me = get_current_actor()
+    return me == (actor_id or owner_id) or me == owner_id
+
+
 class ApprovalBroker:
     """In-process approval coordinator for the local single-user server."""
 
@@ -53,7 +64,7 @@ class ApprovalBroker:
         request_id = request_id or f"req-{uuid.uuid4().hex[:10]}"
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        self.pending[request_id] = PendingApproval(request_id, future, get_current_owner())
+        self.pending[request_id] = PendingApproval(request_id, future, get_current_owner(), get_current_actor())
 
         approval = {
             "request_id": request_id,
@@ -107,18 +118,21 @@ class ApprovalBroker:
         pending = self.pending.get(request_id)
         if not pending or pending.future.done():
             return False
-        # A card is answered by the account whose bot opened it (the gate
-        # decides inside the same request, so it matches too).
-        if pending.owner_id and pending.owner_id != get_current_owner():
+        # A card is answered by the account whose bot opened it, or by the
+        # teammate whose turn on a shared bot it is (the gate decides inside
+        # the same turn, so it matches too).
+        if not may_answer(pending.owner_id, pending.actor_id):
             return False
 
         pending.future.set_result(action)
-        current_storage().update_approval(request_id, {
+        storage = storage_module.storage_service.for_owner(pending.owner_id) if pending.owner_id else current_storage()
+        storage.update_approval(request_id, {
             "status": action,
             "resolved_at": _now(),
             "decided_by": decided_by,
+            "decided_by_user": get_current_actor(),
         })
-        current_storage().add_audit_event({
+        storage.add_audit_event({
             "event": f"approval.{action}",
             "request_id": request_id,
             "decided_by": decided_by,

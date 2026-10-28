@@ -24,6 +24,11 @@ ADMIN_ROLES = {"owner", "admin"}
 # context into tasks it creates, so a turn started by a request keeps its
 # owner for its whole life.
 _current_owner: ContextVar[Optional[str]] = ContextVar("cubicle_owner", default=None)
+# The person behind the request when it differs from the owner: a teammate
+# using a bot shared with them acts in the bot owner's data (the owner
+# above) but is still themselves (their conversations, their profile, their
+# answers to cards). None means the owner is the person.
+_current_actor: ContextVar[Optional[str]] = ContextVar("cubicle_actor", default=None)
 
 
 def get_current_owner() -> str:
@@ -48,6 +53,33 @@ def set_current_owner(owner_id: Optional[str]):
 
 def reset_current_owner(token) -> None:
     _current_owner.reset(token)
+
+
+def get_current_actor() -> str:
+    """The person acting: the signed-in user, or the owner for runs nobody started (schedules)."""
+    return _current_actor.get() or get_current_owner()
+
+
+def set_current_actor(user_id: Optional[str]):
+    return _current_actor.set(user_id)
+
+
+def reset_current_actor(token) -> None:
+    _current_actor.reset(token)
+
+
+@contextlib.contextmanager
+def actor_context(user_id: Optional[str]) -> Iterator[None]:
+    token = _current_actor.set(user_id)
+    try:
+        yield
+    finally:
+        _current_actor.reset(token)
+
+
+def acting_for_owner() -> bool:
+    """Whether the person acting is the owner of the data in use (not a teammate on a shared bot)."""
+    return get_current_actor() == get_current_owner()
 
 
 def is_admin(user: Optional[dict]) -> bool:

@@ -18,6 +18,7 @@ import {
   createBot,
   updateBot,
   deleteBot,
+  removeBotMember,
   fetchConversations,
   createConversation,
   updateConversation,
@@ -120,7 +121,10 @@ export default function Dashboard() {
         setBots((prev) => {
           const known = new Set(prev.map((b) => b.id));
           const added = (all || []).filter((b) => !known.has(b.id));
-          return added.length ? [...prev, ...added] : prev;
+          // A bot a teammate stopped sharing leaves the list.
+          const present = new Set((all || []).map((b) => b.id));
+          const kept = prev.filter((b) => !b.shared || present.has(b.id));
+          return added.length || kept.length !== prev.length ? [...kept, ...added] : prev;
         })
       )
       .catch(() => {});
@@ -136,6 +140,7 @@ export default function Dashboard() {
   // Bot editor: null, { mode: 'create' } or { mode: 'edit', bot }.
   const [botEditor, setBotEditor] = useState(null);
   const [botToDelete, setBotToDelete] = useState(null);
+  const [botToLeave, setBotToLeave] = useState(null);
   const [defaultModel, setDefaultModel] = useState('');
   const [userName, setUserName] = useState('You');
 
@@ -275,6 +280,8 @@ export default function Dashboard() {
   const latestThread = (() => {
     const open = activeConversations.filter((c) => !c.archived);
     const typed = open.find((c) => !c.purpose) || open[0];
+    // A shared bot's first conversation is its owner's: wait for the person's own.
+    if (!typed && bots.find((b) => b.id === activeBotId)?.shared) return '';
     return typed ? typed.id : activeBotId;
   })();
   const activeThreadId = !activeBotId
@@ -484,6 +491,16 @@ export default function Dashboard() {
 
   const handleDeleteBot = async (bot) => {
     await deleteBot(bot.id);
+    forgetBot(bot);
+  };
+
+  // Stop using a bot a teammate shared: it leaves the list; their bot is untouched.
+  const handleLeaveBot = async (bot) => {
+    await removeBotMember(bot.id, 'me');
+    forgetBot(bot);
+  };
+
+  const forgetBot = (bot) => {
     setBots((prev) => {
       const list = prev.filter((b) => b.id !== bot.id);
       selectNextVisible(list, bot.id);
@@ -502,6 +519,7 @@ export default function Dashboard() {
       return next;
     });
     setBotToDelete(null);
+    setBotToLeave(null);
     setBotEditor(null);
   };
 
@@ -558,6 +576,7 @@ export default function Dashboard() {
         onEditBot={(bot) => setBotEditor({ mode: 'edit', bot })}
         onArchiveBot={(bot, archived) => handleArchiveBot(bot, archived).catch((err) => console.error('Archive failed:', err))}
         onDeleteBot={(bot) => setBotToDelete(bot)}
+        onLeaveBot={(bot) => setBotToLeave(bot)}
       />
 
       {/* Main Workspace Display Area */}
@@ -668,6 +687,7 @@ export default function Dashboard() {
           onSave={handleSaveBot}
           onArchive={handleArchiveBot}
           onDelete={handleDeleteBot}
+          onLeave={(bot) => setBotToLeave(bot)}
           onSortNotes={(bot) => handleSortNotes(bot).catch((err) => window.alert(err.message || 'Could not start the conversation.'))}
         />
       )}
@@ -678,6 +698,16 @@ export default function Dashboard() {
           body="The bot, its whole conversation, and its computer are removed. This cannot be undone. Archiving keeps everything and just hides the bot."
           onCancel={() => setBotToDelete(null)}
           onConfirm={() => handleDeleteBot(botToDelete).catch((err) => console.error('Delete failed:', err))}
+        />
+      )}
+
+      {botToLeave && (
+        <ConfirmDialog
+          title={`Leave ${botToLeave.name}?`}
+          body={`It stops being shared with you; ${botToLeave.shared?.owner_name || 'its owner'} can share it again. Your conversations with it stay with the bot, out of sight.`}
+          confirmLabel="Leave"
+          onCancel={() => setBotToLeave(null)}
+          onConfirm={() => handleLeaveBot(botToLeave).catch((err) => window.alert(err.message || 'Could not leave the bot.'))}
         />
       )}
 

@@ -9,7 +9,7 @@ from typing import List, Optional
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
-from app.services import file_browser
+from app.services import file_browser, sharing
 from app.services.file_share import FileShareError, normalize_source, resolve_shared_file
 from app.services.storage_service import current_storage
 
@@ -21,6 +21,7 @@ def _own_bot(bot_id: str) -> Optional[str]:
     bot_id = (bot_id or "").strip()
     if not bot_id:
         return None
+    sharing.enter_bot(bot_id)  # a bot shared with them: its owner's files
     if not any(bot.get("id") == bot_id for bot in current_storage().get_bots()):
         raise HTTPException(status_code=404, detail="No such bot.")
     return bot_id

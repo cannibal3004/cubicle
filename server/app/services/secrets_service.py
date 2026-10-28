@@ -16,6 +16,7 @@ import re
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 from urllib.parse import quote
 
+from app.services.identity import acting_for_owner
 from app.services.storage_service import StorageService, current_storage
 
 NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
@@ -91,8 +92,17 @@ def delete_secret(scope: str, bot_id: str, name: Any, storage: Optional[StorageS
 
 
 def environment_for(bot_id: str, storage: Optional[StorageService] = None) -> Dict[str, str]:
-    """What a bot's computer gets as environment variables: app secrets, then its own."""
-    return {name: value for name, value in _storage(storage).secret_values(bot_id).items() if name not in RESERVED_NAMES}
+    """What a bot's computer gets as environment variables: app secrets, then its own.
+
+    For a teammate's command on a shared bot, only the bot's own: the owner's
+    account-wide secrets are theirs.
+    """
+    store = _storage(storage)
+    values = {name: value for name, value in store.secret_values(bot_id).items() if name not in RESERVED_NAMES}
+    if not acting_for_owner():
+        own = {entry["name"] for entry in store.list_secrets("bot", bot_id)}
+        values = {name: value for name, value in values.items() if name in own}
+    return values
 
 
 def names_for(bot_id: str, storage: Optional[StorageService] = None) -> List[str]:
