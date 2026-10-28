@@ -56,12 +56,17 @@ QUESTIONS: Dict[str, str] = {
         "as opposed to being easy to check and redo?"
     ),
 }
-# The highest answer decides. A first pick is light below FIRST; after a deep
-# turn it takes a clear no (below DOWN) to go light, after a light turn a
-# clear yes (UP or more) to go deep.
-FIRST = 0.15
+# The highest answer decides. A first pick is light below FIRST; after a light
+# turn it takes UP or more to go deep, after a deep turn a clear no (below
+# DOWN) to go light. Going light is made hard on purpose: on a trivial reply
+# a lower level saves little thinking, while a level the conversation has not
+# used yet re-reads all of it. Measured with decider-4b on 2026-10-28: quick
+# asks ("thanks", "what time is it in Tokyo", "curl ifconfig.me") scored
+# 0.03-0.32, real work (debugging, planning, code, "do it" after a plan,
+# deleting snapshots) 0.56-0.85.
+FIRST = 0.3
+UP = 0.4
 DOWN = 0.1
-UP = 0.3
 MESSAGE_CHARS = 2000
 CONTEXT_CHARS = 1000
 

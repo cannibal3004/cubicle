@@ -42,13 +42,13 @@ class SettingTests(unittest.TestCase):
         self.assertEqual(thinking.standing_level({"thinking": "auto"}, {}, ""), "high")
 
     def test_auto_leans_deep_and_is_sticky(self):
-        # First pick: light only below 0.15.
-        self.assertEqual(thinking.decide({"complex": 0.05, "stakes": 0.1}, "")[0], "low")
-        self.assertEqual(thinking.decide({"complex": 0.2, "stakes": 0.0}, "")[0], "high")
+        # First pick: light only below 0.3.
+        self.assertEqual(thinking.decide({"complex": 0.05, "stakes": 0.22}, "")[0], "low")
+        self.assertEqual(thinking.decide({"complex": 0.32, "stakes": 0.0}, "")[0], "high")
         # After a deep turn it takes a clear no to go light; after a light turn a clear yes to go deep.
         self.assertEqual(thinking.decide({"complex": 0.12, "stakes": 0.0}, "high")[0], "high")
         self.assertEqual(thinking.decide({"complex": 0.05, "stakes": 0.02}, "high")[0], "low")
-        self.assertEqual(thinking.decide({"complex": 0.25, "stakes": 0.0}, "low")[0], "low")
+        self.assertEqual(thinking.decide({"complex": 0.35, "stakes": 0.0}, "low")[0], "low")
         self.assertEqual(thinking.decide({"complex": 0.6, "stakes": 0.0}, "low")[0], "high")
 
     def test_the_decider_sees_the_message_and_the_exchange_before_it_never_tool_output(self):
