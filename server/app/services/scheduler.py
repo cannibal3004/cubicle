@@ -8,6 +8,10 @@ that run and the schedule moves on to the next time. Nothing is caught up
 after a restart: the next run is computed from the cadence, not from what
 was missed.
 
+A schedule with a check runs its script first, in the bot's computer; only a
+report (something printed, or a failure, that differs from the last one)
+starts the turn, with the report in the message.
+
 Each run is its own task so a slow turn never delays another bot's
 schedule, and every failure is recorded on the schedule rather than raised.
 """
@@ -115,8 +119,15 @@ class Scheduler:
     async def _run_owned(self, record: Dict[str, Any], now=None) -> None:
         schedule_id = record["id"]
         try:
+            report = None
+            note = ""
+            if record.get("check"):
+                outcome = await self._check(record, now)
+                if outcome is None:
+                    return
+                report, note = outcome["report"], outcome["note"]
             thread_id = schedule_service.run_thread(record)
-            message = schedule_service.scheduled_message(record, message_id=f"msg-{uuid.uuid4().hex[:6]}", now=now, thread_id=thread_id)
+            message = schedule_service.scheduled_message(record, message_id=f"msg-{uuid.uuid4().hex[:6]}", now=now, thread_id=thread_id, report=report)
             try:
                 turn = await self._run_turn(thread_id, message, record.get("owner_id"))
             except TurnBusyError:
@@ -128,7 +139,7 @@ class Scheduler:
                 return
             # The schedule moves on as soon as the run starts (a long turn
             # must not delay the next occurrence); the outcome lands after.
-            schedule_service.record_run(schedule_id, "running", "", now=now)
+            schedule_service.record_run(schedule_id, "running", note, now=now)
             logger.info("Schedule %s (%s) started turn %s for bot %s", schedule_id, record["name"], getattr(turn, "turn_id", "?"), record["bot_id"])
             task = getattr(turn, "task", None)
             if task is not None:
@@ -144,12 +155,31 @@ class Scheduler:
         finally:
             self._running_ids.discard(schedule_id)
 
+    @staticmethod
+    async def _check(record: Dict[str, Any], now=None) -> Optional[Dict[str, Any]]:
+        """Run the schedule's check; the outcome when it has a report for the bot, else None (recorded)."""
+        schedule_id = record["id"]
+        try:
+            result = await schedule_service.run_check(record)
+        except Exception as exc:
+            logger.warning("Schedule %s: the check could not run: %s", schedule_id, exc)
+            schedule_service.record_run(schedule_id, "check_failed", f"the check could not run: {exc}", now=now)
+            return None
+        outcome = schedule_service.check_outcome(result, record.get("last_report"))
+        schedule_service.note_check(schedule_id, outcome)
+        if outcome["status"] != "report":
+            schedule_service.record_run(schedule_id, outcome["status"], outcome["note"], now=now)
+            return None
+        return outcome
+
     def _finish(self, schedule_id: str, status: str, note: str) -> None:
         record = schedule_service._storage(None).get_schedule(schedule_id)
         if record is None:
             return  # Deleted while it ran.
         record["last_status"] = status
-        record["last_note"] = (note or "")[: schedule_service.MAX_NOTE_CHARS]
+        # A turn that went fine keeps the note it started with (a check's report).
+        if note or status != "completed":
+            record["last_note"] = (note or "")[: schedule_service.MAX_NOTE_CHARS]
         schedule_service._storage(None).save_schedule(record)
 
 

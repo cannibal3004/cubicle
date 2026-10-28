@@ -17,6 +17,8 @@ class ScheduleInput(BaseModel):
     name: str = Field(max_length=MAX_NAME_CHARS)
     prompt: str = Field(max_length=MAX_PROMPT_CHARS)
     cadence: Dict[str, Any]
+    # {script, timeout_seconds}: run first, and the bot only wakes on a report.
+    check: Optional[Dict[str, Any]] = None
 
 
 class ScheduleUpdate(BaseModel):
@@ -24,6 +26,8 @@ class ScheduleUpdate(BaseModel):
     prompt: Optional[str] = Field(default=None, max_length=MAX_PROMPT_CHARS)
     cadence: Optional[Dict[str, Any]] = None
     enabled: Optional[bool] = None
+    # Sent as null, removes the check; left out, keeps it.
+    check: Optional[Dict[str, Any]] = None
 
 
 def _ensure_bot(bot_id: str) -> None:
@@ -62,7 +66,7 @@ async def list_schedules(bot_id: str):
 @router.post("/{bot_id}/schedules")
 async def create_schedule(bot_id: str, body: ScheduleInput):
     _ensure_bot(bot_id)
-    return {"schedule": _guard(lambda: schedule_service.create_schedule(bot_id, body.name, body.prompt, body.cadence, created_by="user"))}
+    return {"schedule": _guard(lambda: schedule_service.create_schedule(bot_id, body.name, body.prompt, body.cadence, check=body.check, created_by="user"))}
 
 
 @router.put("/{bot_id}/schedules/{schedule_id}")
@@ -70,6 +74,8 @@ async def update_schedule(bot_id: str, schedule_id: str, body: ScheduleUpdate):
     _ensure_bot(bot_id)
     _owned(bot_id, schedule_id)
     changes = body.model_dump(exclude_none=True)
+    if "check" in body.model_fields_set:
+        changes["check"] = body.check
     return {"schedule": _guard(lambda: schedule_service.update_schedule(schedule_id, **changes))}
 
 

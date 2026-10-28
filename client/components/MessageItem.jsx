@@ -308,6 +308,7 @@ function MessageItem({ message, botId, onEdit }) {
               {message.raw_payload?.scheduled && (
                 <span className="block text-[10px] font-mono text-zinc-300/70 mb-0.5" title={message.raw_payload.scheduled.cadence || ''}>
                   scheduled · {message.raw_payload.scheduled.name}
+                  {message.raw_payload.scheduled.check ? ' · the check reported something' : ''}
                 </span>
               )}
               {message.raw_payload?.demonstration && <DemonstrationChip demonstration={message.raw_payload.demonstration} />}

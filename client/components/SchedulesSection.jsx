@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { FiClock, FiTrash2, FiPlay, FiPlus, FiPower } from 'react-icons/fi';
+import { FiClock, FiTrash2, FiPlay, FiPlus, FiPower, FiTerminal } from 'react-icons/fi';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -19,7 +19,57 @@ const STATUS_STYLES = {
   needed_approval: 'text-amber-300',
   failed: 'text-rose-300',
   cancelled: 'text-zinc-400',
+  quiet: 'text-emerald-300/70',
+  unchanged: 'text-zinc-400',
+  check_failed: 'text-rose-300',
 };
+
+// A schedule's check: the script, editable, and what it last reported.
+function CheckDetails({ item, busy, onSave, inputClass }) {
+  const [script, setScript] = useState(item.check?.script || '');
+  useEffect(() => setScript(item.check?.script || ''), [item.check?.script]);
+  const changed = script.trim() !== (item.check?.script || '');
+  return (
+    <div className="pl-6 mt-2 space-y-1.5">
+      <textarea
+        value={script}
+        onChange={(e) => setScript(e.target.value)}
+        maxLength={8000}
+        rows={Math.min(10, Math.max(3, script.split('\n').length))}
+        spellCheck={false}
+        className={`${inputClass} w-full resize-y font-mono text-[11px]`}
+      />
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          disabled={busy || !changed || !script.trim()}
+          onClick={() => onSave({ script: script.trim(), timeout_seconds: item.check?.timeout_seconds })}
+          className="px-2.5 py-1 rounded-lg text-[11px] bg-zinc-100 text-black hover:bg-white disabled:opacity-40 transition"
+        >
+          Save check
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onSave(null)}
+          className="px-2.5 py-1 rounded-lg text-[11px] text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 disabled:opacity-50 transition"
+          title="The schedule then wakes the bot at every run"
+        >
+          Remove check
+        </button>
+        <span className="text-[10px] text-zinc-500">runs for up to {item.check?.timeout_seconds || 60}s</span>
+      </div>
+      {item.last_report && (
+        <div>
+          <p className="text-[10px] text-zinc-500 mb-0.5">Last report the bot was given:</p>
+          <pre className="max-h-40 overflow-auto rounded-lg bg-black/30 border border-[#27272a] px-2 py-1.5 text-[10px] text-zinc-300 whitespace-pre-wrap break-words">
+            {item.last_report}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // A bot's scheduled tasks: list with enable, run now and remove, plus a form
 // to add one. A cadence is once at a time, every N minutes or hours, daily at
@@ -34,6 +84,9 @@ export default function SchedulesSection({ load, create, update, remove, runNow 
   const [every, setEvery] = useState('60');
   const [time, setTime] = useState('08:00');
   const [days, setDays] = useState([0, 1, 2, 3, 4]);
+  const [checkScript, setCheckScript] = useState('');
+  const [withCheck, setWithCheck] = useState(false);
+  const [openCheck, setOpenCheck] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -76,10 +129,13 @@ export default function SchedulesSection({ load, create, update, remove, runNow 
 
   const submit = async () => {
     if (!name.trim() || !prompt.trim()) return;
-    const ok = await run(() => create({ name: name.trim(), prompt: prompt.trim(), cadence: cadence() }), 'Could not add the schedule.');
+    const check = withCheck && checkScript.trim() ? { script: checkScript.trim() } : null;
+    const ok = await run(() => create({ name: name.trim(), prompt: prompt.trim(), cadence: cadence(), check }), 'Could not add the schedule.');
     if (ok) {
       setName('');
       setPrompt('');
+      setCheckScript('');
+      setWithCheck(false);
       setShowForm(false);
     }
   };
@@ -103,6 +159,18 @@ export default function SchedulesSection({ load, create, update, remove, runNow 
                   {item.cadence_text}
                   {item.created_by === 'bot' ? ' · set by the bot' : ''}
                 </span>
+                {item.check && (
+                  <button
+                    type="button"
+                    onClick={() => setOpenCheck((prev) => (prev === item.id ? null : item.id))}
+                    className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono border transition flex-shrink-0 ${
+                      openCheck === item.id ? 'border-cyan-400 text-cyan-200 bg-cyan-500/10' : 'border-[#2e2e34] text-zinc-400 hover:text-zinc-200'
+                    }`}
+                    title="Runs a script first and wakes the bot only when it reports something new"
+                  >
+                    <FiTerminal className="text-[9px]" /> check
+                  </button>
+                )}
                 <span className="ml-auto flex items-center gap-1 flex-shrink-0">
                   <button
                     type="button"
@@ -144,6 +212,14 @@ export default function SchedulesSection({ load, create, update, remove, runNow 
                   </span>
                 )}
               </div>
+              {item.check && openCheck === item.id && (
+                <CheckDetails
+                  item={item}
+                  busy={busy}
+                  inputClass={inputClass}
+                  onSave={(check) => run(() => update(item.id, { check }), 'Could not change the check.')}
+                />
+              )}
             </li>
           ))}
         </ul>
@@ -187,6 +263,7 @@ export default function SchedulesSection({ load, create, update, remove, runNow 
             {kind === 'once' && <input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} className={inputClass} />}
             {kind === 'every' && (
               <select value={every} onChange={(e) => setEvery(e.target.value)} className={inputClass}>
+                <option value="5">5 minutes</option>
                 <option value="15">15 minutes</option>
                 <option value="30">30 minutes</option>
                 <option value="60">hour</option>
@@ -212,11 +289,26 @@ export default function SchedulesSection({ load, create, update, remove, runNow 
               </div>
             )}
           </div>
+          <label className="flex items-center gap-2 text-[11px] text-zinc-300 select-none">
+            <input type="checkbox" checked={withCheck} onChange={(e) => setWithCheck(e.target.checked)} />
+            Only wake the bot when a check script reports something
+          </label>
+          {withCheck && (
+            <textarea
+              value={checkScript}
+              onChange={(e) => setCheckScript(e.target.value)}
+              placeholder={"A shell script run in the bot's computer first, without the model. Print nothing when all is well;\nprint what is wrong or new otherwise. e.g.\ncurl -fsS https://cloud.example.com/status.php >/dev/null || echo \"Nextcloud is not answering\""}
+              maxLength={8000}
+              rows={4}
+              spellCheck={false}
+              className={`${inputClass} w-full resize-y font-mono text-[11px]`}
+            />
+          )}
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={submit}
-              disabled={busy || !name.trim() || !prompt.trim() || (kind === 'once' && !at) || (kind === 'weekly' && days.length === 0)}
+              disabled={busy || !name.trim() || !prompt.trim() || (kind === 'once' && !at) || (kind === 'weekly' && days.length === 0) || (withCheck && !checkScript.trim())}
               className="px-3 py-2 rounded-xl text-xs font-medium bg-zinc-100 text-black hover:bg-white disabled:opacity-40 transition flex items-center gap-1.5"
             >
               <FiPlus className="text-xs" /> Add
@@ -230,9 +322,10 @@ export default function SchedulesSection({ load, create, update, remove, runNow 
 
       {error && <p className="text-[11px] text-rose-400">{error}</p>}
       <p className="text-[10px] leading-relaxed text-zinc-500">
-        Each run posts the prompt into this bot's chat and starts a normal turn, with the bot's tools, notes and to-do list; approvals work as usual, so a run that
-        needs one waits for you. A busy bot skips that run. Times are in {clock.timezone || 'the server timezone'}
-        {clock.now ? ` (now ${clock.now})` : ''}. The bot can add schedules itself with its schedule tools, after your approval.
+        Each run posts the prompt into this bot's Scheduled conversation and starts a normal turn, with the bot's tools and notes; approvals work as usual, so a run
+        that needs one waits for you. A busy bot skips that run. With a check, the script runs first in the bot's computer and the bot is only woken, with what the
+        script printed, when it prints something or fails and that differs from its last report. Times are in {clock.timezone || 'the server timezone'}
+        {clock.now ? ` (now ${clock.now})` : ''}. The bot can add and change schedules itself with its schedule tools, after your approval.
       </p>
     </div>
   );

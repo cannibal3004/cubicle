@@ -8,10 +8,15 @@ into the bot's chat as a user message marked as scheduled and starts an
 ordinary turn: the bot has its tools, notes and to-do list, approvals work
 as they do for any turn, and the reply lands in the chat.
 
-The user manages schedules in the bot editor. The bot can create and delete
-them too, through schedule_* tools that pause for approval, so "remind me
-tomorrow" and "check this every morning" are things a bot can set up. Both
-routes go through this module; the rows live in the `schedules` table.
+A schedule can also have a check: a shell script run in the bot's computer
+at each time, without the model. The bot is woken (the prompt plus what the
+script printed) only when the script prints something, or fails, and only
+when that differs from the last report; a quiet check costs no model call.
+
+The user manages schedules in the bot editor. The bot can create, change and
+delete them too, through schedule_* tools that pause for approval, so "remind
+me tomorrow" and "check this every morning" are things a bot can set up.
+Both routes go through this module; the rows live in the `schedules` table.
 """
 
 from __future__ import annotations
@@ -35,8 +40,15 @@ MAX_NOTE_CHARS = 300
 MAX_PER_BOT = settings.SCHEDULES_MAX_PER_BOT
 MIN_EVERY_MINUTES = settings.SCHEDULE_MIN_MINUTES
 MAX_EVERY_MINUTES = 60 * 24 * 7
+MAX_CHECK_CHARS = 8000
+CHECK_TIMEOUT_DEFAULT = 60
+CHECK_TIMEOUT_MIN = 5
+CHECK_TIMEOUT_MAX = 300
+# How much of a check's report goes into the run's message.
+CHECK_REPORT_CHARS = 6000
 LIST_ACTION = "schedule.list"
 CREATE_ACTION = "schedule.create"
+UPDATE_ACTION = "schedule.update"
 DELETE_ACTION = "schedule.delete"
 
 
@@ -237,6 +249,85 @@ def _clean_prompt(prompt: Any) -> str:
     return text
 
 
+def clean_check(check: Any) -> Optional[Dict[str, Any]]:
+    """A valid check ({script, timeout_seconds}), None for no check, or ScheduleError."""
+    if check is None or check == "" or check == {}:
+        return None
+    if isinstance(check, str):
+        check = {"script": check}
+    if not isinstance(check, dict):
+        raise ScheduleError("A check is a shell script, with an optional timeout_seconds.")
+    script = str(check.get("script") or "").replace("\r\n", "\n").strip()
+    if not script:
+        return None
+    if len(script) > MAX_CHECK_CHARS:
+        raise ScheduleError(f"The check script is limited to {MAX_CHECK_CHARS} characters; keep a longer one in a file and run that.")
+    raw = check.get("timeout_seconds")
+    try:
+        timeout = int(raw) if raw not in (None, "") else CHECK_TIMEOUT_DEFAULT
+    except (TypeError, ValueError) as exc:
+        raise ScheduleError("The check's timeout_seconds must be a whole number.") from exc
+    if timeout < CHECK_TIMEOUT_MIN or timeout > CHECK_TIMEOUT_MAX:
+        raise ScheduleError(f"The check's timeout_seconds must be between {CHECK_TIMEOUT_MIN} and {CHECK_TIMEOUT_MAX}.")
+    return {"script": script, "timeout_seconds": timeout}
+
+
+def _first_line(text: str, limit: int = 160) -> str:
+    line = next((part.strip() for part in text.splitlines() if part.strip()), "")
+    return line if len(line) <= limit else line[: limit - 3] + "..."
+
+
+def check_outcome(result: Dict[str, Any], last_report: Optional[str]) -> Dict[str, Any]:
+    """What one run of a check means: quiet, unchanged, or a report that wakes the bot.
+
+    A script that exits 0 and prints nothing is quiet. Anything it prints, or
+    a non-zero exit (with stdout and stderr), is a report; the same report as
+    last time is not given again.
+    """
+    exit_code = result.get("exit_code")
+    stdout = str(result.get("stdout") or "").strip()
+    stderr = str(result.get("stderr") or "").strip()
+    if exit_code == 0 and not stdout:
+        return {"status": "quiet", "report": None, "note": "nothing to report"}
+    if exit_code == 0:
+        report = stdout
+    else:
+        report = "\n".join(part for part in (f"[the check exited with code {exit_code}]", stdout, stderr) if part)
+    if result.get("output_note"):
+        report = f"{report}\n[{result['output_note']}]"
+    if report == last_report:
+        return {"status": "unchanged", "report": report, "note": f"same as the last report: {_first_line(report)}"}
+    return {"status": "report", "report": report, "note": _first_line(report)}
+
+
+async def run_check(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Run a schedule's check script in its bot's computer (started if need be), taking its turn there."""
+    from app.services import computer_turns
+    from app.services.computer_provider import computer_provider
+
+    check = record["check"]
+    status = computer_provider.get_or_create(record["bot_id"])
+    if status.state != "running":
+        status = await computer_provider.start(status.computer_id)
+    async with computer_turns.computer_turn(record["bot_id"], f"check:{record['id']}", "computer.terminal_execute"):
+        return await computer_provider.terminal_execute(status.computer_id, check["script"], check.get("timeout_seconds") or CHECK_TIMEOUT_DEFAULT)
+
+
+def note_check(schedule_id: str, outcome: Dict[str, Any], storage: Optional[StorageService] = None) -> None:
+    """Remember the report the bot was last given; a quiet run forgets it, so the same trouble returning is reported again."""
+    storage = _storage(storage)
+    record = storage.get_schedule(schedule_id)
+    if record is None:
+        return
+    if outcome["status"] == "quiet":
+        record["last_report"] = None
+    elif outcome["status"] == "report":
+        record["last_report"] = outcome["report"]
+    else:
+        return
+    storage.save_schedule(record)
+
+
 def _iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat(timespec="minutes") if value else None
 
@@ -262,6 +353,8 @@ def public(record: Dict[str, Any]) -> Dict[str, Any]:
         "cadence": cadence,
         "cadence_text": describe_cadence(cadence),
         "enabled": bool(record.get("enabled", True)),
+        "check": record.get("check"),
+        "last_report": record.get("last_report"),
         "created_by": record.get("created_by") or "user",
         "created_at": record.get("created_at"),
         "updated_at": record.get("updated_at"),
@@ -293,6 +386,7 @@ def create_schedule(
     prompt: Any,
     cadence: Any,
     *,
+    check: Any = None,
     created_by: str = "user",
     storage: Optional[StorageService] = None,
     tz: Optional[tzinfo] = None,
@@ -312,6 +406,8 @@ def create_schedule(
         "name": _clean_name(name),
         "prompt": _clean_prompt(prompt),
         "cadence": cleaned,
+        "check": clean_check(check),
+        "last_report": None,
         "enabled": True,
         "created_by": created_by if created_by in ("user", "bot") else "user",
         "created_at": _iso(now),
@@ -332,10 +428,12 @@ def update_schedule(
     prompt: Any = None,
     cadence: Any = None,
     enabled: Optional[bool] = None,
+    check: Any = ...,
     storage: Optional[StorageService] = None,
     tz: Optional[tzinfo] = None,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
+    """Change what is given; `check` left out keeps the check, None or "" removes it."""
     storage = _storage(storage)
     tz = tz or app_timezone()
     now = now or now_local(tz)
@@ -347,6 +445,11 @@ def update_schedule(
     if cadence is not None:
         record["cadence"] = clean_cadence(cadence, tz=tz, now=now)
         record["next_run_at"] = _iso(next_run(record["cadence"], after=now, anchor=now, tz=tz))
+    if check is not ...:
+        cleaned_check = clean_check(check)
+        if cleaned_check != record.get("check"):
+            record["check"] = cleaned_check
+            record["last_report"] = None
     if enabled is not None:
         record["enabled"] = bool(enabled)
         if record["enabled"] and not record.get("next_run_at"):
@@ -412,20 +515,26 @@ def run_thread(record: Dict[str, Any]) -> str:
     return conversations.for_purpose(record["bot_id"], "scheduled")["id"]
 
 
-def scheduled_message(record: Dict[str, Any], *, message_id: str, now: Optional[datetime] = None, thread_id: Optional[str] = None) -> Dict[str, Any]:
-    """The user message a run posts into the chat."""
+def scheduled_message(
+    record: Dict[str, Any], *, message_id: str, now: Optional[datetime] = None, thread_id: Optional[str] = None, report: Optional[str] = None
+) -> Dict[str, Any]:
+    """The user message a run posts into the chat; after a check, with what it reported."""
     when = now or now_local()
+    text = record["prompt"]
+    scheduled: Dict[str, Any] = {"id": record["id"], "name": record["name"], "at": when.strftime("%Y-%m-%d %H:%M"), "cadence": describe_cadence(record["cadence"])}
+    if report is not None:
+        shown = report if len(report) <= CHECK_REPORT_CHARS else report[:CHECK_REPORT_CHARS] + f"\n... [{len(report) - CHECK_REPORT_CHARS} more characters]"
+        text = f"{text}\n\nThe check reported:\n```\n{shown}\n```"
+        scheduled["check"] = True
     return {
         "id": message_id,
         "thread_id": thread_id or record["bot_id"],
         "bot_id": record["bot_id"],
         "sender": "user",
-        "text": record["prompt"],
+        "text": text,
         "created_at": datetime.now().isoformat(),
         "item_type": "user_text",
-        "raw_payload": {
-            "scheduled": {"id": record["id"], "name": record["name"], "at": when.strftime("%Y-%m-%d %H:%M"), "cadence": describe_cadence(record["cadence"])}
-        },
+        "raw_payload": {"scheduled": scheduled},
     }
 
 
@@ -450,8 +559,18 @@ async def execute_list(call: ActionInvocation) -> Dict[str, Any]:
 
 async def execute_create(call: ActionInvocation) -> Dict[str, Any]:
     args = call.arguments
-    created = create_schedule(_bot_id(call), args.get("name"), args.get("prompt"), args.get("cadence"), created_by="bot")
+    created = create_schedule(_bot_id(call), args.get("name"), args.get("prompt"), args.get("cadence"), check=args.get("check"), created_by="bot")
     return {"schedule": created, **_clock()}
+
+
+async def execute_update(call: ActionInvocation) -> Dict[str, Any]:
+    bot_id = _bot_id(call)
+    args = call.arguments
+    record = get_schedule(str(args.get("id") or ""))
+    if record["bot_id"] != bot_id:
+        raise ScheduleError("That schedule belongs to another bot.")
+    changes = {key: args[key] for key in ("name", "prompt", "cadence", "enabled", "check") if key in args}
+    return {"schedule": update_schedule(record["id"], **changes), **_clock()}
 
 
 async def execute_delete(call: ActionInvocation) -> Dict[str, Any]:
@@ -471,6 +590,10 @@ def register_schedule_actions(gateway: Optional[ActionGateway] = None) -> None:
     target.register_action(
         ActionDefinition(name=CREATE_ACTION, tool="schedule", action="create", intent="Schedule a prompt to run later in this chat.", risk="write"),
         execute_create,
+    )
+    target.register_action(
+        ActionDefinition(name=UPDATE_ACTION, tool="schedule", action="update", intent="Change one of the bot's schedules or its check.", risk="write"),
+        execute_update,
     )
     target.register_action(
         ActionDefinition(name=DELETE_ACTION, tool="schedule", action="delete", intent="Delete one of the bot's schedules.", risk="write"),
