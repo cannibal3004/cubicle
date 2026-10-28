@@ -8,6 +8,10 @@ history; the user sees the exchange in that bot's chat and answers any
 approval or question card there. The orchestrator gets the reply back as
 its tool result, waiting for it if asked to.
 
+When the bot takes longer than the orchestrator waited, its reply is
+brought back when it finishes: posted into the orchestrator's conversation
+that sent the task, which starts a turn there so the orchestrator can report.
+
 Every account gets one orchestrator ("Cubie") the first time its bots are
 listed; any bot can be made one in its editor.
 """
@@ -26,6 +30,7 @@ from app.services.bot_memory import get_memory
 from app.services.cubie import NAME as DEFAULT_NAME, cubie_record
 from app.services.bot_todo import get_todo
 from app.services.context_builder import latest_compaction
+from app.services.identity import get_current_owner, owner_context
 
 logger = logging.getLogger(__name__)
 from app.services.storage_service import StorageService, current_storage
@@ -44,6 +49,14 @@ NOTES_MAX_CHARS = 2000
 RECENT_MESSAGES = 6
 MESSAGE_MAX_CHARS = 600
 DELEGATION_MAX_CHARS = 20000
+# How often a reply waiting to go back checks whether the task ended and the
+# orchestrator's conversation is free.
+HANDBACK_POLL_SECONDS = 3.0
+HANDBACK_TASK_CHARS = 160
+
+# Tasks whose reply will be brought back, by the delegated message's id. One
+# leaves when its reply is posted, or when bots_reply collects it first.
+_handbacks: Dict[str, Dict[str, Any]] = {}
 
 
 class OrchestratorError(ValueError):
@@ -209,8 +222,19 @@ def _reply_after(storage: StorageService, thread_id: str, message_id: str) -> Di
 
 
 async def delegate(
-    sender: Dict[str, Any], target: Dict[str, Any], text: str, *, wait_seconds: float, storage: StorageService
+    sender: Dict[str, Any],
+    target: Dict[str, Any],
+    text: str,
+    *,
+    wait_seconds: float,
+    storage: StorageService,
+    reply_to: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """Post the task and start the bot's turn, waiting up to `wait_seconds` for its reply.
+
+    `reply_to` is the orchestrator's conversation that sent the task: a reply
+    that comes after the wait is brought back there.
+    """
     from app.routers import chat as chat_router  # the turn machinery; imported here to avoid a cycle
 
     thread_id = task_thread(sender, target, storage)
@@ -220,8 +244,12 @@ async def delegate(
     except TurnBusyError:
         return {"bot": target["id"], "status": "busy", "note": f"{target.get('name')} is still working on something; try again later or check with bots_status."}
     result: Dict[str, Any] = {"bot": target["id"], "name": target.get("name"), "turn_id": turn.turn_id, "message_id": message["id"]}
+    later = "collect the reply later with bots_reply"
+    if reply_to:
+        hand_back_later(sender, target, turn, message, thread_id, reply_to)
+        later = "its reply will be posted into this conversation when it finishes (bots_reply checks on it sooner)"
     if wait_seconds <= 0:
-        return {**result, "status": "started", "note": "The bot is working; use bots_reply to collect its answer later."}
+        return {**result, "status": "started", "note": f"The bot is working; {later}."}
     deadline = time.monotonic() + min(wait_seconds, WAIT_MAX_SECONDS)
     while time.monotonic() < deadline:
         if turn.finished:
@@ -233,12 +261,81 @@ async def delegate(
                 "status": "needs_user",
                 "waiting_on": kind,
                 "about": (turn.pending_approval or {}).get("summary") or "",
-                "note": f"{target.get('name')} is waiting for the user to answer {kind} in its own chat. Tell the user; collect the reply later with bots_reply.",
+                "note": f"{target.get('name')} is waiting for the user to answer {kind} in its own chat. Tell the user; {later}.",
             }
         await asyncio.sleep(2)
     if not turn.finished:
-        return {**result, "status": "running", "note": "Still working when the wait ran out; collect the reply later with bots_reply."}
+        return {**result, "status": "running", "note": f"Still working when the wait ran out; {later}."}
+    _handbacks.pop(message["id"], None)  # answered here
     return {**result, "status": turn.status, "error": turn.error, **_reply_after(storage, thread_id, message["id"])}
+
+
+# ---- bringing a late reply back ------------------------------------------------------------------
+
+def handback_message(sender_id: str, reply_to: str, target: Dict[str, Any], task: Dict[str, Any], found: Dict[str, Any], status: str, error: Optional[str]) -> Dict[str, Any]:
+    """The message that brings a bot's late reply into the orchestrator's conversation."""
+    text = found.get("reply") or ""
+    if status == "failed":
+        text = f"(Its turn failed: {error or 'unknown error'}.)" + (f"\n\n{text}" if text else "")
+    elif not text:
+        text = "(It finished without a reply.)"
+    return {
+        "id": f"msg-{uuid.uuid4().hex[:6]}",
+        "thread_id": reply_to,
+        "bot_id": sender_id,
+        "sender": "user",
+        "text": text,
+        "created_at": datetime.now().isoformat(),
+        "item_type": "user_text",
+        "raw_payload": {
+            "handback": {
+                "from": target.get("id"),
+                "from_name": target.get("name") or "",
+                "task": _trim(task.get("text"), HANDBACK_TASK_CHARS),
+                "message_id": task.get("id"),
+                "status": status,
+                "tools_used": found.get("tools_used") or [],
+            }
+        },
+    }
+
+
+def hand_back_later(sender: Dict[str, Any], target: Dict[str, Any], turn: Any, task: Dict[str, Any], task_thread_id: str, reply_to: str) -> None:
+    """Bring the bot's reply to `reply_to` once its turn ends, unless the orchestrator gets it first."""
+    _handbacks[task["id"]] = {"sender": sender.get("id"), "target": target.get("id")}
+    owner_id = get_current_owner()
+    asyncio.get_running_loop().create_task(_hand_back(sender, target, turn, task, task_thread_id, reply_to, owner_id))
+
+
+async def _hand_back(sender: Dict[str, Any], target: Dict[str, Any], turn: Any, task: Dict[str, Any], task_thread_id: str, reply_to: str, owner_id: str) -> None:
+    from app.routers import chat as chat_router
+    from app.services import conversations
+
+    try:
+        while not turn.finished:
+            await asyncio.sleep(HANDBACK_POLL_SECONDS)
+        # The user stopped it themselves; there is nothing to report.
+        if turn.status == "cancelled":
+            return
+        with owner_context(owner_id):
+            while task["id"] in _handbacks:
+                storage = current_storage()
+                if conversations.get(reply_to, storage) is None:
+                    return  # the conversation that asked was deleted
+                current = _manager().current(reply_to)
+                if current is None or current.finished:
+                    found = _reply_after(storage, task_thread_id, task["id"])
+                    message = handback_message(sender["id"], reply_to, target, task, found, turn.status, turn.error)
+                    try:
+                        await chat_router.start_scheduled_turn(reply_to, message, owner_id)
+                        return
+                    except TurnBusyError:
+                        pass
+                await asyncio.sleep(HANDBACK_POLL_SECONDS)
+    except Exception as exc:  # a lost hand-back must not take anything else down
+        logger.warning("Could not bring %s's reply back to %s: %s", target.get("name"), reply_to, exc)
+    finally:
+        _handbacks.pop(task["id"], None)
 
 
 # ---- gateway executors ---------------------------------------------------------------------------
@@ -347,7 +444,8 @@ async def execute_send(call: ActionInvocation) -> Dict[str, Any]:
         wait_seconds = float(wait) if wait is not None else 600.0
     except (TypeError, ValueError):
         wait_seconds = 600.0
-    return await delegate(me, target, text, wait_seconds=wait_seconds, storage=storage)
+    reply_to = str(arguments.get("thread_id") or "") or None
+    return await delegate(me, target, text, wait_seconds=wait_seconds, storage=storage, reply_to=reply_to)
 
 
 async def execute_reply(call: ActionInvocation) -> Dict[str, Any]:
@@ -364,6 +462,11 @@ async def execute_reply(call: ActionInvocation) -> Dict[str, Any]:
         messages = [m for m in storage.get_messages(thread_id=thread_id) if m.get("sender") == "bot"]
         last = messages[-1] if messages else None
         found = {"reply": _trim(last.get("text"), REPLY_MAX_CHARS) if last else "", "replied_at": last.get("created_at") if last else None}
+    if state["state"] == "idle" and found.get("reply"):
+        # Collected: a reply already read here is not brought back again.
+        for key, pending in list(_handbacks.items()):
+            if pending["sender"] == me["id"] and pending["target"] == target["id"] and (not message_id or key == message_id):
+                _handbacks.pop(key, None)
     return {"bot": target["id"], "name": target.get("name"), **state, **found}
 
 

@@ -140,7 +140,7 @@ COMPUTER_TOOLS: List[ToolSpec] = [
     ),
     ToolSpec(
         name="computer_terminal_execute",
-        description=f"Run a shell command inside the sandbox as its unprivileged user (1 MB of output). It may run for {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT)} seconds unless you set timeout_seconds: longer (up to {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX)}) for builds, installs and test runs, shorter for probes of hosts that may hang. A command that hits its limit is stopped, with everything it started, and returns exit code 124 with its output so far. For anything long or that keeps running (a big copy or download, a server, a watcher), set background: true: the call returns at once with a job id, a log file and the commands to check on it or stop it, and the job runs on. Do not end a normal command with `server &`: send a background process's output to a file or use background. /workspace and the home directory persist between starts; /tmp does not. There is no sudo: for apt packages use computer_install_packages; pip (in a venv), npm, cargo and similar work normally in the home directory. To create or change files use write_file and edit_file rather than heredocs. Your secrets are set as environment variables in every command.",
+        description=f"Run a shell command inside the sandbox as its unprivileged user. Long output comes back as its start and end, with the whole of it saved to a file you can grep or read in parts (up to 50 MB). It may run for {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT)} seconds unless you set timeout_seconds: longer (up to {int(settings.COMPUTER_DOCKER_COMMAND_TIMEOUT_MAX)}) for builds, installs and test runs, shorter for probes of hosts that may hang. A command that hits its limit is stopped, with everything it started, and returns exit code 124 with its output so far. For anything long or that keeps running (a big copy or download, a server, a watcher), set background: true: the call returns at once with a job id, a log file and the commands to check on it or stop it, and the job runs on. Do not end a normal command with `server &`: send a background process's output to a file or use background. /workspace and the home directory persist between starts; /tmp does not. There is no sudo: for apt packages use computer_install_packages; pip (in a venv), npm, cargo and similar work normally in the home directory. To create or change files use write_file and edit_file rather than heredocs. Your secrets are set as environment variables in every command.",
         parameters=_obj(
             {
                 "command": {"type": "string", "description": "Shell command to run"},
@@ -597,8 +597,9 @@ ORCHESTRATION_TOOLS: List[ToolSpec] = [
         description=(
             "Hand a bot a task (the user approves). The message is posted into that bot's chat as coming from you and its reply starts at "
             "once; write everything it needs to act on its own, as you would brief a colleague. With wait_seconds (default 600, at most 1800) "
-            "you get its reply back here; otherwise collect it later with bots_reply. If the bot stops at an approval or a question, you are "
-            "told and the user must answer it in that bot's chat."
+            "you get its reply back here. If it takes longer, its reply is posted into this conversation when it finishes and you then "
+            "report to the user; bots_reply checks on it sooner. If the bot stops at an approval or a question, you are told and the user "
+            "must answer it in that bot's chat."
         ),
         parameters=_obj(
             {
@@ -1043,7 +1044,7 @@ PROJECT_CALLS: Dict[str, Any] = {
 THREAD_ACTIONS = {
     "todo.list", "todo.add", "todo.update", "memory.read", "memory.write", "memory.edit", "user.ask",
     "projects.list", "projects.create", "projects.join", "work_notes.read", "work_notes.write", "work_notes.edit",
-    "project_log.add", "project_log.read",
+    "project_log.add", "project_log.read", "bots.send",
 }
 
 

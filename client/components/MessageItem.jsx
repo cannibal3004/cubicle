@@ -318,6 +318,7 @@ function MessageItem({ message, botId, onEdit }) {
                   found.passages ? `${found.passages} passage${found.passages === 1 ? '' : 's'} from attachments` : '',
                   found.procedures ? `${found.procedures} procedure${found.procedures === 1 ? '' : 's'}` : '',
                   found.recalled ? `${found.recalled} earlier message${found.recalled === 1 ? '' : 's'}` : '',
+                  found.log_entries ? `${found.log_entries} project log entr${found.log_entries === 1 ? 'y' : 'ies'}` : '',
                 ].filter(Boolean);
                 return parts.length ? (
                   <span className="block text-[10px] font-mono text-zinc-300/60 mb-0.5" title="Added after your message for the bot to read; not shown here">
@@ -328,6 +329,12 @@ function MessageItem({ message, botId, onEdit }) {
               {message.raw_payload?.delegated && (
                 <span className="block text-[10px] font-mono text-cyan-200/80 mb-0.5" title="Handed over by the orchestrator bot on your behalf">
                   from {message.raw_payload.delegated.from_name || 'the orchestrator'}
+                </span>
+              )}
+              {message.raw_payload?.handback && (
+                <span className="block text-[10px] font-mono text-emerald-200/80 mb-0.5" title={`The task: ${message.raw_payload.handback.task || ''}`}>
+                  reply from {message.raw_payload.handback.from_name || 'a bot'}
+                  {message.raw_payload.handback.status === 'failed' ? ' · failed' : ''} · finished after the wait
                 </span>
               )}
               {message.text}
