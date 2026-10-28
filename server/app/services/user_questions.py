@@ -52,10 +52,10 @@ class QuestionBroker:
         future = self.pending.get(request_id)
         if future is None or future.done():
             return False
-        from app.services.approval_broker import may_answer
-
-        if not may_answer(self.owners.get(request_id, ""), self.actors.get(request_id, "")):
-            return False  # someone else's bot, or someone else's conversation, asked
+        # A question is for the person whose turn asked it, nobody else.
+        starter = self.actors.get(request_id) or self.owners.get(request_id)
+        if starter and get_current_actor() != starter:
+            return False
         future.set_result({"answer": answer, "option_index": option_index})
         return True
 
@@ -70,6 +70,7 @@ class QuestionBroker:
         finally:
             self.pending.pop(request_id, None)
             self.owners.pop(request_id, None)
+            self.actors.pop(request_id, None)
 
 
 question_broker = QuestionBroker()

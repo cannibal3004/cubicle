@@ -94,14 +94,17 @@ def delete_secret(scope: str, bot_id: str, name: Any, storage: Optional[StorageS
 def environment_for(bot_id: str, storage: Optional[StorageService] = None) -> Dict[str, str]:
     """What a bot's computer gets as environment variables: app secrets, then its own.
 
-    For a teammate's command on a shared bot, only the bot's own: the owner's
-    account-wide secrets are theirs.
+    For a teammate's command on a shared bot, the bot's own and the owner's
+    account-wide ones the owner shared with the bot (by name).
     """
     store = _storage(storage)
     values = {name: value for name, value in store.secret_values(bot_id).items() if name not in RESERVED_NAMES}
     if not acting_for_owner():
-        own = {entry["name"] for entry in store.list_secrets("bot", bot_id)}
-        values = {name: value for name, value in values.items() if name in own}
+        from app.services import sharing
+
+        bot = next((b for b in store.get_bots() if b.get("id") == bot_id), None)
+        allowed = {entry["name"] for entry in store.list_secrets("bot", bot_id)} | set(sharing.share_settings(bot)["secrets"])
+        values = {name: value for name, value in values.items() if name in allowed}
     return values
 
 

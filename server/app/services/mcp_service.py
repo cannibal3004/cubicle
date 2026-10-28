@@ -607,11 +607,23 @@ class McpManager:
 
     def records(self, bot_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """System servers, the current account's own, and (given a bot) that bot's."""
-        # A teammate on a shared bot does not get the owner's own servers (their accounts).
-        found = self.store.list() + (self.user_store.list() if acting_for_owner() else [])
+        # A teammate on a shared bot gets only the owner's own servers the owner shared with it.
+        found = self.store.list() + (self.user_store.list() if acting_for_owner() else self._shared_user_records(bot_id))
         if bot_id:
             found += self.bot_store(bot_id).list()
         return found
+
+    def _shared_user_records(self, bot_id: Optional[str]) -> List[Dict[str, Any]]:
+        if not bot_id:
+            return []
+        from app.services import sharing
+
+        try:
+            bot = next((b for b in self.user_store.storage.get_bots() if b.get("id") == bot_id), None)
+        except Exception:
+            return []
+        shared = set(sharing.share_settings(bot)["mcp_servers"])
+        return [record for record in self.user_store.list() if record.get("id") in shared]
 
     def _all_bot_records(self) -> List[Dict[str, Any]]:
         found: List[Dict[str, Any]] = []
@@ -715,8 +727,8 @@ class McpManager:
                 found.append((record, list(connection.tools)))
         return found
 
-    async def call_tool(self, server_id: str, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        connection = self.connection(server_id)
+    async def call_tool(self, server_id: str, name: str, arguments: Dict[str, Any], bot_id: Optional[str] = None) -> Dict[str, Any]:
+        connection = self.connection(server_id, bot_id)
         if not connection.record.get("enabled", True):
             raise McpError(f"{connection.record['name']} is switched off.")
         result = await connection.call(name, arguments)

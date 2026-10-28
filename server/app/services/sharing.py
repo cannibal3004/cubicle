@@ -11,9 +11,10 @@ Conversations are private to whoever started them, the owner included: a
 record with a `user_id` belongs to that teammate, one without belongs to the
 owner. Schedules and Cubie's tasks run as the owner.
 
-Until the owner chooses otherwise (next stage), a teammate's turns get none
-of the owner's connected apps, account MCP servers or account-wide secrets;
-the bot's own secrets and MCP servers are part of the bot and are shared.
+A teammate's turns get only what the owner chose for the bot (its share
+settings): connected apps through the owner's connection or the teammate's
+own, the owner's own MCP servers and account-wide secrets by name. The bot's
+own secrets and MCP servers are part of the bot and are always shared.
 
 What each role may do:
 
@@ -195,6 +196,140 @@ def current_access(bot_id: str) -> Access:
         return Access(owner_id, bot_id, OWNER)
     role = next((m["role"] for m in memberships(actor_id) if m["owner_id"] == owner_id and m["bot_id"] == bot_id), None)
     return Access(owner_id, bot_id, role or MEMBER)
+
+
+# ---- what teammates get ------------------------------------------------------------------------------
+#
+# The owner chooses, per bot, what of theirs a teammate's turns may use (the
+# bot record's `share_settings`): each connected app through the owner's own
+# connection or through each person's own, the owner's own MCP servers and
+# account-wide secrets by name, and who may answer a teammate's approval cards.
+
+OWNERS_CONNECTION = "owner"
+OWN_CONNECTION = "own"
+APP_CHOICES = (OWNERS_CONNECTION, OWN_CONNECTION)
+# Who may answer an approval card in a teammate's conversation: the person
+# chatting always may; then the owner, bot admins and server admins who have
+# the bot (the default), or everyone it is shared with, or nobody else.
+APPROVERS_ADMINS = "starter_admins"
+APPROVERS_MEMBERS = "members"
+APPROVERS_STARTER = "starter"
+APPROVER_CHOICES = (APPROVERS_ADMINS, APPROVERS_MEMBERS, APPROVERS_STARTER)
+# Composio's own toolkit runs any tool of any app the account has connected,
+# so on a teammate's turn it is always their own.
+COMPOSIO_TOOLKIT = "composio"
+_SLUG = re.compile(r"^[a-z0-9_\-]{1,80}$")
+
+
+def clean_share_settings(value: Any) -> Dict[str, Any]:
+    """Validated share settings; raises SharingError on anything malformed."""
+    value = value if isinstance(value, dict) else {}
+    apps: Dict[str, str] = {}
+    for slug, choice in (value.get("apps") or {}).items():
+        slug = str(slug).strip().lower()
+        if not _SLUG.fullmatch(slug) or slug == COMPOSIO_TOOLKIT:
+            raise SharingError(f"{slug!r} is not an app that can be shared.")
+        if choice not in APP_CHOICES:
+            raise SharingError("Each app uses the owner's connection ('owner') or each person's own ('own').")
+        apps[slug] = choice
+    servers = [str(s).strip() for s in value.get("mcp_servers") or [] if str(s).strip()]
+    secrets = [str(s).strip() for s in value.get("secrets") or [] if str(s).strip()]
+    from app.services.secrets_service import NAME_PATTERN
+
+    if any(not NAME_PATTERN.match(name) for name in secrets):
+        raise SharingError("A secret name is not valid.")
+    approvals = value.get("approvals") or APPROVERS_ADMINS
+    if approvals not in APPROVER_CHOICES:
+        raise SharingError("Approvals are answered by 'starter_admins', 'members' or 'starter'.")
+    if len(apps) > 200 or len(servers) > 100 or len(secrets) > 200:
+        raise SharingError("Too many entries.")
+    return {"apps": apps, "mcp_servers": sorted(set(servers)), "secrets": sorted(set(secrets)), "approvals": approvals}
+
+
+def share_settings(bot: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """A bot's share settings, the defaults (nothing of the owner's, default approvers) when unset."""
+    try:
+        return clean_share_settings((bot or {}).get("share_settings"))
+    except SharingError:
+        return clean_share_settings(None)
+
+
+def _bot(owner_id: str, bot_id: str) -> Optional[Dict[str, Any]]:
+    return next((b for b in _store().for_owner(owner_id).get_bots() if b.get("id") == bot_id), None)
+
+
+def settings_of(owner_id: str, bot_id: str) -> Dict[str, Any]:
+    return share_settings(_bot(owner_id, bot_id))
+
+
+def save_settings(owner_id: str, bot_id: str, value: Any) -> Dict[str, Any]:
+    cleaned = clean_share_settings(value)
+    storage = _store().for_owner(owner_id)
+    bots = storage.get_bots()
+    for bot in bots:
+        if bot.get("id") == bot_id:
+            bot["share_settings"] = cleaned
+            storage.save_bots(bots)
+            return cleaned
+    raise SharingError("Bot not found.")
+
+
+def connection_for(bot: Optional[Dict[str, Any]], toolkit: str) -> Optional[str]:
+    """Whose connection a turn uses for an app: the owner's account id, the actor's, or None (not shared).
+
+    The owner's own turns always use their connections."""
+    owner, actor = get_current_owner(), get_current_actor()
+    if owner == actor:
+        return owner
+    toolkit = (toolkit or "").lower()
+    if toolkit == COMPOSIO_TOOLKIT:
+        return actor
+    choice = share_settings(bot)["apps"].get(toolkit)
+    if choice == OWNERS_CONNECTION:
+        return owner
+    if choice == OWN_CONNECTION:
+        return actor
+    return None
+
+
+def may_approve(owner_id: str, starter_id: str, bot_id: str, me: str) -> bool:
+    """Whether `me` may answer an approval card opened in `starter_id`'s turn on a bot of `owner_id`."""
+    starter = starter_id or owner_id
+    if me == starter:
+        return True
+    if starter == owner_id:
+        return False  # the owner's own conversations are theirs alone
+    mode = settings_of(owner_id, bot_id)["approvals"] if bot_id else APPROVERS_ADMINS
+    if mode == APPROVERS_STARTER:
+        return False
+    if me == owner_id:
+        return True
+    role = next((m["role"] for m in members(owner_id, bot_id) if m["user_id"] == me), None)
+    if role is None:
+        return False
+    if mode == APPROVERS_MEMBERS or role == ADMIN:
+        return True
+    from app.services.auth_service import auth_service
+    from app.services.identity import is_admin
+
+    return is_admin(auth_service.accounts.get_user(me))
+
+
+def describe_for_teammate(bot: Optional[Dict[str, Any]], owner_name: str, who: str) -> str:
+    """What the bot is told about the owner's things a teammate's turn may use."""
+    chosen = share_settings(bot)
+    theirs = sorted(slug for slug, choice in chosen["apps"].items() if choice == OWNERS_CONNECTION)
+    own = sorted(slug for slug, choice in chosen["apps"].items() if choice == OWN_CONNECTION)
+    parts = []
+    if theirs:
+        parts.append(f"These apps use {owner_name}'s accounts: {', '.join(theirs)}.")
+    if own:
+        parts.append(
+            f"These apps use {who}'s own accounts: {', '.join(own)}; if one is not connected yet, connector_connect gives {who} a sign-in link."
+        )
+    if not theirs and not own:
+        parts.append(f"None of {owner_name}'s connected apps are shared with this bot.")
+    return " ".join(parts)
 
 
 # ---- requests ------------------------------------------------------------------------------------

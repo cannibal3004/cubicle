@@ -103,6 +103,51 @@ async def remove_member(bot_id: str, user_id: str):
     return _listing(bot_id, access)
 
 
+class ShareSettings(BaseModel):
+    apps: Dict[str, str] = Field(default_factory=dict)
+    mcp_servers: List[str] = Field(default_factory=list)
+    secrets: List[str] = Field(default_factory=list)
+    approvals: str = Field(default=sharing.APPROVERS_ADMINS, max_length=20)
+
+
+async def _options() -> Dict[str, Any]:
+    """The owner's things a shared bot could use: connected apps, own MCP servers, account secrets."""
+    from app.services.composio_service import COMPOSIO_TOOLKIT, composio_service
+    from app.services.mcp_service import mcp_manager
+
+    apps: List[str] = []
+    if composio_service.get_api_key():
+        try:
+            apps = sorted(slug for slug in await composio_service.list_connected_toolkits() if slug != COMPOSIO_TOOLKIT)
+        except Exception:
+            apps = []
+    servers = [{"id": record["id"], "name": record.get("name") or record["id"]} for record in mcp_manager.user_store.list()]
+    secrets = sorted(entry["name"] for entry in current_storage().list_secrets("app", ""))
+    return {"apps": apps, "mcp_servers": servers, "secrets": secrets}
+
+
+@router.get("/bots/{bot_id}/sharing")
+async def get_share_settings(bot_id: str):
+    """What teammates' conversations with the bot may use; the owner also gets what there is to choose from."""
+    access = _access(bot_id)
+    settings = sharing.settings_of(access.owner_id, bot_id)
+    if access.role != sharing.OWNER:
+        return {"settings": settings, "options": None}
+    return {"settings": settings, "options": await _options()}
+
+
+@router.put("/bots/{bot_id}/sharing")
+async def save_share_settings(bot_id: str, body: ShareSettings):
+    access = _access(bot_id)
+    if access.role != sharing.OWNER:
+        raise HTTPException(status_code=403, detail="Only the bot's owner chooses what teammates may use.")
+    try:
+        settings = sharing.save_settings(access.owner_id, bot_id, body.model_dump())
+    except sharing.SharingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"settings": settings}
+
+
 @router.get("/people")
 async def list_people():
     """Accounts on this server one could share a bot with (not oneself, not disabled)."""

@@ -906,6 +906,19 @@ export async function fetchPeople() {
   return secretsCall('/people');
 }
 
+// What teammates' conversations with a shared bot may use; the owner also gets the choices.
+export async function fetchShareSettings(botId) {
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/sharing`);
+}
+
+export async function saveShareSettings(botId, settings) {
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/sharing`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+}
+
 export async function runBotSchedule(botId, scheduleId) {
   return secretsCall(`/bots/${encodeURIComponent(botId)}/schedules/${encodeURIComponent(scheduleId)}/run`, { method: 'POST' });
 }

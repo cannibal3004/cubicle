@@ -108,6 +108,8 @@ export default function Dashboard() {
   }, []);
   // The server's view of running turns and pending approvals, by bot.
   const [turnStates, setTurnStates] = useState({});
+  // Approval cards from teammates' conversations on shared bots this person answers.
+  const [waitingApprovals, setWaitingApprovals] = useState([]);
   const lastTurnStates = useRef({});
   const conversationsRef = useRef({});
   // Conversations whose first reply just finished: a model is naming them in
@@ -212,6 +214,8 @@ export default function Dashboard() {
       }
       titleBots.forEach((botId) => loadConversations(botId));
       setTurnStates((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+      const waiting = overview.waiting || [];
+      setWaitingApprovals((prev) => (JSON.stringify(prev) === JSON.stringify(waiting) ? prev : waiting));
     };
     poll();
     const interval = window.setInterval(poll, 4000);
@@ -558,6 +562,7 @@ export default function Dashboard() {
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         turnStates={turnStates}
+        waitingApprovals={waitingApprovals}
         conversations={activeConversations}
         activeThreadId={activeThreadId}
         onSelectConversation={handleSelectConversation}

@@ -24,7 +24,7 @@ from app.services.action_gateway import (
 from app.services.approval_gate import approval_gate
 from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
-from app.services.connector_tools import connector_tool_specs
+from app.services.connector_tools import connector_tool_specs, shared_connector_specs
 from app.services import computer_turns, conversation_titles, conversations, projects, sharing  # projects: registers its actions
 from app.services.context_builder import build_history_messages, cap_message_results, latest_compaction, live_messages, safe_arguments, trim_result_text
 from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
@@ -778,7 +778,7 @@ async def recalled_context(bot_id: str, query: str, history: List[Dict[str, Any]
         return ""
 
 
-def describe_user() -> str:
+def describe_user(bot: Optional[Dict[str, Any]] = None) -> str:
     """One line about the person the bot works for, from their profile; empty when unset.
 
     On a bot shared with them it is always there, saying whose bot it is: the
@@ -806,6 +806,8 @@ def describe_user() -> str:
             f"(account {user.get('username')}), not {owner_name}: your notes and history may be about {owner_name}, so do not take "
             f"them for {who}. Address them as {who}."
         )
+        if bot is not None:
+            parts.append(sharing.describe_for_teammate(bot, owner_name, who))
     elif name:
         parts.append(f"The person you work for is {name} (account {user.get('username')}); address them as {name}.")
     else:
@@ -838,7 +840,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
 
     raw_prompt = current_bot["system_prompt"] if current_bot else "You are a helpful AI assistant."
     today = datetime.now().strftime("%A, %B %d, %Y")
-    system_prompt = f"{raw_prompt}\n\n{describe_user()}Today is {today}."
+    system_prompt = f"{raw_prompt}\n\n{describe_user(current_bot)}Today is {today}."
     llm_config = llm_service.current_llm_config()
     selected_model = (
         requested_model
@@ -862,17 +864,22 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
     if tools_enabled:
         # Every app connected through Composio becomes a set of tools. If the
         # catalog cannot be fetched, fall back to the two built-in GitHub tools.
-        # A teammate on a shared bot gets none of the owner's connected apps
-        # (the owner's accounts); the bot's own MCP servers are part of the bot.
+        # A teammate on a shared bot gets the apps its owner shared, through the
+        # owner's connection or their own; the bot's own MCP servers are part of the bot.
         owners_apps = acting_for_owner()
-        connector_specs = await connector_tool_specs(composio_service) if owners_apps else []
+        if owners_apps:
+            connector_specs = await connector_tool_specs(composio_service)
+        else:
+            connector_specs = await shared_connector_specs(composio_service, current_bot)
+        # A teammate connects only the apps the bot uses with each person's own account.
+        connects_own = not owners_apps and sharing.OWN_CONNECTION in sharing.share_settings(current_bot)["apps"].values()
         # MCP servers the user runs join the same family as connected apps.
         connector_specs = connector_specs + mcp_tool_specs(bot_id=bot_id)
         tool_specs = available_tools(
             computer=settings.COMPUTER_PROVIDER == "docker",
             github=owners_apps and bool(composio_service.get_api_key()) and not connector_specs,
             connectors=connector_specs,
-            connector_management=owners_apps and bool(composio_service.get_api_key()),
+            connector_management=(owners_apps or connects_own) and bool(composio_service.get_api_key()),
             orchestrator=bool(current_bot.get("orchestrator")),
         )
         # The bot's own tool choices, over the apps that are off by default.
@@ -1476,9 +1483,28 @@ def _bot_id_for(thread_id: str) -> str:
 @router.get("/turns")
 async def list_turns():
     """Running turns and pending approvals in the caller's conversations, with their own bots and
-    bots shared with them (sidebar badges); a teammate's conversations are not the owner's to see."""
+    bots shared with them (sidebar badges); a teammate's conversations are not the owner's to see.
+
+    `waiting` holds the approval cards from teammates' conversations this person may answer
+    (a shared bot's approvers), with the bot and the person asking named."""
+    from app.services.approval_broker import approval_broker
+    from app.services.auth_service import auth_service
+    from app.services import storage_service as storage_module
+
     actor = get_current_actor()
-    return {"turns": [turn for turn in turn_manager.overview() if sharing.thread_access(actor, turn.get("thread_id")) is not None]}
+    waiting = []
+    for card in approval_broker.waiting_for(actor):
+        bot = next((b for b in storage_module.storage_service.for_owner(card["owner_id"]).get_bots() if b.get("id") == card.get("bot_id")), None)
+        asker = auth_service.accounts.get_user(card["asked_by"]) or {}
+        waiting.append({
+            **{key: card.get(key) for key in ("request_id", "bot_id", "tool", "summary", "arguments", "created_at")},
+            "bot_name": (bot or {}).get("name") or card.get("bot_id"),
+            "asked_by_name": sharing.person_name(asker),
+        })
+    return {
+        "turns": [turn for turn in turn_manager.overview() if sharing.thread_access(actor, turn.get("thread_id")) is not None],
+        "waiting": waiting,
+    }
 
 
 @router.get("/turns/{thread_id}")

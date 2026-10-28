@@ -1,7 +1,7 @@
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import uuid
 
 from app.config import settings
@@ -21,6 +21,9 @@ class PendingApproval:
     owner_id: str = ""
     # Whose turn opened it: the owner, or a teammate on a shared bot.
     actor_id: str = ""
+    bot_id: str = ""
+    # The card as stored, for whoever answers it from outside the conversation.
+    card: Optional[Dict[str, Any]] = None
 
 
 def card_timeout() -> Optional[float]:
@@ -40,12 +43,14 @@ def card_timeout() -> Optional[float]:
     return None if seconds <= 0 else seconds
 
 
-def may_answer(owner_id: str, actor_id: str) -> bool:
-    """Whether the person acting may answer a card opened in a turn of `actor_id` on a bot of `owner_id`."""
+def may_answer(owner_id: str, actor_id: str, bot_id: str = "", me: Optional[str] = None) -> bool:
+    """Whether the person acting may answer a card opened in a turn of `actor_id` on a bot of `owner_id`:
+    the person whose turn it is, or on a shared bot whoever its share settings name (sharing.may_approve)."""
     if not owner_id:
         return True
-    me = get_current_actor()
-    return me == (actor_id or owner_id) or me == owner_id
+    from app.services import sharing
+
+    return sharing.may_approve(owner_id, actor_id, bot_id, me or get_current_actor())
 
 
 class ApprovalBroker:
@@ -64,8 +69,6 @@ class ApprovalBroker:
         request_id = request_id or f"req-{uuid.uuid4().hex[:10]}"
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        self.pending[request_id] = PendingApproval(request_id, future, get_current_owner(), get_current_actor())
-
         approval = {
             "request_id": request_id,
             "thread_id": thread_id,
@@ -76,6 +79,7 @@ class ApprovalBroker:
             "status": "pending",
             "created_at": _now(),
         }
+        self.pending[request_id] = PendingApproval(request_id, future, get_current_owner(), get_current_actor(), bot_id, approval)
         current_storage().add_approval(approval)
         current_storage().add_audit_event({
             "event": "approval.opened",
@@ -121,7 +125,7 @@ class ApprovalBroker:
         # A card is answered by the account whose bot opened it, or by the
         # teammate whose turn on a shared bot it is (the gate decides inside
         # the same turn, so it matches too).
-        if not may_answer(pending.owner_id, pending.actor_id):
+        if not may_answer(pending.owner_id, pending.actor_id, pending.bot_id):
             return False
 
         pending.future.set_result(action)
@@ -139,6 +143,19 @@ class ApprovalBroker:
             "created_at": _now(),
         })
         return True
+
+
+    def waiting_for(self, me: str) -> List[Dict[str, Any]]:
+        """Cards in teammates' conversations on shared bots that this person may answer
+        (they cannot open those conversations, so the cards come to them)."""
+        found: List[Dict[str, Any]] = []
+        for pending in list(self.pending.values()):
+            starter = pending.actor_id or pending.owner_id
+            if pending.future.done() or not pending.card or not pending.owner_id or starter == me:
+                continue
+            if may_answer(pending.owner_id, pending.actor_id, pending.bot_id, me):
+                found.append({**pending.card, "owner_id": pending.owner_id, "asked_by": starter})
+        return found
 
 
 approval_broker = ApprovalBroker()

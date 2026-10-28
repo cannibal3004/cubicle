@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { searchEverything } from '../lib/api';
+import WaitingApprovals from './WaitingApprovals';
 import {
   FiSearch,
   FiPlus,
@@ -415,6 +416,7 @@ export default function Sidebar({
   onDeleteBot,
   onLeaveBot,
   turnStates,
+  waitingApprovals,
   conversations,
   activeThreadId,
   onSelectConversation,
@@ -590,6 +592,7 @@ export default function Sidebar({
 
       {/* Bot Roster List */}
       <div className="flex-1 overflow-y-auto px-2 space-y-1.5">
+        <WaitingApprovals waiting={waitingApprovals} />
         {active.map(renderBot)}
 
         {sharedWithMe.length > 0 && (

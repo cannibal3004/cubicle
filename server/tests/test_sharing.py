@@ -189,6 +189,148 @@ class SharingTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    # ---- what teammates get (part 2) -------------------------------------------------------------
+
+    def share(self, **settings):
+        sharing.save_settings(LOCAL_USER_ID, self.bot, settings)
+
+    def test_only_the_owner_chooses_what_teammates_get(self):
+        sharing.add_member(LOCAL_USER_ID, self.bot, self.bob["id"], sharing.ADMIN, LOCAL_USER_ID)
+        secrets_service.set_secret("app", "", "JAMIE_GMAIL_TOKEN", "account-wide", self.root)
+
+        async def scenario():
+            path = f"/api/v1/bots/{self.bot}/sharing"
+            with self.request(LOCAL_USER_ID, path=path), mock.patch("app.services.composio_service.composio_service.get_api_key", return_value=""):
+                seen = await sharing_router.get_share_settings(self.bot)
+                self.assertEqual(seen["settings"]["approvals"], sharing.APPROVERS_ADMINS)
+                self.assertEqual(seen["options"]["secrets"], ["JAMIE_GMAIL_TOKEN"])
+                saved = await sharing_router.save_share_settings(
+                    self.bot, sharing_router.ShareSettings(apps={"gmail": "owner", "slack": "own"}, secrets=["JAMIE_GMAIL_TOKEN"], approvals="members")
+                )
+                self.assertEqual(saved["settings"]["apps"], {"gmail": "owner", "slack": "own"})
+                with self.assertRaises(HTTPException) as ctx:
+                    await sharing_router.save_share_settings(self.bot, sharing_router.ShareSettings(apps={"gmail": "everyone"}))
+                self.assertEqual(ctx.exception.status_code, 422)
+            with self.request(self.bob["id"], "PUT", path):
+                seen = await sharing_router.get_share_settings(self.bot)
+                self.assertIsNone(seen["options"])  # a bot admin sees the choice, not the owner's accounts
+                self.assertEqual(seen["settings"]["approvals"], "members")
+                with self.assertRaises(HTTPException) as ctx:
+                    await sharing_router.save_share_settings(self.bot, sharing_router.ShareSettings())
+                self.assertEqual(ctx.exception.status_code, 403)
+
+        asyncio.run(scenario())
+
+    def test_apps_use_the_owners_connection_or_each_persons_own(self):
+        from app.services import composio_service as composio_module
+        from app.services import connector_tools
+        from app.services.action_gateway import ActionInvocation
+
+        sharing.add_member(LOCAL_USER_ID, self.bot, self.bob["id"], sharing.MEMBER, LOCAL_USER_ID)
+        self.share(apps={"gmail": "owner", "slack": "own"})
+        entity = lambda: composio_module.ComposioService(storage=self.root).user_id  # noqa: E731 - whose connections are in use
+        jamie, bob = composio_module.DEFAULT_USER_ID, f"cubicle-{self.bob['id']}"
+
+        class Composio:
+            # Jamie has gmail, slack and github; Bob has slack.
+            connected = {jamie: ["gmail", "slack", "github"], bob: ["slack"]}
+            executed = []
+
+            def get_api_key(self):
+                return "key"
+
+            async def list_connected_toolkits(self):
+                return list(self.connected.get(entity(), []))
+
+            async def allowed_tools(self, toolkit):
+                return None
+
+            async def list_tools(self, toolkit, important_only=True, limit=10, tool_slugs=None):
+                return [{"slug": f"{toolkit.upper()}_READ", "toolkit": {"slug": toolkit}, "tags": ["readOnlyHint"], "description": "x"}]
+
+            async def execute_tool(self, slug, payload, version=None):
+                self.executed.append((slug, entity()))
+                return {"ok": True}
+
+        fake = Composio()
+
+        async def scenario():
+            with self.request(self.bob["id"], path=f"/api/v1/bots/{self.bot}"):
+                specs = await connector_tools.shared_connector_specs(fake, self.root.get_bots()[0])
+                self.assertEqual(sorted(s.name for s in specs), ["gmail_read", "slack_read"])  # not github
+                with mock.patch.object(connector_tools, "composio_service", fake):
+                    for slug, toolkit in (("GMAIL_READ", "gmail"), ("SLACK_READ", "slack")):
+                        call = ActionInvocation(name="x", arguments={"tool": slug, "arguments": {}}, target={"connector": toolkit, "bot_id": self.bot}, preview="")
+                        await connector_tools.execute_composio_tool(call)
+                    with self.assertRaises(Exception):
+                        call = ActionInvocation(name="x", arguments={"tool": "GITHUB_READ", "arguments": {}}, target={"connector": "github", "bot_id": self.bot}, preview="")
+                        await connector_tools.execute_composio_tool(call)
+                self.assertEqual(fake.executed, [("GMAIL_READ", jamie), ("SLACK_READ", bob)])
+                described = chat_router.describe_user(self.root.get_bots()[0])
+                self.assertIn("use jamie's accounts: gmail", described)
+                self.assertIn("own accounts: slack", described)
+            with self.request(LOCAL_USER_ID, path=f"/api/v1/chat/turns/{self.bot}"):
+                self.assertEqual(entity(), jamie)
+
+        asyncio.run(scenario())
+
+    def test_shared_account_secrets_and_mcp_servers_reach_teammates_by_name(self):
+        from app.services.mcp_service import McpManager, McpStore
+
+        sharing.add_member(LOCAL_USER_ID, self.bot, self.bob["id"], sharing.MEMBER, LOCAL_USER_ID)
+        secrets_service.set_secret("app", "", "SHARED_TOKEN", "shared-value", self.root)
+        secrets_service.set_secret("app", "", "PRIVATE_TOKEN", "private-value", self.root)
+        manager = McpManager(store=McpStore(), user_store=McpStore(scope="user"))
+        with self.request(LOCAL_USER_ID):
+            shared = manager.user_store.add({"name": "shared", "transport": "http", "url": "https://example.com/mcp"})["id"]
+            manager.user_store.add({"name": "private", "transport": "http", "url": "https://example.com/other"})
+            self.assertEqual(len(manager.records(self.bot)), 2)
+        self.share(secrets=["SHARED_TOKEN"], mcp_servers=[shared])
+        with self.request(self.bob["id"], path=f"/api/v1/bots/{self.bot}"):
+            self.assertEqual(set(secrets_service.environment_for(self.bot)), {"SHARED_TOKEN"})
+            self.assertEqual([r["id"] for r in manager.records(self.bot)], [shared])
+            self.assertEqual(manager.records(None), [])
+
+    def test_who_may_answer_a_teammates_card(self):
+        broker = ApprovalBroker()
+        call = SimpleNamespace(name="x", summary="s", arguments_for_display={})
+        dave = self.accounts.create_user("dave", PASSWORD)
+        for person, role in ((self.bob, sharing.MEMBER), (self.carol, sharing.ADMIN), (dave, sharing.MEMBER)):
+            sharing.add_member(LOCAL_USER_ID, self.bot, person["id"], role, LOCAL_USER_ID)
+
+        async def answers(mode):
+            """Who of Jamie, Carol (bot admin) and Dave (member) may answer Bob's card under `mode`."""
+            self.share(approvals=mode)
+            with owner_context(LOCAL_USER_ID), actor_context(self.bob["id"]):
+                card = broker.open("cv-bob", self.bot, call)
+            who = {}
+            for name, person_id in (("jamie", LOCAL_USER_ID), ("carol", self.carol["id"]), ("dave", dave["id"])):
+                who[name] = any(c["request_id"] == card["request_id"] for c in broker.waiting_for(person_id))
+            self.assertEqual(broker.waiting_for(self.bob["id"]), [])  # his own card is in his conversation
+            with owner_context(self.bob["id"]), actor_context(self.bob["id"]):
+                self.assertTrue(broker.resolve(card["request_id"], "deny"))
+            return who
+
+        async def scenario():
+            self.assertEqual(await answers(sharing.APPROVERS_ADMINS), {"jamie": True, "carol": True, "dave": False})
+            self.assertEqual(await answers(sharing.APPROVERS_MEMBERS), {"jamie": True, "carol": True, "dave": True})
+            self.assertEqual(await answers(sharing.APPROVERS_STARTER), {"jamie": False, "carol": False, "dave": False})
+            # A bot admin answers from their own session; the decision lands in Jamie's data.
+            self.share(approvals=sharing.APPROVERS_ADMINS)
+            with owner_context(LOCAL_USER_ID), actor_context(self.bob["id"]):
+                card = broker.open("cv-bob", self.bot, call)
+            with owner_context(dave["id"]), actor_context(dave["id"]):
+                self.assertFalse(broker.resolve(card["request_id"], "allow"))
+            with owner_context(self.carol["id"]), actor_context(self.carol["id"]):
+                self.assertTrue(broker.resolve(card["request_id"], "allow"))
+            self.assertEqual(self.root.get_approvals()[-1]["decided_by_user"], self.carol["id"])
+            # Jamie's own conversations stay his: nobody else answers his cards.
+            with owner_context(LOCAL_USER_ID), actor_context(LOCAL_USER_ID):
+                card = broker.open(self.bot, self.bot, call)
+            self.assertEqual(broker.waiting_for(self.carol["id"]), [])
+
+        asyncio.run(scenario())
+
     def test_deleting_a_bot_unshares_it(self):
         sharing.add_member(LOCAL_USER_ID, self.bot, self.bob["id"], sharing.MEMBER, LOCAL_USER_ID)
         with self.request(LOCAL_USER_ID, "DELETE", f"/api/v1/bots/{self.bot}"):
