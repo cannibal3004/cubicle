@@ -43,6 +43,7 @@ from app.services import rewind as rewind_service
 from app.services import tool_names
 from app.services.repetition import RepetitionGuard, TAIL_CHARS as _LOOP_TAIL
 from app.services import stray_calls
+from app.services import tool_selection
 from app.services.tool_selection import select_tools_kept
 from app.services import orchestrator as _orchestrator  # noqa: F401 - registers bots.* actions
 from app.services import file_share as _file_share  # noqa: F401 - registers files.share
@@ -201,6 +202,7 @@ async def clear_history(thread_id: str):
     deleted = current_storage().delete_messages(thread_id)
     current_storage().clear_rewinds(thread_id)
     _store_tool_selection(thread_id, None)  # a fresh conversation chooses its tools afresh
+    _store_conversation_field(thread_id, "tool_list", None)
     return {"status": "ok", "deleted": deleted}
 
 
@@ -723,11 +725,42 @@ def _fresh_entries(block: str, marker: str, seen: str) -> str:
 
 def _store_tool_selection(thread_id: str, keep: Optional[Dict[str, Any]]) -> None:
     """Remember the conversation's tool selection for this stretch of it."""
+    _store_conversation_field(thread_id, "tool_selection", keep)
+
+
+def _store_conversation_field(thread_id: str, field: str, value: Any) -> None:
     try:
         if conversations.get(thread_id) is not None:
-            conversations.update(thread_id, {"tool_selection": keep})
+            conversations.update(thread_id, {field: value})
     except Exception as exc:
-        logger.warning("Could not keep the tool selection of %s: %s", thread_id, exc)
+        logger.warning("Could not keep the %s of %s: %s", field.replace("_", " "), thread_id, exc)
+
+
+def _store_added_tools(history: List[Dict[str, Any]], definitions: List[Dict[str, Any]]) -> bool:
+    """Describe the tools offered since the stretch began on the latest user message. True when it changed.
+
+    Like the thinking hint, only the latest message changes, at the end of the prompt; a
+    turn run again for the same message keeps what that message already describes."""
+    latest = next((m for m in reversed(history) if m.get("sender") == "user"), None)
+    if latest is None or not definitions:
+        return False
+    payload = dict(latest.get("raw_payload") or {})
+    existing = payload.get("tools_added") or {}
+    names = list(existing.get("names") or [])
+    fresh = [d for d in definitions if (d.get("function") or {}).get("name") not in names]
+    if not fresh:
+        return False
+    block = tool_selection.render_added(fresh)
+    payload["tools_added"] = {
+        "names": names + [(d.get("function") or {}).get("name") for d in fresh],
+        "text": f"{existing['text']}\n\n{block}" if existing.get("text") else block,
+    }
+    latest["raw_payload"] = payload
+    try:
+        current_storage().update_message(latest)
+    except Exception as exc:  # this turn still has them; a later turn describes them again
+        logger.warning("Could not store the added tools of %s: %s", latest.get("id"), exc)
+    return True
 
 
 async def attach_turn_context(
@@ -951,9 +984,28 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         except Exception as exc:  # never let selection fail a turn
             logger.warning("Tool selection failed for %s: %s", thread_id, exc)
             selection = None
-    tool_definitions = openai_tool_definitions(tool_specs) if tool_specs else None
+    selection_note = selection.note() if selection else ""
+    # The tool list (and the system prompt's account of it) the model is sent; with
+    # TOOL_ADD_STYLE=message the one this stretch began with, and what has been offered
+    # since goes in this turn's message instead.
+    listed_specs, tools_added = tool_specs, []
+    if tool_specs and tool_selection.adds_in_message():
+        try:
+            stored_list = conversation.get("tool_list")
+            listed_specs, added_specs, keep_list = tool_selection.hold_list(
+                tool_specs, callable_specs, kept=stored_list,
+                since=str(compaction.get("id")) if compaction else "", note=selection_note, history=history,
+            )
+            selection_note = keep_list.get("note") or ""
+            tools_added = openai_tool_definitions(added_specs)
+            if keep_list != stored_list:
+                _store_conversation_field(thread_id, "tool_list", keep_list)
+        except Exception as exc:  # the list as offered, as in the list style
+            logger.warning("Holding the tool list failed for %s: %s", thread_id, exc)
+            listed_specs, tools_added = tool_specs, []
+    tool_definitions = openai_tool_definitions(listed_specs) if listed_specs else None
     # The names of the user's secrets (set in the bot's computer), never the values.
-    tools_prompt = describe_tools(tool_specs, secret_names=names_for(bot_id), selection_note=selection.note() if selection else "")
+    tools_prompt = describe_tools(listed_specs, secret_names=names_for(bot_id), selection_note=selection_note)
     # The titles of what the user has shown this bot; procedure_read brings one back.
     shown = procedures.prompt_block(current_bot) if tool_specs else ""
     if shown:
@@ -980,6 +1032,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
         "callable_specs": callable_specs or tool_specs,
         "tool_definitions": tool_definitions,
         "tools_prompt": tools_prompt,
+        "tools_added": tools_added,
         "gate_mode": gate_mode,
         "gate_threshold": gate_threshold,
         "tool_selection": {"offered": selection.offered, "total": selection.total} if selection and selection.narrowed else None,
@@ -1131,11 +1184,13 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
             # replayed the same on later turns, so the start of the prompt never
             # changes and the model server reuses its cache. A turn run again for
             # the same message reuses what was stored.
-            # The thinking hint is stored on the message the same way (after the slash
-            # commands above have read the message as the user wrote it).
+            # The thinking hint, and tools offered since the tool list was set (TOOL_ADD_STYLE=message),
+            # are stored on the message the same way (after the slash commands above have read the
+            # message as the user wrote it).
             hint_changed = _store_thinking_hint(history, thinking_hint)
+            tools_changed = _store_added_tools(history, setup.get("tools_added") or [])
             attached = await attach_turn_context(turn, thread_id, bot_msg_id, history, last_user_text, bot_id=bot_id)
-            if attached or hint_changed:
+            if attached or hint_changed or tools_changed:
                 formatted_history = build_history_messages(history, replay_tools=replay_tools)
 
             # --- model turn, looping while it calls tools ------------------------

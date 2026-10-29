@@ -136,6 +136,14 @@ class Settings:
     # are narrowed to the ones that match the message (built-ins always stay).
     # 0 offers everything. App Settings (tool_selection_max) overrides it.
     TOOL_SELECTION_MAX: int = int(os.getenv("TOOL_SELECTION_MAX", "40"))
+    # Where a tool that becomes available partway through a conversation goes:
+    # "list" adds it to the tool list; "message" keeps the list as it was since
+    # the last compaction and describes the tool at the end of the user's message,
+    # so the model server's prompt cache holds (for chat templates that put the
+    # tool list at the top of the prompt, like Qwen's, on a server that accepts
+    # calls to tools described that way, like halogen-flash-server; see
+    # services/tool_selection.py).
+    TOOL_ADD_STYLE: str = os.getenv("TOOL_ADD_STYLE", "list").strip().lower()
     # Turns run server-side and outlive the page, so an approval can wait
     # for someone to come back to it.
     APPROVAL_TIMEOUT_SECONDS: int = int(os.getenv("APPROVAL_TIMEOUT_SECONDS", "900"))
