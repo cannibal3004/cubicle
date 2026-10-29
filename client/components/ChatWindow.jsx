@@ -12,7 +12,7 @@ import ThinkingPicker, { thinkingLabel, useThinkingLevels } from './ThinkingPick
 import TodoCard from './TodoCard';
 import WorkNotesSection from './WorkNotesSection';
 import MascotAvatar from './MascotAvatar';
-import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiEdit2, FiArrowDown, FiArrowUp, FiSquare, FiFile, FiFolder, FiRotateCw, FiVideo, FiAlertTriangle } from 'react-icons/fi';
+import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiArrowDown, FiArrowUp, FiSquare, FiSliders, FiFile, FiFolder, FiRotateCw, FiVideo, FiAlertTriangle } from 'react-icons/fi';
 import ComputerStatusButton from './ComputerStatusButton';
 import {
   sendMessage,
@@ -730,7 +730,7 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
     switch (spec.name) {
       case 'help': {
         const lines = commands.map((c) => `${c.usage}\n    ${c.description}`);
-        addLocalMessage(`Slash commands\n\n${lines.join('\n')}`);
+        addLocalMessage(`Slash commands\n\n${lines.join('\n')}\n\nThe full guide is under Help in the sidebar, and you can ask any bot how Cubicle works.`);
         return;
       }
       case 'clear': {
@@ -1039,7 +1039,7 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
               className="p-1 rounded-md text-zinc-500 hover:text-white hover:bg-[#1f1f23] transition"
               title="Bot settings"
             >
-              <FiEdit2 className="text-xs" />
+              <FiSliders className="text-xs" />
             </button>
           )}
         </div>
@@ -1102,8 +1102,13 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
             </span>
           </div>
 
-          {/* An empty conversation offers the bot's starter prompts. */}
-          {activeMessages.length === 0 && Array.isArray(bot?.suggestions) && bot.suggestions.length > 0 && (
+          {/* Message Items List */}
+          {activeMessages.map((msg) => (
+            <MessageItem key={msg.id} message={msg} botId={bot?.id} onEdit={editableSet.has(msg.id) ? onEditMessage : null} />
+          ))}
+
+          {/* An empty conversation (only the greeting above) offers the bot's starter prompts. */}
+          {(!messages || messages.length === 0) && Array.isArray(bot?.suggestions) && bot.suggestions.length > 0 && (
             <div className="pt-6">
               <div className="text-center text-xs text-zinc-500 mb-3">Not sure where to start? Try one of these.</div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -1124,10 +1129,6 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
             </div>
           )}
 
-          {/* Message Items List */}
-          {activeMessages.map((msg) => (
-            <MessageItem key={msg.id} message={msg} botId={bot?.id} onEdit={editableSet.has(msg.id) ? onEditMessage : null} />
-          ))}
 
           {/* Approval and takeover cards sit where the conversation currently is, not at the top. */}
           {botApprovals.map((approval) =>

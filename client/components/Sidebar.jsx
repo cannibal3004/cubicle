@@ -8,6 +8,7 @@ import {
   FiPlus,
   FiSettings,
   FiActivity,
+  FiHelpCircle,
   FiMoreHorizontal,
   FiEdit2,
   FiArchive,
@@ -708,6 +709,17 @@ export default function Sidebar({
         >
           <FiActivity className="text-sm text-cyan-400" />
           <span>Audit trail</span>
+        </button>
+
+        <button
+          suppressHydrationWarning={true}
+          onClick={() => onSelectTab && onSelectTab('help')}
+          className={`w-full flex items-center gap-2 px-2 py-1 rounded-lg text-xs font-medium transition ${
+            activeTab === 'help' ? 'text-white bg-[#1e1e22]' : 'text-zinc-300 hover:text-white hover:bg-[#1e1e22]'
+          }`}
+        >
+          <FiHelpCircle className="text-sm text-amber-300" />
+          <span>Help</span>
         </button>
 
         <div className="flex items-center justify-between pt-1">

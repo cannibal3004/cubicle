@@ -1,0 +1,13 @@
+# Adds the real computer runtime to the docs stack, for the pictures of a bot's desktop
+# and files (screenshots.py --computer). Needs the runtime image (docker build -t
+# cubicle-computer:2.13.0 ./runtime). Workspaces are bind mounts of the stack's own
+# volumes, at the paths Docker keeps volumes under; that is /var/lib/docker/volumes
+# on Linux and inside Docker Desktop's VM. DOCS_DOCKER_VOLUMES overrides it.
+services:
+  api:
+    environment:
+      COMPUTER_PROVIDER: docker
+      COMPUTER_DOCKER_WORKSPACE_MODE: bind
+      COMPUTER_DOCKER_HOST_WORKSPACE_ROOT: ${DOCS_DOCKER_VOLUMES:-/var/lib/docker/volumes}/cubicle-docs_api_data/_data/computers
+      COMPUTER_DOCKER_HOST_SHARED_DIR: ${DOCS_DOCKER_VOLUMES:-/var/lib/docker/volumes}/cubicle-docs_docs_shared/_data
+      COMPUTER_DOCKER_SCREEN: 1600x1000

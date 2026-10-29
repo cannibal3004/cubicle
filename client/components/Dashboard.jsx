@@ -9,6 +9,7 @@ import AuditPanel from './AuditPanel';
 import SettingsPage from './SettingsPage';
 import BotSettingsPage from './BotSettingsPage';
 import ProjectPage from './ProjectPage';
+import HelpPage from './HelpPage';
 import ConfirmDialog from './ConfirmDialog';
 
 import {
@@ -62,7 +63,7 @@ export default function Dashboard() {
   // The signed-in account (id, username, role), from the session check.
   const [currentUser, setCurrentUser] = useState(null);
   const [activeBotId, setActiveBotId] = useState('');
-  const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'computer' | 'marketplace' | 'audit' | 'settings' | 'bot' | 'project'
+  const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'computer' | 'marketplace' | 'audit' | 'settings' | 'bot' | 'project' | 'help'
   // Transcripts are cached per bot so a reply that is still streaming for
   // one bot survives switching to another bot or another tab.
   // Messages and streaming are kept per conversation (thread id; a bot's
@@ -145,6 +146,8 @@ export default function Dashboard() {
     setComputerView({ tab, maximize, path, nonce: Date.now() });
     setActiveTab('computer');
   };
+  // The help page open on the 'help' tab (a docs/ page) and the section to show.
+  const [helpPage, setHelpPage] = useState({ path: 'README.md', anchor: '' });
   // A project's page: null, or { id, botId }. Shown on the 'project' tab.
   const [projectPage, setProjectPage] = useState(null);
   const openProjectPage = (project) => {
@@ -273,7 +276,7 @@ export default function Dashboard() {
           setDefaultModel(settingsData.default_model);
         }
         // The page's address (a link to a conversation or a project) wins over the first bot.
-        const route = parseAddress(window.location.pathname);
+        const route = parseAddress(window.location.pathname, window.location.hash);
         const applied = route ? await applyAddress(route, botsData) : false;
         const firstVisible = botsData.find((b) => !b.archived) || botsData[0];
         if (!applied && firstVisible) {
@@ -354,8 +357,10 @@ export default function Dashboard() {
   const botsRef = useRef([]);
   botsRef.current = bots;
 
-  // A route: { kind: 'c' | 'p', id }, or null for any other address.
-  function parseAddress(pathname) {
+  // A route: { kind: 'c' | 'p', id }, { kind: 'help', path, anchor }, or null for any other address.
+  function parseAddress(pathname, hash = '') {
+    const help = /^\/help(?:\/(.+?))?\/?$/.exec(pathname || '');
+    if (help) return { kind: 'help', path: `${decodeURIComponent(help[1] || 'README')}.md`, anchor: decodeURIComponent((hash || '').replace(/^#/, '')) };
     const match = /^\/(c|p)\/([^/]+)\/?$/.exec(pathname || '');
     return match ? { kind: match[1], id: decodeURIComponent(match[2]) } : null;
   }
@@ -363,6 +368,12 @@ export default function Dashboard() {
   // Opens what a route names. True when it was found among the person's bots.
   async function applyAddress(route, botsList = botsRef.current) {
     const known = (botId) => (botsList || []).some((b) => b.id === botId);
+    if (route.kind === 'help') {
+      // Opened, but not a bot of its own: the first bot is picked as usual underneath.
+      setHelpPage({ path: route.path, anchor: route.anchor });
+      setActiveTab('help');
+      return false;
+    }
     try {
       if (route.kind === 'c') {
         const listed = Object.entries(conversationsRef.current).find(([, list]) => (list || []).some((c) => c.id === route.id));
@@ -388,6 +399,7 @@ export default function Dashboard() {
     if (!routed) return;
     let want = null;
     if (activeTab === 'project' && projectPage) want = `/p/${encodeURIComponent(projectPage.id)}`;
+    else if (activeTab === 'help') want = helpPage.path === 'README.md' ? '/help' : `/help/${helpPage.path.replace(/\.md$/, '')}`;
     // Only once the bot's conversations are in: until then the open one is a guess.
     else if (activeTab === 'chat' && activeThreadId && conversationsByBot[activeBotId]) want = `/c/${encodeURIComponent(activeThreadId)}`;
     if (!want) return;
@@ -396,11 +408,11 @@ export default function Dashboard() {
       else window.history.pushState(window.history.state, '', want);
     }
     replaceAddress.current = false;
-  }, [routed, activeTab, projectPage, activeThreadId, activeBotId, conversationsByBot]);
+  }, [routed, activeTab, projectPage, helpPage, activeThreadId, activeBotId, conversationsByBot]);
 
   useEffect(() => {
     const onPop = () => {
-      const route = parseAddress(window.location.pathname);
+      const route = parseAddress(window.location.pathname, window.location.hash);
       if (!route) return;
       replaceAddress.current = true;
       applyAddress(route);
@@ -414,9 +426,11 @@ export default function Dashboard() {
   useEffect(() => {
     const bot = bots.find((b) => b.id === activeBotId);
     const parts =
-      activeTab === 'project' && pageProject
-        ? [pageProject.name, bot?.name]
-        : [activeConversation?.title, bot?.name];
+      activeTab === 'help'
+        ? ['Help']
+        : activeTab === 'project' && pageProject
+          ? [pageProject.name, bot?.name]
+          : [activeConversation?.title, bot?.name];
     document.title = [...parts.filter(Boolean), 'Cubicle'].join(' · ');
   }, [bots, activeBotId, activeTab, pageProject, activeConversation?.title]);
 
@@ -811,6 +825,15 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'audit' && <AuditPanel />}
+
+        {activeTab === 'help' && (
+          <HelpPage
+            path={helpPage.path}
+            anchor={helpPage.anchor}
+            onNavigate={(path, anchor) => setHelpPage({ path, anchor: anchor || '' })}
+            onClose={() => setActiveTab('chat')}
+          />
+        )}
 
         {activeTab === 'project' && pageProject && (
           <ProjectPage

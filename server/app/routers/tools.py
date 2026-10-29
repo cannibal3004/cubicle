@@ -26,6 +26,7 @@ GROUP_LABELS = {
     "connectors": "App connections",
     "mcp": "MCP servers",
     "questions": "Questions to you",
+    "help": "Cubicle help",
     "orchestration": "Other bots (orchestrator)",
 }
 

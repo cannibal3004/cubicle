@@ -1,0 +1,42 @@
+# The docs screenshot stack: docker-compose.yml under its own project name
+# (cubicle-docs), with its own volumes, plain http on a spare port, and nothing
+# that reaches out (no retrieval, no decider). tools/docs/screenshots.py starts
+# it, seeds made-up data into it, photographs it and removes it.
+services:
+  caddy:
+    environment:
+      SITE_ADDRESS: http://localhost:38080
+    ports: !override
+      - "38080:38080"
+  api:
+    environment:
+      AUTH_COOKIE_SECURE: "0"
+      CORS_ORIGINS: http://localhost:38080
+      RETRIEVAL_ENABLED: "0"
+      DECIDER_URL: ""
+      AUTO_APPROVAL: "off"
+      COMPUTER_PROVIDER: fake
+      THINKING_LEVELS: none,low,medium,xhigh
+      DEFAULT_MODEL: qwen3.8-flash-next
+      # The scripted stand-in for a model server (mock_llm.py).
+      LLM_BASE_URL: http://mockllm:9000/v1
+      TZ: ${DOCS_TZ:-America/Chicago}
+    volumes: !override
+      - api_data:/data
+      - docs_shared:/workspace
+    depends_on:
+      mockllm:
+        condition: service_started
+
+  mockllm:
+    image: python:3.12-alpine
+    command: ["python", "-u", "/mock_llm.py"]
+    volumes:
+      - ./tools/docs/mock_llm.py:/mock_llm.py:ro
+    expose:
+      - "9000"
+    networks:
+      - default
+
+volumes:
+  docs_shared:

@@ -27,6 +27,8 @@ RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 COPY server/app ./app
 COPY server/run.py ./
 COPY runtime/seccomp_profile.json ./runtime/seccomp_profile.json
+# Cubicle's help pages and their screenshots (services/help.py).
+COPY docs ./docs
 
 # Persistent state lives in /data (SQLite, encryption key, auth token) and the
 # bots' confined workspace in /workspace. Both are volumes in docker-compose.

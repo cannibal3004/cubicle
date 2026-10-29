@@ -9,7 +9,7 @@ server/tests/
 **/*.pyc
 workspace/
 deploy/
-docs/
+# docs/ goes in: the API serves it as Cubicle's help (services/help.py)
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm

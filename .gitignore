@@ -40,3 +40,6 @@ Thumbs.db
 
 # Per-deployment sandbox wallpaper (see COMPUTER_WALLPAPER)
 /wallpaper.*
+
+# The docs screenshot tooling (tools/docs) keeps its seed output here
+tools/docs/.seed.json
