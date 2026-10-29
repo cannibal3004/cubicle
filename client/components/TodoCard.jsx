@@ -95,7 +95,7 @@ export default function TodoCard({ bot, onSave, children, hasMore = false }) {
   }
 
   return (
-    <aside className="flex-shrink-0 w-72 border-l border-[#1f1f23] bg-[#0b0b0d] flex flex-col min-h-0 z-10" aria-label="To-do list and work notes">
+    <aside className="flex-shrink-0 w-80 xl:w-96 border-l border-[#1f1f23] bg-[#0b0b0d] flex flex-col min-h-0 z-10" aria-label="To-do list and work notes">
       <div className="flex flex-col min-h-0 flex-1 text-[11px] text-zinc-300 overflow-y-auto">
         <div>
           <button
@@ -106,10 +106,10 @@ export default function TodoCard({ bot, onSave, children, hasMore = false }) {
             title="Collapse"
           >
             <FiCheckSquare className="text-xs text-cyan-300/80" />
-            <span className="text-zinc-200">To-do</span>
-            <span className="truncate">· {summary}</span>
+            <span className="flex-shrink-0 whitespace-nowrap text-zinc-200">To-do</span>
+            <span className="min-w-0 truncate">· {summary}</span>
             {saving && <span className="ml-auto text-zinc-500">saving…</span>}
-            <FiChevronRight className="text-xs ml-auto" />
+            <FiChevronRight className="flex-shrink-0 text-xs ml-auto" />
           </button>
 
           {open && (
