@@ -89,7 +89,7 @@ export default function ApprovalCard({ approval, onRespond, onAlwaysAllow }) {
       <div className="flex items-center justify-between border-b border-slate-800/80 pb-2 mb-3">
         <div className="flex items-center gap-2 text-amber-400">
           <FiShield className="text-lg animate-pulse" />
-          <span className="text-xs font-bold uppercase tracking-wider">Permission Broker Request</span>
+          <span className="text-xs font-bold uppercase tracking-wider">Needs your approval</span>
         </div>
         <span className="text-[10px] font-mono bg-amber-500/10 text-amber-300 px-2 py-0.5 rounded border border-amber-500/20">
           {approval.tool || 'terminal.execute'}
