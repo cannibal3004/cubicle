@@ -210,6 +210,45 @@ def live_thinking(page):
         finish_and_delete(page, thread)
 
 
+# ---- the computer (only when the stack runs the real runtime: screenshots.py --computer) ------
+
+def computer_shot(func):
+    func.needs_computer = True
+    return shot(func)
+
+
+@computer_shot
+def computer_files(page):
+    open_page(page, f"/p/{P['backup']}")
+    page.get_by_role("button", name="Open in the file viewer").click()
+    page.wait_for_timeout(2500)
+    save(page, "computer-files")
+
+
+def computer_action(page, bot, action, arguments):
+    """Run an action on a bot's computer: opened, approved like any other, then run."""
+    opened = page.request.post(f"{BASE}/api/v1/computers/{bot}/actions", data={"action": action, "arguments": arguments}).json()
+    request_id = (opened.get("request") or {}).get("request_id")
+    if opened.get("status") == "pending_approval" and request_id:
+        page.request.post(f"{BASE}/api/v1/approvals/respond", data={"request_id": request_id, "action": "allow"})
+        page.request.post(f"{BASE}/api/v1/computers/{bot}/actions/{request_id}/execute", timeout=120000)
+
+
+@computer_shot
+def computer_desktop(page):
+    bot = B["atlas"]
+    page.request.post(f"{BASE}/api/v1/computers/{bot}/start", timeout=180000)
+    # The browser takes http(s) only: serve the seeded report from inside the computer, then open it.
+    computer_action(page, bot, "terminal_execute", {"command": "cd /workspace/reports && python3 -m http.server 8088", "background": True})
+    page.wait_for_timeout(1500)
+    computer_action(page, bot, "browser_navigate", {"url": "http://localhost:8088/morning-report.html"})
+    open_page(page, f"/c/{C['backup']}")
+    page.locator("form textarea").fill("/computer")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(9000)  # the live view connects and draws the desktop
+    save(page, "computer-desktop")
+
+
 # ---- projects ------------------------------------------------------------------------------
 
 @shot
@@ -287,6 +326,9 @@ def main():
         owner = context_for(seed["owner_token"])
         for func in SHOTS:
             if wanted and func.__name__ not in wanted:
+                continue
+            if getattr(func, "needs_computer", False) and not seed.get("computer"):
+                print(func.__name__, "(skipped: run screenshots.py with --computer)")
                 continue
             print(func.__name__)
             page = owner.new_page()
