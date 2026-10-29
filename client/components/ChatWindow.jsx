@@ -12,7 +12,7 @@ import ThinkingPicker, { thinkingLabel, useThinkingLevels } from './ThinkingPick
 import TodoCard from './TodoCard';
 import WorkNotesSection from './WorkNotesSection';
 import MascotAvatar from './MascotAvatar';
-import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiEdit2, FiArrowDown, FiFile, FiFolder, FiRotateCw, FiVideo, FiAlertTriangle } from 'react-icons/fi';
+import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiEdit2, FiArrowDown, FiArrowUp, FiSquare, FiFile, FiFolder, FiRotateCw, FiVideo, FiAlertTriangle } from 'react-icons/fi';
 import ComputerStatusButton from './ComputerStatusButton';
 import {
   sendMessage,
@@ -319,11 +319,18 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
       pendingDeltas.text = '';
       pendingDeltas.reasoning = '';
       updateMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === streamingMsgId
-            ? { ...msg, text: msg.text + text, reasoning: (msg.reasoning || '') + reasoning }
-            : msg
-        )
+        prev.map((msg) => {
+          if (msg.id !== streamingMsgId) return msg;
+          // Thinking that resumes after new text or tool calls (the next round) starts a part
+          // of its own, shown where it began, as the stored reply's reasoning_parts are.
+          let parts = msg.reasoningParts || [];
+          const last = parts[parts.length - 1];
+          const calls = (msg.toolCalls || []).length;
+          if (reasoning && (!last || msg.text.length > last.at || calls > last.after)) {
+            parts = [...parts, { at: msg.text.length, after: calls, start: (msg.reasoning || '').length }];
+          }
+          return { ...msg, text: msg.text + text, reasoning: (msg.reasoning || '') + reasoning, reasoningParts: parts };
+        })
       );
     };
     const queueDelta = (field, delta) => {
@@ -474,6 +481,10 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
                 trusted: Boolean(event.trusted) || Boolean(existing?.trusted),
                 trusted_by: event.trustedBy || existing?.trusted_by || null,
                 summary: event.action?.preview || existing?.summary || null,
+                // For the step's details: what it was given, what came back, how long it ran.
+                arguments: event.action?.arguments || existing?.arguments || null,
+                result: event.result ?? existing?.result ?? null,
+                ran_ms: event.ranMs ?? existing?.ran_ms ?? null,
                 // Where in the reply the call came: the text streamed so far.
                 at: existing ? existing.at : (msg.text || '').length,
               };
@@ -565,12 +576,12 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
 
   useEffect(() => { setPickerIndex(0); }, [commandQuery, filteredCommands.length]);
 
-  // Auto-grow the composer up to ~8 lines; /shared write needs a second line.
+  // Auto-grow the composer up to 40% of the window, then scroll inside it.
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, Math.max(160, Math.round(window.innerHeight * 0.4)))}px`;
   }, [inputPrompt]);
 
   // ---- undo and redo ------------------------------------------------------------
@@ -869,6 +880,11 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
       undoLast();
     }
   };
+
+  // What the send button reflects: something to send, and no file still uploading.
+  const canSend =
+    !pendingFiles.some((item) => item.status === 'uploading') &&
+    Boolean(inputPrompt.trim() || selectedImage || pendingRecording || pendingFiles.some((item) => item.status === 'ready'));
 
   const handleSendMessage = async (e) => {
     e?.preventDefault();
@@ -1317,24 +1333,26 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
           />
         )}
 
+        {/* The composer. Its corners have a fixed radius (half its one-line height, so one line
+            reads as a pill) and its buttons sit inset by the padding, centred on the corners'
+            arcs: 6px padding + 16px button radius = the 22px corner radius, at any height. */}
         <form
           onSubmit={handleSendMessage}
           onDrop={handleDrop}
           onDragOver={(e) => e.preventDefault()}
-          className="w-full max-w-2xl dark-pill-input px-4 py-2.5 flex items-end gap-3 bg-[#1c1c20] border border-[#2b2b32] shadow-2xl transition focus-within:border-zinc-500"
+          className="w-full max-w-2xl flex items-end gap-1 p-1.5 rounded-[22px] bg-[#1c1c20] border border-[#2b2b32] shadow-[0_10px_25px_-5px_rgba(0,0,0,0.5)] transition-colors focus-within:border-zinc-500"
         >
-          {/* Plus / Image Upload Action Button */}
           <button
             suppressHydrationWarning={true}
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="text-zinc-400 hover:text-white transition p-1 text-base flex-shrink-0"
+            className="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-full text-zinc-400 hover:text-white hover:bg-[#2a2a30] transition"
             title="Attach images or files (or drop and paste them here)"
           >
-            <FiPlus />
+            <FiPlus className="text-base" />
           </button>
 
-          {/* Composer. Enter sends, Shift+Enter adds a line, "/" opens the command picker. */}
+          {/* Enter sends, Shift+Enter adds a line, "/" opens the command picker. */}
           <textarea
             ref={textareaRef}
             suppressHydrationWarning={true}
@@ -1346,24 +1364,41 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
             placeholder={`Message ${botTitle}, or / for commands`}
             aria-autocomplete="list"
             aria-expanded={pickerOpen}
-            className="w-full bg-transparent text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none leading-5 py-0.5 max-h-40 overflow-y-auto"
+            className="flex-1 min-w-0 self-center bg-transparent px-1.5 py-1 text-[13px] leading-6 text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none overflow-y-auto"
           />
 
-          {/* Microphone Dictation Button */}
           <button
             suppressHydrationWarning={true}
             type="button"
             onClick={handleVoiceToggle}
-            className={`p-1.5 rounded-full text-base transition flex-shrink-0 ${
-              isListening
-                ? 'bg-rose-500 text-white animate-pulse'
-                : 'text-zinc-400 hover:text-white'
+            className={`w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-full transition ${
+              isListening ? 'bg-rose-500 text-white animate-pulse' : 'text-zinc-400 hover:text-white hover:bg-[#2a2a30]'
             }`}
-            title="Dictate Voice Input"
+            title={isListening ? 'Stop dictating' : 'Dictate'}
           >
-            {isListening ? <FiMicOff /> : <FiMic />}
+            {isListening ? <FiMicOff className="text-base" /> : <FiMic className="text-base" />}
           </button>
 
+          {/* Send, or Stop while a reply streams (as /stop). */}
+          {isStreaming ? (
+            <button
+              type="button"
+              onClick={() => cancelTurn(threadId).catch((err) => addLocalMessage(`Could not stop the reply: ${err.message}`, true))}
+              className="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-full bg-zinc-200 text-black hover:bg-white transition"
+              title="Stop the reply"
+            >
+              <FiSquare className="text-[11px] fill-current" />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={!canSend}
+              className="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-full bg-zinc-100 text-black hover:bg-white disabled:bg-[#2a2a30] disabled:text-zinc-500 transition"
+              title="Send (Enter)"
+            >
+              <FiArrowUp className="text-base" />
+            </button>
+          )}
         </form>
       </div>
       </div>

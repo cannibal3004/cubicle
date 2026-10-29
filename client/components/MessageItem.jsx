@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { FiX, FiChevronRight, FiTool, FiZap, FiShield, FiEdit2 } from 'react-icons/fi';
+import { FiX, FiChevronRight, FiTool, FiZap, FiShield, FiEdit2, FiCopy, FiCheck } from 'react-icons/fi';
 import FileCard from './FileCard';
 
 // The steps a user message carries after a demonstration on the bot's computer.
@@ -29,21 +29,35 @@ function formatMsgTime(createdAt) {
   return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
-// Collapsible "Thinking" block shown above an assistant reply. While the model
-// is still thinking (no answer text yet) it stays open and follows the stream;
-// once the answer starts it collapses unless the user has opened it.
-function ThinkingBlock({ reasoning, answerStarted, isStreaming, level }) {
+// Within this many pixels of the bottom, a live thinking block follows the stream.
+const FOLLOW_SLACK_PX = 24;
+
+// Collapsible "Thinking" block: one round's thinking, where it came in the reply.
+// While the model is still thinking (nothing after it yet) it stays open and
+// follows the stream, as long as the reader is at its bottom: scrolling up to
+// read stops the following, scrolling back down resumes it. Once the round goes
+// on (text or a tool call) it collapses unless the user has opened it.
+function ThinkingBlock({ reasoning, live, level }) {
   const [userToggled, setUserToggled] = useState(null);
   const bodyRef = useRef(null);
+  const followRef = useRef(true);
 
-  const liveThinking = isStreaming && !answerStarted;
+  const liveThinking = Boolean(live);
   const open = userToggled !== null ? userToggled : liveThinking;
 
   useEffect(() => {
-    if (open && liveThinking && bodyRef.current) {
-      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    if (open) followRef.current = true; // opening starts at the newest
+  }, [open]);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (open && liveThinking && el && followRef.current) {
+      el.scrollTop = el.scrollHeight;
     }
   }, [reasoning, open, liveThinking]);
+  const onScroll = () => {
+    const el = bodyRef.current;
+    if (el) followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLACK_PX;
+  };
 
   const words = reasoning.trim() ? reasoning.trim().split(/\s+/).length : 0;
   const label = liveThinking ? 'Thinking…' : 'Thinking';
@@ -69,6 +83,7 @@ function ThinkingBlock({ reasoning, answerStarted, isStreaming, level }) {
       {open && (
         <div
           ref={bodyRef}
+          onScroll={onScroll}
           className="px-3.5 pb-3 pt-1 max-h-64 overflow-y-auto text-[11px] leading-relaxed text-zinc-400 whitespace-pre-wrap break-words font-sans border-t border-[#1f1f24]"
           style={{ scrollbarWidth: 'thin', scrollbarColor: '#27272a transparent' }}
         >
@@ -178,27 +193,331 @@ function stepSummary(summary) {
     .trim();
 }
 
-// One step the bot took: the tool, what it did, how it went.
-function ToolStep({ call }) {
-  const how = call.trusted
-    ? (call.trusted_by === 'allowed_command' || call.trustedBy === 'allowed_command' ? 'An always-allowed command: ran without asking' : 'Trusted for this bot: ran without asking')
-    : '';
+// ---- a step's details: what it was given, what came back, how it was allowed -----------------
+
+function parseMaybeJson(value) {
+  if (typeof value !== 'string') return value;
+  const text = value.trim();
+  if (!text || !'{["'.includes(text[0])) return value;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return value;
+  }
+}
+
+// A stored result: JSON, cut at the storage limit with "...[trimmed N characters]" when long.
+// A cut one is closed again where it broke off, so long terminal output still reads as output;
+// `trimmed` says how much is missing.
+function parseResult(value) {
+  if (typeof value !== 'string') return { value, trimmed: 0 };
+  const cut = /\n\.\.\.\[trimmed (\d+) characters\]$/.exec(value);
+  if (!cut) return { value: parseMaybeJson(value), trimmed: 0 };
+  const body = value.slice(0, cut.index);
+  for (const start of [body, body.replace(/\\+$/, ''), body.replace(/\\u[0-9a-fA-F]{0,3}$/, '')]) {
+    for (const close of ['"}', '}', '"]}', ']}', '"}}', '}}']) {
+      try {
+        return { value: JSON.parse(start + close), trimmed: Number(cut[1]) };
+      } catch {
+        // try the next way of closing it
+      }
+    }
+  }
+  return { value, trimmed: 0 };
+}
+
+function formatDuration(ms) {
+  if (!Number.isFinite(ms)) return '';
+  if (ms < 1000) return `${ms} ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)} s`;
+  return `${Math.floor(ms / 60000)} min ${Math.round((ms % 60000) / 1000)} s`;
+}
+
+// How the step was allowed to run, in a sentence; '' when it needed nobody's say.
+function approvalText(call) {
+  if (call.trusted) {
+    return call.trusted_by === 'allowed_command' || call.trustedBy === 'allowed_command'
+      ? 'An always-allowed command: ran without asking'
+      : 'Trusted for this bot: ran without asking';
+  }
+  if (call.gate?.outcome === 'auto_approved') return `Auto-approved by the decision model (${call.gate.mode}): ${call.gate.reason}`;
+  if (call.status === 'denied') return 'Denied by you';
+  if (call.status === 'expired') return 'Nobody answered the approval card in time';
+  if (call.gate) return `Approved by you${call.gate.reason ? ` · the decision model said: ${call.gate.reason}` : ''}`;
+  return '';
+}
+
+// Fields the server adds for its own bookkeeping, not what the bot asked for or got back.
+const HIDDEN_ARGUMENTS = new Set(['bot_id', 'thread_id', 'computer_id', 'provider', 'operation']);
+
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false);
   return (
-    <div
-      className="flex items-center gap-2 min-w-0 text-[10.5px] font-mono leading-5"
-      title={[call.status === 'waiting' ? call.waiting : null, call.error || call.summary || call.name, gateTitle(call.gate), how].filter(Boolean).join('\n')}
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        navigator.clipboard?.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        });
+      }}
+      className="flex-shrink-0 p-1 rounded text-zinc-500 hover:text-white hover:bg-[#222226] transition"
+      title="Copy"
     >
-      <FiTool className="flex-shrink-0 text-[10px] text-zinc-600" />
-      <span className="flex-shrink-0 text-zinc-300">{call.name}</span>
-      {call.summary && <span className="min-w-0 truncate text-zinc-500">{stepSummary(call.summary)}</span>}
-      {call.written_as_text && (
-        <span className="flex-shrink-0 text-amber-300/80" title={`The model wrote this call inside its ${call.written_as_text === 'thinking' ? 'thinking' : 'answer text'} instead of making it; Cubicle ran it so the model would not guess the result.`}>
-          from its {call.written_as_text === 'thinking' ? 'thinking' : 'text'}
+      {copied ? <FiCheck className="text-[11px] text-emerald-400" /> : <FiCopy className="text-[11px]" />}
+    </button>
+  );
+}
+
+// One value: short text inline, long or multi-line text as it is written (`block` always so),
+// the rest as JSON.
+function DetailValue({ value, tone = 'text-zinc-300', block = false }) {
+  if (value === null || value === undefined || value === '') return <span className="text-zinc-600">(empty)</span>;
+  const structured = typeof value === 'object';
+  const text = typeof value === 'string' ? value.replace(/\n$/, '') : structured ? JSON.stringify(value, null, 2) : String(value);
+  if (block || structured || text.includes('\n') || text.length > 90) {
+    return (
+      <div className="relative group/val">
+        <pre className={`max-h-60 overflow-auto rounded-md bg-black/30 border border-[#26262b] px-2.5 py-1.5 text-[11px] leading-relaxed whitespace-pre-wrap break-words ${tone}`}>{text}</pre>
+        <span className="absolute top-1 right-1 opacity-0 group-hover/val:opacity-100 transition">
+          <CopyButton text={text} />
         </span>
+      </div>
+    );
+  }
+  return <span className={`break-words ${tone}`}>{text}</span>;
+}
+
+function DetailRows({ values }) {
+  const entries = Object.entries(values || {}).filter(([key]) => !HIDDEN_ARGUMENTS.has(key));
+  if (!entries.length) return <span className="text-zinc-600">(none)</span>;
+  return (
+    <div className="space-y-1">
+      {entries.map(([key, value]) => (
+        <div key={key} className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-2 items-baseline">
+          <span className="text-zinc-500 truncate" title={key}>{key}</span>
+          <DetailValue value={value} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DetailSection({ label, children, right }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[9.5px] uppercase tracking-wider text-zinc-500">{label}</span>
+        {right}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// The highlighter the chat's code blocks use (lib/highlight), a separate chunk fetched the first
+// time it is needed.
+let highlighterPromise = null;
+function loadHighlighter() {
+  if (!highlighterPromise) highlighterPromise = import('../lib/highlight');
+  return highlighterPromise;
+}
+
+// A terminal command as a command line, in shell colours (plain until the highlighter is in).
+function ShellCommand({ command }) {
+  const [html, setHtml] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setHtml(null);
+    loadHighlighter()
+      .then((module) => !cancelled && setHtml(module.highlight(command, 'bash')))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [command]);
+  return (
+    <pre className="max-h-60 overflow-auto rounded-md bg-black/40 border border-[#26262b] px-2.5 py-1.5 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-zinc-100">
+      <span className="text-emerald-400/80 select-none">$ </span>
+      {html !== null ? <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} /> : <code>{command}</code>}
+    </pre>
+  );
+}
+
+// What the bot asked for. A terminal command reads as a command line.
+function StepArguments({ call }) {
+  const args = parseMaybeJson(call.arguments || call.raw_arguments);
+  if (args === null || args === undefined || args === '') return null;
+  // Nothing the bot chose (no arguments, or only bookkeeping): no section.
+  if (typeof args === 'object' && !Array.isArray(args) && !Object.keys(args).some((key) => !HIDDEN_ARGUMENTS.has(key))) return null;
+  if (typeof args !== 'object' || Array.isArray(args)) {
+    return (
+      <DetailSection label="Arguments">
+        <DetailValue value={args} />
+      </DetailSection>
+    );
+  }
+  if (typeof args.command === 'string') {
+    const { command, ...rest } = args;
+    const others = Object.fromEntries(Object.entries(rest).filter(([key]) => !HIDDEN_ARGUMENTS.has(key)));
+    return (
+      <DetailSection label="Command" right={<CopyButton text={command} />}>
+        <ShellCommand command={command} />
+        {Object.keys(others).length > 0 && (
+          <div className="mt-1.5">
+            <DetailRows values={others} />
+          </div>
+        )}
+      </DetailSection>
+    );
+  }
+  return (
+    <DetailSection label="Arguments">
+      <DetailRows values={args} />
+    </DetailSection>
+  );
+}
+
+// What came back. Terminal output shows its exit code, stdout and stderr.
+function StepResult({ call }) {
+  if (call.result_dropped) {
+    return (
+      <DetailSection label="Result">
+        <span className="text-zinc-600">Not kept: this reply&apos;s results were too large to store together.</span>
+      </DetailSection>
+    );
+  }
+  const { value: result, trimmed } = parseResult(call.result);
+  if (result === null || result === undefined || result === '') return null;
+  const trimNote = trimmed > 0 && (
+    <p className="mt-1 font-sans text-[10px] text-zinc-600">Kept up to the storage limit: the last {trimmed.toLocaleString()} characters were not stored.</p>
+  );
+  if (result && typeof result === 'object' && !Array.isArray(result) && ('stdout' in result || 'stderr' in result || 'exit_code' in result)) {
+    const { stdout, stderr, exit_code: exitCode, ...rest } = result;
+    return (
+      <DetailSection
+        label="Output"
+        right={
+          exitCode !== undefined && exitCode !== null ? (
+            <span className={`text-[10px] px-1.5 rounded border ${exitCode === 0 ? 'text-emerald-300 border-emerald-500/30' : 'text-rose-300 border-rose-500/30'}`}>
+              exit {exitCode}
+            </span>
+          ) : null
+        }
+      >
+        <div className="space-y-1.5">
+          {stdout ? <DetailValue value={String(stdout)} block /> : !stderr && <span className="text-zinc-600">(no output)</span>}
+          {stderr && <DetailValue value={String(stderr)} tone="text-rose-200/90" block />}
+          {Object.keys(rest).some((key) => !HIDDEN_ARGUMENTS.has(key)) && <DetailRows values={rest} />}
+        </div>
+        {trimNote}
+      </DetailSection>
+    );
+  }
+  return (
+    <DetailSection label="Result">
+      {result && typeof result === 'object' && !Array.isArray(result) ? <DetailRows values={result} /> : <DetailValue value={result} />}
+      {trimNote}
+    </DetailSection>
+  );
+}
+
+// A small card on hovering a step: the whole description, how it went, how it was allowed.
+// Positioned against the window, so the reply's edges cannot cut it off.
+function StepHoverCard({ call, anchor }) {
+  const rect = anchor.getBoundingClientRect();
+  const below = rect.bottom + 180 < window.innerHeight;
+  const style = {
+    left: Math.max(8, Math.min(rect.left, window.innerWidth - 380)),
+    ...(below ? { top: rect.bottom + 6 } : { bottom: window.innerHeight - rect.top + 6 }),
+  };
+  const how = approvalText(call);
+  return (
+    <div style={style} className="fixed z-50 w-[360px] rounded-xl border border-[#2e2e34] bg-[#16161a]/95 backdrop-blur-md shadow-2xl px-3 py-2.5 text-[11px] font-sans text-zinc-300 pointer-events-none animate-fade-in">
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-zinc-100">{call.name}</span>
+        <span className={`ml-auto font-mono text-[10px] ${TOOL_STATUS_STYLES[call.status] || 'text-zinc-500'}`}>{call.status}</span>
+      </div>
+      {call.summary && <p className="mt-1 leading-relaxed text-zinc-400 break-words">{stepSummary(call.summary)}</p>}
+      {call.status === 'waiting' && call.waiting && <p className="mt-1 text-amber-300/90">{call.waiting}</p>}
+      {call.error && <p className="mt-1 text-rose-300/90 break-words line-clamp-3">{call.error}</p>}
+      {(how || Number.isFinite(call.ran_ms)) && (
+        <p className="mt-1.5 pt-1.5 border-t border-[#26262b] text-[10px] text-zinc-500">
+          {[how, Number.isFinite(call.ran_ms) ? `ran ${formatDuration(call.ran_ms)}` : ''].filter(Boolean).join(' · ')}
+        </p>
       )}
-      <span className={`flex-shrink-0 ml-auto ${TOOL_STATUS_STYLES[call.status] || 'text-zinc-500'}`}>{call.status}</span>
-      {call.gate?.outcome === 'auto_approved' && <FiZap className="flex-shrink-0 text-[10px] text-emerald-400" aria-label="auto-approved" />}
-      {call.trusted && <FiShield className="flex-shrink-0 text-[10px] text-emerald-400" aria-label="trusted" />}
+      <p className="mt-1 text-[10px] text-zinc-600">Click for the full details</p>
+    </div>
+  );
+}
+
+// One step the bot took: the tool, what it did, how it went. Click to fold out what it
+// was given and what came back.
+function ToolStep({ call }) {
+  const [open, setOpen] = useState(false);
+  const [hover, setHover] = useState(null); // the row, while hovered long enough
+  const timer = useRef(null);
+  const rowRef = useRef(null);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const how = approvalText(call);
+  return (
+    <div className="min-w-0">
+      <button
+        ref={rowRef}
+        type="button"
+        onClick={() => {
+          setOpen((v) => !v);
+          setHover(null);
+        }}
+        onMouseEnter={() => {
+          clearTimeout(timer.current);
+          timer.current = setTimeout(() => setHover(rowRef.current), 350);
+        }}
+        onMouseLeave={() => {
+          clearTimeout(timer.current);
+          setHover(null);
+        }}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2 min-w-0 -mx-1 px-1 rounded text-left text-[10.5px] font-mono leading-5 hover:bg-[#1a1a1e] transition"
+      >
+        <FiChevronRight className={`flex-shrink-0 text-[10px] text-zinc-600 transition-transform ${open ? 'rotate-90' : ''}`} />
+        <span className="flex-shrink-0 text-zinc-300">{call.name}</span>
+        {call.summary && <span className="min-w-0 truncate text-zinc-500">{stepSummary(call.summary)}</span>}
+        {call.written_as_text && (
+          <span className="flex-shrink-0 text-amber-300/80">from its {call.written_as_text === 'thinking' ? 'thinking' : 'text'}</span>
+        )}
+        <span className={`flex-shrink-0 ml-auto ${TOOL_STATUS_STYLES[call.status] || 'text-zinc-500'}`}>{call.status}</span>
+        {call.gate?.outcome === 'auto_approved' && <FiZap className="flex-shrink-0 text-[10px] text-emerald-400" aria-label="auto-approved" />}
+        {call.trusted && <FiShield className="flex-shrink-0 text-[10px] text-emerald-400" aria-label="trusted" />}
+      </button>
+      {hover && !open && <StepHoverCard call={call} anchor={hover} />}
+      {open && (
+        <div className="mt-1 mb-2 ml-4 space-y-2.5 rounded-lg border border-[#26262b] bg-[#0e0e10] px-3 py-2.5 text-[11px] font-mono cursor-text">
+          {call.status === 'waiting' && call.waiting && <p className="font-sans text-amber-300/90">{call.waiting}</p>}
+          <StepArguments call={call} />
+          {call.error && (
+            <DetailSection label="Error">
+              <DetailValue value={call.error} tone="text-rose-300" />
+            </DetailSection>
+          )}
+          <StepResult call={call} />
+          {(how || Number.isFinite(call.ran_ms) || call.called_as || call.written_as_text) && (
+            <p className="pt-2 border-t border-[#1f1f24] font-sans text-[10px] text-zinc-500 leading-relaxed">
+              {[
+                how,
+                Number.isFinite(call.ran_ms) ? `Ran ${formatDuration(call.ran_ms)}` : '',
+                call.called_as ? `The model called it ${call.called_as}` : '',
+                call.written_as_text
+                  ? `The model wrote this call in its ${call.written_as_text === 'thinking' ? 'thinking' : 'answer text'} instead of making it; Cubicle ran it so it would not guess the result`
+                  : '',
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -228,35 +547,58 @@ function ToolSteps({ calls }) {
   );
 }
 
-// The reply in the order it happened: text, the steps taken, more text.
-// Each call carries `at`, how much of the reply text came before it; calls
-// with nothing written between them share one block.
-function InlineReply({ text, calls }) {
-  const ordered = calls
-    .map((call, index) => ({ call, index, at: Math.max(0, Math.min(text.length, Number(call.at) || 0)) }))
-    .sort((a, b) => a.at - b.at || a.index - b.index);
+// A reply's thinking, one entry per round that thought: {at, after, text}. `parts` are the
+// stored (or live) reasoning_parts, each {at, after, start} into the whole `reasoning`; a
+// reply stored before those were kept has one part, at the top.
+function splitThoughts(reasoning, parts) {
+  if (!reasoning) return [];
+  if (!Array.isArray(parts) || !parts.length) return [{ at: 0, after: 0, text: reasoning }];
+  return parts
+    .map((part, index) => ({
+      at: Number(part.at) || 0,
+      after: Number(part.after) || 0,
+      text: reasoning.slice(part.start || 0, index + 1 < parts.length ? parts[index + 1].start : reasoning.length),
+    }))
+    .filter((thought) => thought.text.trim());
+}
+
+// The reply in the order it happened: thinking, text, the steps taken, more
+// thinking, more text. Each call and each round's thinking carries `at`, how
+// much of the reply text came before it; at the same place, a round's thinking
+// comes after the calls before it (`after` counts them). Calls with nothing
+// written between them share one block.
+function InlineReply({ text, calls, thoughts, isStreaming, level }) {
+  const clamp = (at) => Math.max(0, Math.min(text.length, Number(at) || 0));
+  const ordered = [
+    ...calls.map((call, index) => ({ kind: 'call', call, at: clamp(call.at), order: 2 * index + 1, tie: index })),
+    ...thoughts.map((thought, index) => ({ kind: 'thought', thought, index, at: clamp(thought.at), order: 2 * thought.after, tie: index })),
+  ].sort((a, b) => a.at - b.at || a.order - b.order || a.tie - b.tie);
   const parts = [];
   let position = 0;
-  for (const { call, at } of ordered) {
-    const between = text.slice(position, at);
+  ordered.forEach((item, index) => {
+    const between = text.slice(position, item.at);
+    if (between.trim()) parts.push({ kind: 'text', text: between });
+    position = Math.max(position, item.at);
     const last = parts[parts.length - 1];
-    if (between.trim()) {
-      parts.push({ kind: 'text', text: between });
-      parts.push({ kind: 'steps', calls: [call] });
-    } else if (last && last.kind === 'steps') {
-      last.calls.push(call);
+    if (item.kind === 'thought') {
+      // Live while the model is still on it: nothing written or called after it yet.
+      const live = isStreaming && index === ordered.length - 1 && !text.slice(item.at).trim();
+      parts.push({ kind: 'thought', thought: item.thought, first: item.index === 0, live });
+    } else if (last && last.kind === 'steps' && !between.trim()) {
+      last.calls.push(item.call);
     } else {
-      parts.push({ kind: 'steps', calls: [call] });
+      parts.push({ kind: 'steps', calls: [item.call] });
     }
-    position = Math.max(position, at);
-  }
+  });
   const rest = text.slice(position);
   if (rest.trim()) parts.push({ kind: 'text', text: rest });
   return (
     <>
-      {parts.map((part, index) =>
-        part.kind === 'text' ? <BotText key={`t${index}`} text={part.text} /> : <ToolSteps key={`s${index}`} calls={part.calls} />
-      )}
+      {parts.map((part, index) => {
+        if (part.kind === 'text') return <BotText key={`t${index}`} text={part.text} />;
+        if (part.kind === 'steps') return <ToolSteps key={`s${index}`} calls={part.calls} />;
+        return <ThinkingBlock key={`r${index}`} reasoning={part.thought.text} live={part.live} level={part.first ? level : null} />;
+      })}
     </>
   );
 }
@@ -276,6 +618,9 @@ function MessageItem({ message, botId, onEdit }) {
   // Calls that know where in the reply they came are drawn there; older
   // messages (stored before positions were kept) list them on top.
   const placed = toolCalls.length > 0 && toolCalls.every((call) => Number.isFinite(call.at));
+  // The thinking, one block per round, placed in the reply like the calls.
+  const thoughts = splitThoughts(reasoning, message.reasoningParts || message.raw_payload?.reasoning_parts);
+  const thinkingLevel = message.thinking || message.raw_payload?.thinking;
   const attachments = message.attachments || message.raw_payload?.attachments || [];
   const usage = message.usage || message.raw_payload?.usage || null;
 
@@ -469,16 +814,24 @@ function MessageItem({ message, botId, onEdit }) {
             {message.waiting.limit > 0 ? ` · ${message.waiting.limit} run at a time` : ''}
           </div>
         )}
-        {reasoning && (
-          <ThinkingBlock
-            reasoning={reasoning}
-            answerStarted={Boolean(message.text)}
+        {placed || toolCalls.length === 0 ? (
+          <InlineReply
+            text={message.text || ''}
+            calls={toolCalls}
+            thoughts={thoughts}
             isStreaming={Boolean(message.isStreaming)}
-            level={message.thinking || message.raw_payload?.thinking}
+            level={thinkingLevel}
           />
+        ) : (
+          <>
+            {/* Stored before calls kept their place: the thinking and the calls on top. */}
+            {thoughts.map((thought, index) => (
+              <ThinkingBlock key={index} reasoning={thought.text} live={false} level={index === 0 ? thinkingLevel : null} />
+            ))}
+            <ToolCallList calls={toolCalls} />
+            <BotText text={message.text} />
+          </>
         )}
-        {toolCalls.length > 0 && !placed && <ToolCallList calls={toolCalls} />}
-        {placed ? <InlineReply text={message.text || ''} calls={toolCalls} /> : <BotText text={message.text} />}
         {attachments.length > 0 && (
           <div className="mt-3 space-y-2">
             {attachments.map((attachment) => (
