@@ -190,7 +190,7 @@ class ChatStreamRouteTests(unittest.TestCase):
         self.assertEqual(saved[-1]["text"], "Hello there")
         # Thinking is kept for display but stays out of `text`, which is what
         # gets replayed to the model on the next turn.
-        self.assertEqual(saved[-1]["raw_payload"], {"reasoning": "Considering the question."})
+        self.assertEqual(saved[-1]["raw_payload"], {"reasoning": "Considering the question.", "reasoning_parts": [{"at": 0, "after": 0, "start": 0}]})
         self.assertNotIn("Considering", saved[-1]["text"])
 
     def test_unknown_threads_are_not_found_and_a_request_model_overrides_the_bots(self):

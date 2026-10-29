@@ -633,6 +633,19 @@ def _resolve_calls(raw_calls: List[Dict[str, Any]], tool_specs: List[Any], calla
     return calls
 
 
+def _reasoning_parts(reasoning: str, marks: List[tuple]) -> List[Dict[str, int]]:
+    """Each round's thinking as {at, after, start}: the reply text before it, the tool calls
+    before it, and where it starts in `reasoning` (it runs to the next part's start). Rounds
+    that did not think are left out."""
+    parts: List[Dict[str, int]] = []
+    for index, (at, after, start) in enumerate(marks):
+        start = min(start, len(reasoning))
+        end = min(marks[index + 1][2], len(reasoning)) if index + 1 < len(marks) else len(reasoning)
+        if reasoning[start:max(start, end)].strip():
+            parts.append({"at": at, "after": after, "start": start})
+    return parts
+
+
 def _reply_text(pieces: List[str]) -> str:
     """The stored reply: each round's text, separated by a blank line."""
     return "\n\n".join(piece.strip("\n") for piece in pieces if piece.strip())
@@ -1078,6 +1091,10 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         # Thinking is shown to the user and kept with the message for display,
         # but it is never part of `text`, so it is not replayed to the model.
         accumulated_reasoning = ""
+        # Where each round's thinking begins, so the chat shows it in its place in the reply
+        # rather than all at the top: (reply text before it, tool calls before it, its start
+        # in accumulated_reasoning).
+        reasoning_marks: List[tuple] = []
         tool_records: List[Dict[str, Any]] = []
         # Files the bot handed to the user this turn (download cards).
         attachments: List[Dict[str, Any]] = []
@@ -1273,6 +1290,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                 # invent its result. Stop the stream right after it and run it instead.
                 call_watch = stray_calls.CallWatch() if round_tools else None
                 reasoning_at_start = len(accumulated_reasoning)
+                reasoning_marks.append((len(_reply_text(text_pieces)), len(tool_records), reasoning_at_start))
                 stray_cut = False
                 async for event in round_stream:
                     if event["type"] == "content.delta":
@@ -1556,6 +1574,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         raw_payload: Dict[str, Any] = {}
         if accumulated_reasoning:
             raw_payload["reasoning"] = accumulated_reasoning
+            raw_payload["reasoning_parts"] = _reasoning_parts(accumulated_reasoning, reasoning_marks)
         if tool_records:
             cap_message_results(tool_records)
             raw_payload["tool_calls"] = tool_records

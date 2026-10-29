@@ -29,21 +29,35 @@ function formatMsgTime(createdAt) {
   return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
-// Collapsible "Thinking" block shown above an assistant reply. While the model
-// is still thinking (no answer text yet) it stays open and follows the stream;
-// once the answer starts it collapses unless the user has opened it.
-function ThinkingBlock({ reasoning, answerStarted, isStreaming, level }) {
+// Within this many pixels of the bottom, a live thinking block follows the stream.
+const FOLLOW_SLACK_PX = 24;
+
+// Collapsible "Thinking" block: one round's thinking, where it came in the reply.
+// While the model is still thinking (nothing after it yet) it stays open and
+// follows the stream, as long as the reader is at its bottom: scrolling up to
+// read stops the following, scrolling back down resumes it. Once the round goes
+// on (text or a tool call) it collapses unless the user has opened it.
+function ThinkingBlock({ reasoning, live, level }) {
   const [userToggled, setUserToggled] = useState(null);
   const bodyRef = useRef(null);
+  const followRef = useRef(true);
 
-  const liveThinking = isStreaming && !answerStarted;
+  const liveThinking = Boolean(live);
   const open = userToggled !== null ? userToggled : liveThinking;
 
   useEffect(() => {
-    if (open && liveThinking && bodyRef.current) {
-      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    if (open) followRef.current = true; // opening starts at the newest
+  }, [open]);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (open && liveThinking && el && followRef.current) {
+      el.scrollTop = el.scrollHeight;
     }
   }, [reasoning, open, liveThinking]);
+  const onScroll = () => {
+    const el = bodyRef.current;
+    if (el) followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLACK_PX;
+  };
 
   const words = reasoning.trim() ? reasoning.trim().split(/\s+/).length : 0;
   const label = liveThinking ? 'Thinking…' : 'Thinking';
@@ -69,6 +83,7 @@ function ThinkingBlock({ reasoning, answerStarted, isStreaming, level }) {
       {open && (
         <div
           ref={bodyRef}
+          onScroll={onScroll}
           className="px-3.5 pb-3 pt-1 max-h-64 overflow-y-auto text-[11px] leading-relaxed text-zinc-400 whitespace-pre-wrap break-words font-sans border-t border-[#1f1f24]"
           style={{ scrollbarWidth: 'thin', scrollbarColor: '#27272a transparent' }}
         >
@@ -228,35 +243,58 @@ function ToolSteps({ calls }) {
   );
 }
 
-// The reply in the order it happened: text, the steps taken, more text.
-// Each call carries `at`, how much of the reply text came before it; calls
-// with nothing written between them share one block.
-function InlineReply({ text, calls }) {
-  const ordered = calls
-    .map((call, index) => ({ call, index, at: Math.max(0, Math.min(text.length, Number(call.at) || 0)) }))
-    .sort((a, b) => a.at - b.at || a.index - b.index);
+// A reply's thinking, one entry per round that thought: {at, after, text}. `parts` are the
+// stored (or live) reasoning_parts, each {at, after, start} into the whole `reasoning`; a
+// reply stored before those were kept has one part, at the top.
+function splitThoughts(reasoning, parts) {
+  if (!reasoning) return [];
+  if (!Array.isArray(parts) || !parts.length) return [{ at: 0, after: 0, text: reasoning }];
+  return parts
+    .map((part, index) => ({
+      at: Number(part.at) || 0,
+      after: Number(part.after) || 0,
+      text: reasoning.slice(part.start || 0, index + 1 < parts.length ? parts[index + 1].start : reasoning.length),
+    }))
+    .filter((thought) => thought.text.trim());
+}
+
+// The reply in the order it happened: thinking, text, the steps taken, more
+// thinking, more text. Each call and each round's thinking carries `at`, how
+// much of the reply text came before it; at the same place, a round's thinking
+// comes after the calls before it (`after` counts them). Calls with nothing
+// written between them share one block.
+function InlineReply({ text, calls, thoughts, isStreaming, level }) {
+  const clamp = (at) => Math.max(0, Math.min(text.length, Number(at) || 0));
+  const ordered = [
+    ...calls.map((call, index) => ({ kind: 'call', call, at: clamp(call.at), order: 2 * index + 1, tie: index })),
+    ...thoughts.map((thought, index) => ({ kind: 'thought', thought, index, at: clamp(thought.at), order: 2 * thought.after, tie: index })),
+  ].sort((a, b) => a.at - b.at || a.order - b.order || a.tie - b.tie);
   const parts = [];
   let position = 0;
-  for (const { call, at } of ordered) {
-    const between = text.slice(position, at);
+  ordered.forEach((item, index) => {
+    const between = text.slice(position, item.at);
+    if (between.trim()) parts.push({ kind: 'text', text: between });
+    position = Math.max(position, item.at);
     const last = parts[parts.length - 1];
-    if (between.trim()) {
-      parts.push({ kind: 'text', text: between });
-      parts.push({ kind: 'steps', calls: [call] });
-    } else if (last && last.kind === 'steps') {
-      last.calls.push(call);
+    if (item.kind === 'thought') {
+      // Live while the model is still on it: nothing written or called after it yet.
+      const live = isStreaming && index === ordered.length - 1 && !text.slice(item.at).trim();
+      parts.push({ kind: 'thought', thought: item.thought, first: item.index === 0, live });
+    } else if (last && last.kind === 'steps' && !between.trim()) {
+      last.calls.push(item.call);
     } else {
-      parts.push({ kind: 'steps', calls: [call] });
+      parts.push({ kind: 'steps', calls: [item.call] });
     }
-    position = Math.max(position, at);
-  }
+  });
   const rest = text.slice(position);
   if (rest.trim()) parts.push({ kind: 'text', text: rest });
   return (
     <>
-      {parts.map((part, index) =>
-        part.kind === 'text' ? <BotText key={`t${index}`} text={part.text} /> : <ToolSteps key={`s${index}`} calls={part.calls} />
-      )}
+      {parts.map((part, index) => {
+        if (part.kind === 'text') return <BotText key={`t${index}`} text={part.text} />;
+        if (part.kind === 'steps') return <ToolSteps key={`s${index}`} calls={part.calls} />;
+        return <ThinkingBlock key={`r${index}`} reasoning={part.thought.text} live={part.live} level={part.first ? level : null} />;
+      })}
     </>
   );
 }
@@ -276,6 +314,9 @@ function MessageItem({ message, botId, onEdit }) {
   // Calls that know where in the reply they came are drawn there; older
   // messages (stored before positions were kept) list them on top.
   const placed = toolCalls.length > 0 && toolCalls.every((call) => Number.isFinite(call.at));
+  // The thinking, one block per round, placed in the reply like the calls.
+  const thoughts = splitThoughts(reasoning, message.reasoningParts || message.raw_payload?.reasoning_parts);
+  const thinkingLevel = message.thinking || message.raw_payload?.thinking;
   const attachments = message.attachments || message.raw_payload?.attachments || [];
   const usage = message.usage || message.raw_payload?.usage || null;
 
@@ -469,16 +510,24 @@ function MessageItem({ message, botId, onEdit }) {
             {message.waiting.limit > 0 ? ` · ${message.waiting.limit} run at a time` : ''}
           </div>
         )}
-        {reasoning && (
-          <ThinkingBlock
-            reasoning={reasoning}
-            answerStarted={Boolean(message.text)}
+        {placed || toolCalls.length === 0 ? (
+          <InlineReply
+            text={message.text || ''}
+            calls={toolCalls}
+            thoughts={thoughts}
             isStreaming={Boolean(message.isStreaming)}
-            level={message.thinking || message.raw_payload?.thinking}
+            level={thinkingLevel}
           />
+        ) : (
+          <>
+            {/* Stored before calls kept their place: the thinking and the calls on top. */}
+            {thoughts.map((thought, index) => (
+              <ThinkingBlock key={index} reasoning={thought.text} live={false} level={index === 0 ? thinkingLevel : null} />
+            ))}
+            <ToolCallList calls={toolCalls} />
+            <BotText text={message.text} />
+          </>
         )}
-        {toolCalls.length > 0 && !placed && <ToolCallList calls={toolCalls} />}
-        {placed ? <InlineReply text={message.text || ''} calls={toolCalls} /> : <BotText text={message.text} />}
         {attachments.length > 0 && (
           <div className="mt-3 space-y-2">
             {attachments.map((attachment) => (

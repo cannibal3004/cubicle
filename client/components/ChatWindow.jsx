@@ -319,11 +319,18 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
       pendingDeltas.text = '';
       pendingDeltas.reasoning = '';
       updateMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === streamingMsgId
-            ? { ...msg, text: msg.text + text, reasoning: (msg.reasoning || '') + reasoning }
-            : msg
-        )
+        prev.map((msg) => {
+          if (msg.id !== streamingMsgId) return msg;
+          // Thinking that resumes after new text or tool calls (the next round) starts a part
+          // of its own, shown where it began, as the stored reply's reasoning_parts are.
+          let parts = msg.reasoningParts || [];
+          const last = parts[parts.length - 1];
+          const calls = (msg.toolCalls || []).length;
+          if (reasoning && (!last || msg.text.length > last.at || calls > last.after)) {
+            parts = [...parts, { at: msg.text.length, after: calls, start: (msg.reasoning || '').length }];
+          }
+          return { ...msg, text: msg.text + text, reasoning: (msg.reasoning || '') + reasoning, reasoningParts: parts };
+        })
       );
     };
     const queueDelta = (field, delta) => {
