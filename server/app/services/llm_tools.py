@@ -343,7 +343,8 @@ PROJECT_TOOLS: List[ToolSpec] = [
         description=(
             f"Replace your work notes (at most {settings.BOT_WORK_NOTES_MAX_CHARS} characters): where the work stands now, what is decided, "
             "what is next and what is blocked, as someone picking the work up would need it first. Keep them current, not cumulative: what "
-            "happened along the way goes to project_log, durable facts about your job to your notes (memory_edit). Use work_notes_edit for "
+            "happened along the way goes to project_log, reference detail (inventories, configs, long write-ups) to files in the project's "
+            "folder that the work notes point to, durable facts about your job to your notes (memory_edit). Use work_notes_edit for "
             "smaller changes."
         ),
         parameters=_obj({"text": {"type": "string", "description": "The complete new work notes"}, "project": _PROJECT_ARG}, ["text"]),

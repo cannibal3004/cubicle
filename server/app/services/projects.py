@@ -66,8 +66,8 @@ def clean_work_notes(text: Any) -> str:
     if len(cleaned) > WORK_NOTES_MAX_CHARS:
         raise ProjectError(
             f"Work notes are limited to {WORK_NOTES_MAX_CHARS} characters; this would make them {len(cleaned)}. They say where the work "
-            "stands now: move what happened along the way to the project log (project_log), and durable facts about your job to your "
-            "notes (memory_edit), then try again."
+            "stands now: move what happened along the way to the project log (project_log), and reference detail (inventories, configs, "
+            "long write-ups) to a file in the project's folder that the work notes point to, then try again."
         )
     return cleaned
 
