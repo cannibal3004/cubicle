@@ -14,13 +14,43 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Set
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Iterable, Iterator, List, Optional, Set
 
 
 def _iso(timestamp: Optional[float]) -> Optional[str]:
     if timestamp is None:
         return None
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
+
+
+# The model streams a token per event, so a long reply buffers tens of thousands of them.
+# A replay sends each run of them as one event (with the run's last seq, so a resume
+# continues after it): the same text, without one event per token over the wire.
+DELTA_TYPES = ("content.delta", "reasoning.delta")
+MERGED_DELTA_MAX_CHARS = 64_000
+
+
+def merged_deltas(events: Iterable[Dict[str, Any]]) -> Iterator[Dict[str, Any]]:
+    run: Optional[Dict[str, Any]] = None
+    pieces: List[str] = []
+    size = 0
+    for event in events:
+        if run is not None and (
+            event.get("type") != run["type"] or event.get("botMsgId") != run.get("botMsgId") or size >= MERGED_DELTA_MAX_CHARS
+        ):
+            yield {**run, "delta": "".join(pieces)}
+            run = None
+        if event.get("type") not in DELTA_TYPES:
+            yield event
+            continue
+        if run is None:
+            pieces, size = [], 0
+        run = event
+        delta = str(event.get("delta") or "")
+        pieces.append(delta)
+        size += len(delta)
+    if run is not None:
+        yield {**run, "delta": "".join(pieces)}
 
 
 class TurnBusyError(RuntimeError):
@@ -98,10 +128,9 @@ class Turn:
         try:
             last = max(0, int(after or 0))
             # Register first, replay second, so nothing emitted in between is lost.
-            for event in list(self.events):
-                if event["seq"] > last:
-                    last = event["seq"]
-                    yield event
+            for event in merged_deltas(e for e in list(self.events) if e["seq"] > last):
+                last = event["seq"]
+                yield event
             if self.finished:
                 return
             while True:

@@ -50,6 +50,41 @@ class TurnManagerTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_a_replay_sends_each_run_of_tokens_as_one_event(self):
+        async def scenario():
+            manager = TurnManager()
+
+            async def runner(turn):
+                turn.emit({"type": "turn.started", "botMsgId": "m"})
+                for word in ("Let ", "me ", "check."):
+                    turn.emit({"type": "reasoning.delta", "botMsgId": "m", "delta": word})
+                turn.emit({"type": "tool.started", "botMsgId": "m", "callId": "c1"})
+                for word in ("All ", "good."):
+                    turn.emit({"type": "content.delta", "botMsgId": "m", "delta": word})
+                turn.emit({"type": "reasoning.delta", "botMsgId": "m", "delta": "Done."})
+                turn.emit({"type": "turn.completed", "botMsgId": "m"})
+
+            turn = manager.start("thread-1", "bot-1", "model-x", runner)
+            await asyncio.wait_for(turn.task, 2)
+            events = await _collect(turn)
+            self.assertEqual(
+                [(e["type"], e.get("delta"), e["seq"]) for e in events],
+                [
+                    ("turn.started", None, 1),
+                    ("reasoning.delta", "Let me check.", 4),
+                    ("tool.started", None, 5),
+                    ("content.delta", "All good.", 7),
+                    ("reasoning.delta", "Done.", 8),
+                    ("turn.completed", None, 9),
+                ],
+            )
+            # Resuming after a merged run continues with what followed it.
+            self.assertEqual([e["seq"] for e in await _collect(turn, after=4)], [5, 7, 8, 9])
+            # Mid-run: the rest of the run, merged.
+            self.assertEqual([(e.get("delta"), e["seq"]) for e in (await _collect(turn, after=2))[:1]], [("me check.", 4)])
+
+        asyncio.run(scenario())
+
     def test_one_running_turn_per_thread(self):
         async def scenario():
             manager = TurnManager()
