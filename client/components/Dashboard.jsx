@@ -7,7 +7,8 @@ import ComputerPanel from './ComputerPanel';
 import Marketplace from './Marketplace';
 import AuditPanel from './AuditPanel';
 import SettingsPage from './SettingsPage';
-import BotEditorModal, { ConfirmDialog } from './BotEditorModal';
+import BotSettingsPage from './BotSettingsPage';
+import ConfirmDialog from './ConfirmDialog';
 
 import {
   fetchBot,
@@ -57,7 +58,7 @@ export default function Dashboard() {
   // The signed-in account (id, username, role), from the session check.
   const [currentUser, setCurrentUser] = useState(null);
   const [activeBotId, setActiveBotId] = useState('');
-  const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'computer' | 'marketplace' | 'audit' | 'settings'
+  const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'computer' | 'marketplace' | 'audit' | 'settings' | 'bot'
   // Transcripts are cached per bot so a reply that is still streaming for
   // one bot survives switching to another bot or another tab.
   // Messages and streaming are kept per conversation (thread id; a bot's
@@ -139,8 +140,26 @@ export default function Dashboard() {
     setComputerView({ tab, maximize, nonce: Date.now() });
     setActiveTab('computer');
   };
-  // Bot editor: null, { mode: 'create' } or { mode: 'edit', bot }.
-  const [botEditor, setBotEditor] = useState(null);
+  // The bot settings page: null, or { mode: 'create' | 'edit', botId, section: {id, nonce} }. It stays
+  // mounted (hidden) while another view is shown, so unsaved edits wait for you.
+  const [botPage, setBotPage] = useState(null);
+  const [botPageDirty, setBotPageDirty] = useState(false);
+  // Another bot asked for while the page has unsaved edits: opened once those are discarded.
+  const [pendingBotPage, setPendingBotPage] = useState(null);
+  const openBotPage = (bot, sectionId) => {
+    const next = { mode: bot ? 'edit' : 'create', botId: bot?.id || null, section: { id: sectionId || 'general', nonce: Date.now() } };
+    if (botPage && botPageDirty && (botPage.mode !== next.mode || botPage.botId !== next.botId)) {
+      setPendingBotPage(next);
+      return;
+    }
+    setBotPage(next);
+    setActiveTab('bot');
+  };
+  const closeBotPage = () => {
+    setBotPage(null);
+    setBotPageDirty(false);
+    setActiveTab((tab) => (tab === 'bot' ? 'chat' : tab));
+  };
   const [botToDelete, setBotToDelete] = useState(null);
   const [botToLeave, setBotToLeave] = useState(null);
   const [defaultModel, setDefaultModel] = useState('');
@@ -382,7 +401,7 @@ export default function Dashboard() {
     rememberThread(bot.id, created.id);
     setActiveBotId(bot.id);
     setActiveTab('chat');
-    setBotEditor(null);
+    closeBotPage();
   };
 
   // ---- projects --------------------------------------------------------------------------
@@ -437,6 +456,12 @@ export default function Dashboard() {
   };
 
   const activeBot = bots.find((b) => b.id === activeBotId) || bots[0];
+  // The bot the settings page edits, live; when it goes (deleted, left elsewhere) the page closes.
+  const pageBot = botPage?.mode === 'edit' ? bots.find((b) => b.id === botPage.botId) : null;
+  useEffect(() => {
+    if (botPage?.mode === 'edit' && !pageBot) closeBotPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [botPage, pageBot]);
 
   conversationsRef.current = conversationsByBot;
 
@@ -468,18 +493,18 @@ export default function Dashboard() {
     return updated;
   };
 
-  const handleSaveBot = async (values) => {
-    if (botEditor?.mode === 'edit' && botEditor.bot) {
-      const updated = await updateBot(botEditor.bot.id, values);
+  // The settings page stays open after a save; a new bot becomes the page's bot, on the same section.
+  const handleSaveBot = async (values, sectionId) => {
+    if (botPage?.mode === 'edit' && botPage.botId) {
+      const updated = await updateBot(botPage.botId, values);
       setBots((prev) => prev.map((b) => (b.id === updated.id ? updated : b)));
       if (updated.id === activeBotId && values.model) setDefaultModel(values.model);
     } else {
       const created = await createBot(values);
       setBots((prev) => [...prev, created]);
       setActiveBotId(created.id);
-      setActiveTab('chat');
+      setBotPage({ mode: 'edit', botId: created.id, section: { id: sectionId || 'general', nonce: Date.now() } });
     }
-    setBotEditor(null);
   };
 
   const handleArchiveBot = async (bot, archived) => {
@@ -490,7 +515,7 @@ export default function Dashboard() {
       return list;
     });
     if (!archived) setActiveBotId(bot.id);
-    setBotEditor(null);
+    if (botPage?.botId === bot.id) closeBotPage();
   };
 
   const handleDeleteBot = async (bot) => {
@@ -524,7 +549,7 @@ export default function Dashboard() {
     });
     setBotToDelete(null);
     setBotToLeave(null);
-    setBotEditor(null);
+    if (botPage?.botId === bot.id) closeBotPage();
   };
 
   if (authState === 'login' || authState === 'setup') {
@@ -577,8 +602,8 @@ export default function Dashboard() {
         onArchiveProject={(p, archived) => handleArchiveProject(p, archived).catch((err) => console.error('Archive failed:', err))}
         onDeleteProject={(p) => handleDeleteProject(p).catch((err) => window.alert(err.message || 'Could not delete the project.'))}
         onOpenSettings={() => setActiveTab((tab) => (tab === 'settings' ? 'chat' : 'settings'))}
-        onOpenNewBot={() => setBotEditor({ mode: 'create' })}
-        onEditBot={(bot) => setBotEditor({ mode: 'edit', bot })}
+        onOpenNewBot={() => openBotPage(null)}
+        onEditBot={(bot) => openBotPage(bot)}
         onArchiveBot={(bot, archived) => handleArchiveBot(bot, archived).catch((err) => console.error('Archive failed:', err))}
         onDeleteBot={(bot) => setBotToDelete(bot)}
         onLeaveBot={(bot) => setBotToLeave(bot)}
@@ -638,7 +663,7 @@ export default function Dashboard() {
             onStreamingChange={handleStreamingChange}
             turnStates={turnStates}
             onUpdateBotModel={handleUpdateBotModel}
-            onEditBot={() => activeBot && setBotEditor({ mode: 'edit', bot: activeBot })}
+            onEditBot={(sectionId) => activeBot && openBotPage(activeBot, sectionId)}
             onUpdateBot={handleUpdateBot}
             onBotPatched={(botId, patch) => setBots((prev) => prev.map((b) => (b.id === botId ? { ...b, ...patch } : b)))}
             onBotsChanged={adoptNewBots}
@@ -679,21 +704,47 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'audit' && <AuditPanel />}
+
+        {/* The bot settings page: a view like Settings, kept mounted while hidden so a draft survives a visit to the chat. */}
+        {botPage && (botPage.mode === 'create' || pageBot) && (
+          <div className={activeTab === 'bot' ? 'contents' : 'hidden'}>
+            <BotSettingsPage
+              key={botPage.botId || 'new'}
+              bot={botPage.mode === 'edit' ? pageBot : null}
+              sectionRequest={botPage.section}
+              models={models}
+              catalogError={catalogError}
+              onRefreshModels={refreshModels}
+              defaultModel={defaultModel}
+              onClose={closeBotPage}
+              onSave={handleSaveBot}
+              onArchive={handleArchiveBot}
+              onDelete={handleDeleteBot}
+              onLeave={(bot) => setBotToLeave(bot)}
+              onSortNotes={(bot) => handleSortNotes(bot).catch((err) => window.alert(err.message || 'Could not start the conversation.'))}
+              onDirtyChange={setBotPageDirty}
+            />
+          </div>
+        )}
       </main>
 
-      {botEditor && (
-        <BotEditorModal
-          bot={botEditor.mode === 'edit' ? bots.find((b) => b.id === botEditor.bot.id) || botEditor.bot : null}
-          models={models}
-          catalogError={catalogError}
-          onRefreshModels={refreshModels}
-          defaultModel={defaultModel}
-          onClose={() => setBotEditor(null)}
-          onSave={handleSaveBot}
-          onArchive={handleArchiveBot}
-          onDelete={handleDeleteBot}
-          onLeave={(bot) => setBotToLeave(bot)}
-          onSortNotes={(bot) => handleSortNotes(bot).catch((err) => window.alert(err.message || 'Could not start the conversation.'))}
+      {pendingBotPage && (
+        <ConfirmDialog
+          title="Discard unsaved changes?"
+          body={`Your changes to ${pageBot?.name || 'the new bot'} are not saved. Open the settings of ${
+            pendingBotPage.botId ? bots.find((b) => b.id === pendingBotPage.botId)?.name || 'the other bot' : 'a new bot'
+          } anyway?`}
+          confirmLabel="Discard"
+          onCancel={() => {
+            setPendingBotPage(null);
+            setActiveTab('bot');
+          }}
+          onConfirm={() => {
+            setBotPage(pendingBotPage);
+            setBotPageDirty(false);
+            setPendingBotPage(null);
+            setActiveTab('bot');
+          }}
         />
       )}
 

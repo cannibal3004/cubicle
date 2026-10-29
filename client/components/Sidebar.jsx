@@ -67,7 +67,7 @@ function BotMenu({ bot, onEdit, onArchive, onDelete, onLeave, onOpenChange }) {
       {open && (
         <div className="absolute right-0 top-7 z-30 w-40 bg-[#1a1a1e] border border-[#2c2c31] rounded-lg shadow-xl p-1">
           <button type="button" className={`${item} text-zinc-200 hover:bg-[#26262b]`} onClick={() => { setOpen(false); onEdit(bot); }}>
-            <FiEdit2 /> Edit
+            <FiSettings /> Settings
           </button>
           {bot.shared ? (
             <button type="button" className={`${item} text-rose-400 hover:bg-rose-500/10`} onClick={() => { setOpen(false); onLeave?.(bot); }}>

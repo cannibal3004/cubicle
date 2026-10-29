@@ -26,7 +26,7 @@ export function Switch({ on, onChange, disabled = false, label }) {
   );
 }
 
-const AUTO_APPROVAL_CHOICES = [
+export const AUTO_APPROVAL_CHOICES = [
   { value: 'inherit', label: 'App setting' },
   { value: 'off', label: 'Off' },
   { value: 'shadow', label: 'Shadow' },
