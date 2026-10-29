@@ -180,6 +180,27 @@ class ProjectTests(chat_harness.ChatStreamRouteTests):
             asyncio.run(projects_router.open_project_folder(made["id"]))
         self.assertTrue((root / "projects" / "proxy-decommission").is_dir())
 
+    def test_the_folder_exists_once_the_bot_is_told_about_it(self):
+        from pathlib import Path
+
+        from app.services import file_browser
+
+        root = Path(self.temp_dir.name) / "computer"
+        root.mkdir()
+        self._say(self.bot)
+        with mock.patch.object(file_browser, "source_root", lambda source, bot_id: root):
+            made = _run("project_create", {"name": "Network and health"}, self.bot, self.bot)
+            self.assertEqual(made["folder"], "/workspace/projects/network-and-health")
+            self.assertTrue((root / "projects" / "network-and-health").is_dir())
+            # Made from the sidebar, then joined or listed: there too.
+            asyncio.run(projects_router.create_project(self.bot, projects_router.ProjectInput(name="Backups")))
+            self.assertTrue((root / "projects" / "backups").is_dir())
+            (root / "projects" / "backups").rmdir()
+            _run("projects_list", {}, self.bot, self.bot)
+            self.assertTrue((root / "projects" / "backups").is_dir())
+        # Without a reachable computer the path is still given; the folder waits.
+        self.assertEqual(_run("project_join", {"name": "Backups"}, self.bot, self.bot)["folder"], "/workspace/projects/backups")
+
     def test_what_a_person_wants_known_is_shown_to_their_bots(self):
         user = {"id": "u", "username": "jamie", "display_name": "Jamie", "email": "", "about": "I prefer short answers."}
         with mock.patch("app.services.auth_service.auth_service.accounts.get_user", return_value=user):
