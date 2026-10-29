@@ -316,6 +316,35 @@ function DetailSection({ label, children, right }) {
   );
 }
 
+// The highlighter the chat's code blocks use (lib/highlight), a separate chunk fetched the first
+// time it is needed.
+let highlighterPromise = null;
+function loadHighlighter() {
+  if (!highlighterPromise) highlighterPromise = import('../lib/highlight');
+  return highlighterPromise;
+}
+
+// A terminal command as a command line, in shell colours (plain until the highlighter is in).
+function ShellCommand({ command }) {
+  const [html, setHtml] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setHtml(null);
+    loadHighlighter()
+      .then((module) => !cancelled && setHtml(module.highlight(command, 'bash')))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [command]);
+  return (
+    <pre className="max-h-60 overflow-auto rounded-md bg-black/40 border border-[#26262b] px-2.5 py-1.5 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-zinc-100">
+      <span className="text-emerald-400/80 select-none">$ </span>
+      {html !== null ? <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} /> : <code>{command}</code>}
+    </pre>
+  );
+}
+
 // What the bot asked for. A terminal command reads as a command line.
 function StepArguments({ call }) {
   const args = parseMaybeJson(call.arguments || call.raw_arguments);
@@ -334,10 +363,7 @@ function StepArguments({ call }) {
     const others = Object.fromEntries(Object.entries(rest).filter(([key]) => !HIDDEN_ARGUMENTS.has(key)));
     return (
       <DetailSection label="Command" right={<CopyButton text={command} />}>
-        <pre className="max-h-60 overflow-auto rounded-md bg-black/40 border border-[#26262b] px-2.5 py-1.5 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-zinc-100">
-          <span className="text-emerald-400/80 select-none">$ </span>
-          {command}
-        </pre>
+        <ShellCommand command={command} />
         {Object.keys(others).length > 0 && (
           <div className="mt-1.5">
             <DetailRows values={others} />
