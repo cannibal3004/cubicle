@@ -65,9 +65,11 @@ async def list_projects(bot_id: str):
 async def create_project(bot_id: str, body: ProjectInput):
     _ensure_bot(bot_id)
     try:
-        return summary(projects.create(bot_id, body.name, body.notes))
+        record = projects.create(bot_id, body.name, body.notes)
     except ProjectError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    projects.make_folder(record)
+    return summary(record)
 
 
 @router.get("/projects/{project_id}")

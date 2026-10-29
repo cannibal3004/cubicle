@@ -66,8 +66,8 @@ def clean_work_notes(text: Any) -> str:
     if len(cleaned) > WORK_NOTES_MAX_CHARS:
         raise ProjectError(
             f"Work notes are limited to {WORK_NOTES_MAX_CHARS} characters; this would make them {len(cleaned)}. They say where the work "
-            "stands now: move what happened along the way to the project log (project_log), and durable facts about your job to your "
-            "notes (memory_edit), then try again."
+            "stands now: move what happened along the way to the project log (project_log), and reference detail (inventories, configs, "
+            "long write-ups) to a file in the project's folder that the work notes point to, then try again."
         )
     return cleaned
 
@@ -100,6 +100,21 @@ def folder_of(project: Dict[str, Any], storage: Optional[StorageService] = None)
 
 def workspace_path(project: Dict[str, Any], storage: Optional[StorageService] = None) -> str:
     return f"/workspace/{FOLDER_ROOT}/{folder_of(project, storage)}"
+
+
+def make_folder(project: Dict[str, Any], storage: Optional[StorageService] = None) -> str:
+    """The project's folder, made in the bot's computer if it is not there yet, so the path the bot
+    is told about exists. Left for later when the computer's files are not reachable from here (no
+    computer yet, or a provider without bind-mounted workspaces)."""
+    from app.services import file_browser
+    from app.services.file_share import FileShareError
+
+    path = workspace_path(project, storage)
+    try:
+        file_browser.ensure_directory("computer", path, project["bot_id"])
+    except FileShareError as exc:
+        logger.info("Project folder %s not made yet: %s", path, exc)
+    return path
 
 
 def list_for_bot(bot_id: str, storage: Optional[StorageService] = None) -> List[Dict[str, Any]]:
@@ -385,7 +400,7 @@ def _summary(project: Dict[str, Any], storage: StorageService, current: Optional
         "work_notes_chars": len(notes),
         "log_entries": storage.count_log(project["id"]),
         "conversations": len(conversations_in(project["id"], storage)),
-        "folder": workspace_path(project, storage),
+        "folder": make_folder(project, storage),
         **({"this_conversation": True} if current and project["id"] == current else {}),
     }
 
@@ -406,7 +421,7 @@ async def execute_create(call: ActionInvocation) -> Dict[str, Any]:
     storage = current_storage()
     record = conversations.get(_thread(call), storage) or {}
     project = create(record.get("bot_id") or call.arguments.get("bot_id"), call.arguments.get("name"), call.arguments.get("work_notes") or "", storage)
-    return {"created": project["name"], "work_notes_chars": len(project["notes"]), "folder": workspace_path(project, storage),
+    return {"created": project["name"], "work_notes_chars": len(project["notes"]), "folder": make_folder(project, storage),
             "note": "This conversation is not in it; project_join moves it there. Keep the project's files in its folder."}
 
 
@@ -428,7 +443,7 @@ async def execute_join(call: ActionInvocation) -> Dict[str, Any]:
         update(project["id"], {"archived": False}, storage)
     join(thread_id, project["id"], storage)
     seen(thread_id, storage)
-    return {"project": project["name"], "folder": workspace_path(project, storage), "work_notes": str(project.get("notes") or ""),
+    return {"project": project["name"], "folder": make_folder(project, storage), "work_notes": str(project.get("notes") or ""),
             "recent_log": render_log(storage.get_log(project["id"], limit=RECENT_LOG))}
 
 
