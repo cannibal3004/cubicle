@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -71,6 +72,36 @@ def clean_work_notes(text: Any) -> str:
     return cleaned
 
 
+# Each project has a folder in the bot's computer for its files, /workspace/projects/<folder>.
+# The name is chosen once, from the project's name, and kept when the project is renamed.
+FOLDER_ROOT = "projects"
+FOLDER_MAX_CHARS = 40
+
+
+def _folder_name(name: str, taken: set) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-")[:FOLDER_MAX_CHARS].strip("-") or "project"
+    folder, n = base, 2
+    while folder in taken:
+        folder, n = f"{base}-{n}", n + 1
+    return folder
+
+
+def folder_of(project: Dict[str, Any], storage: Optional[StorageService] = None) -> str:
+    """The project's folder name (projects made before folders get one now)."""
+    if project.get("folder"):
+        return str(project["folder"])
+    storage = storage or current_storage()
+    taken = {str(p.get("folder")) for p in list_for_bot(project["bot_id"], storage) if p.get("folder")}
+    folder = _folder_name(str(project.get("name") or ""), taken)
+    storage.save_project({**project, "folder": folder})
+    project["folder"] = folder
+    return folder
+
+
+def workspace_path(project: Dict[str, Any], storage: Optional[StorageService] = None) -> str:
+    return f"/workspace/{FOLDER_ROOT}/{folder_of(project, storage)}"
+
+
 def list_for_bot(bot_id: str, storage: Optional[StorageService] = None) -> List[Dict[str, Any]]:
     storage = storage or current_storage()
     return storage.get_projects(bot_id)
@@ -101,8 +132,10 @@ def create(bot_id: str, name: str, notes: str = "", storage: Optional[StorageSer
     if find(bot_id, name, storage, include_archived=False):
         raise ProjectError(f"There is already a project called {name!r}.")
     now = _now()
+    taken = {str(p.get("folder")) for p in list_for_bot(bot_id, storage) if p.get("folder")}
     record = {"id": f"{ID_PREFIX}{uuid.uuid4().hex[:12]}", "bot_id": bot_id, "name": name, "notes": clean_work_notes(notes),
-              "created_at": now, "updated_at": now, "notes_updated_at": now if notes else None, "archived": False}
+              "created_at": now, "updated_at": now, "notes_updated_at": now if notes else None, "archived": False,
+              "folder": _folder_name(name, taken)}
     storage.save_project(record)
     return record
 
@@ -352,6 +385,7 @@ def _summary(project: Dict[str, Any], storage: StorageService, current: Optional
         "work_notes_chars": len(notes),
         "log_entries": storage.count_log(project["id"]),
         "conversations": len(conversations_in(project["id"], storage)),
+        "folder": workspace_path(project, storage),
         **({"this_conversation": True} if current and project["id"] == current else {}),
     }
 
@@ -372,8 +406,8 @@ async def execute_create(call: ActionInvocation) -> Dict[str, Any]:
     storage = current_storage()
     record = conversations.get(_thread(call), storage) or {}
     project = create(record.get("bot_id") or call.arguments.get("bot_id"), call.arguments.get("name"), call.arguments.get("work_notes") or "", storage)
-    return {"created": project["name"], "work_notes_chars": len(project["notes"]),
-            "note": "This conversation is not in it; project_join moves it there."}
+    return {"created": project["name"], "work_notes_chars": len(project["notes"]), "folder": workspace_path(project, storage),
+            "note": "This conversation is not in it; project_join moves it there. Keep the project's files in its folder."}
 
 
 async def execute_join(call: ActionInvocation) -> Dict[str, Any]:
@@ -394,7 +428,7 @@ async def execute_join(call: ActionInvocation) -> Dict[str, Any]:
         update(project["id"], {"archived": False}, storage)
     join(thread_id, project["id"], storage)
     seen(thread_id, storage)
-    return {"project": project["name"], "work_notes": str(project.get("notes") or ""),
+    return {"project": project["name"], "folder": workspace_path(project, storage), "work_notes": str(project.get("notes") or ""),
             "recent_log": render_log(storage.get_log(project["id"], limit=RECENT_LOG))}
 
 

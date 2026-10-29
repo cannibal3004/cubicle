@@ -5,7 +5,8 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.services import projects
+from app.services import file_browser, projects
+from app.services.file_share import FileShareError
 from app.services.projects import NAME_MAX_CHARS, WORK_NOTES_MAX_CHARS, ProjectError
 from app.services.storage_service import current_storage
 
@@ -49,6 +50,8 @@ def summary(record: Dict[str, Any]) -> Dict[str, Any]:
         "log_entries": storage.count_log(record["id"]),
         "log_updated_at": record.get("log_updated_at"),
         "conversations": [c["id"] for c in projects.conversations_in(record["id"], storage)],
+        # Inside the bot's computer's /workspace, as the file viewer takes it.
+        "folder": f"{projects.FOLDER_ROOT}/{projects.folder_of(record, storage)}",
     }
 
 
@@ -111,6 +114,18 @@ async def delete_project(project_id: str):
     _project(project_id)
     moved = projects.delete(project_id)
     return {"status": "ok", "deleted_id": project_id, "conversations_moved_out": moved}
+
+
+@router.post("/projects/{project_id}/folder")
+async def open_project_folder(project_id: str):
+    """Make sure the project's folder exists in the bot's computer, to open it in the file viewer."""
+    record = _project(project_id)
+    path = f"{projects.FOLDER_ROOT}/{projects.folder_of(record)}"
+    try:
+        file_browser.ensure_directory("computer", path, record["bot_id"])
+    except FileShareError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"path": path}
 
 
 @router.get("/projects/{project_id}/log")

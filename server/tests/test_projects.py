@@ -154,6 +154,32 @@ class ProjectTests(chat_harness.ChatStreamRouteTests):
         with self.assertRaises(HTTPException):
             asyncio.run(projects_router.get_project(made["id"]))
 
+    def test_each_project_has_a_folder_that_keeps_its_name(self):
+        from pathlib import Path
+
+        from app.services import file_browser
+
+        made = projects.create(self.bot, "Proxy decommission!")
+        self.assertEqual(made["folder"], "proxy-decommission")
+        self.assertEqual(projects.create(self.bot, "Proxy / Decommission")["folder"], "proxy-decommission-2")
+        projects.update(made["id"], {"name": "Proxy retirement"})
+        self.assertEqual(asyncio.run(projects_router.get_project(made["id"]))["folder"], "projects/proxy-decommission")
+        # A project from before folders gets one when first asked.
+        legacy = {**projects.create(self.bot, "Printers"), "folder": None}
+        self.storage.save_project(legacy)
+        self.assertEqual(projects.workspace_path(projects.get(legacy["id"])), "/workspace/projects/printers")
+        self.assertEqual(projects.get(legacy["id"])["folder"], "printers")
+        # The bot is told where it is.
+        self._say(self.bot)
+        self.assertEqual(_run("project_join", {"name": "Proxy retirement"}, self.bot, self.bot)["folder"], "/workspace/projects/proxy-decommission")
+        # Opening it from the project page makes it, parents and all, and again is fine.
+        root = Path(self.temp_dir.name) / "computer"
+        root.mkdir()
+        with mock.patch.object(file_browser, "source_root", lambda source, bot_id: root):
+            self.assertEqual(asyncio.run(projects_router.open_project_folder(made["id"]))["path"], "projects/proxy-decommission")
+            asyncio.run(projects_router.open_project_folder(made["id"]))
+        self.assertTrue((root / "projects" / "proxy-decommission").is_dir())
+
     def test_what_a_person_wants_known_is_shown_to_their_bots(self):
         user = {"id": "u", "username": "jamie", "display_name": "Jamie", "email": "", "about": "I prefer short answers."}
         with mock.patch("app.services.auth_service.auth_service.accounts.get_user", return_value=user):

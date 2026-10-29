@@ -15,7 +15,7 @@ function formatWhen(iso) {
 // conversation's own when it is in none, and the project's log. The bot keeps
 // them with its work notes and project log tools; the user can edit the notes
 // here (the edit is shown to the bot where it happened).
-export default function WorkNotesSection({ project, conversation, onSave }) {
+export default function WorkNotesSection({ project, conversation, onSave, onOpenProject }) {
   const notes = project ? project.notes || '' : conversation?.work_notes || '';
   const limit = project?.notes_limit || 8000;
   const [editing, setEditing] = useState(false);
@@ -66,7 +66,13 @@ export default function WorkNotesSection({ project, conversation, onSave }) {
       <div className="flex items-center gap-2 px-3 py-2 font-mono text-zinc-400">
         {project ? <FiFolder className="text-xs text-amber-300/80" /> : <FiFileText className="text-xs text-amber-300/80" />}
         <span className="text-zinc-200">Work notes</span>
-        <span className="truncate">· {project ? project.name : 'this conversation'}</span>
+        {project && onOpenProject ? (
+          <button type="button" onClick={() => onOpenProject(project)} className="truncate hover:text-zinc-200 underline-offset-2 hover:underline" title="Open the project's page">
+            · {project.name}
+          </button>
+        ) : (
+          <span className="truncate">· {project ? project.name : 'this conversation'}</span>
+        )}
         {!editing && onSave && (
           <button type="button" onClick={() => setEditing(true)} className="ml-auto text-zinc-500 hover:text-zinc-200">
             edit

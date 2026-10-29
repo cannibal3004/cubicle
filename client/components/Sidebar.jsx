@@ -113,7 +113,7 @@ function botTurn(turnStates, botId) {
 
 const SHOWN_CONVERSATIONS = 6;
 
-function conversationTitle(conversation) {
+export function conversationTitle(conversation) {
   return conversation.title || (conversation.messages ? 'Untitled conversation' : 'New conversation');
 }
 
@@ -135,6 +135,8 @@ function ConversationList({
   onRenameProject,
   onArchiveProject,
   onDeleteProject,
+  onOpenProject,
+  openProjectId,
 }) {
   const [showArchived, setShowArchived] = useState(false);
   const [showAllLoose, setShowAllLoose] = useState(false);
@@ -327,16 +329,29 @@ function ConversationList({
         const members = inProject(project.id);
         const open = !collapsed[project.id];
         const hasActive = members.some((c) => c.id === activeThreadId);
+        const pageOpen = openProjectId === project.id;
+        // The name opens the project's page; the arrow folds its conversations away.
         return (
           <div key={project.id}>
             <div
-              onClick={() => setCollapsed((prev) => ({ ...prev, [project.id]: open }))}
+              onClick={() => (onOpenProject ? onOpenProject(project) : setCollapsed((prev) => ({ ...prev, [project.id]: open })))}
               className={`group/proj flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer text-[11.5px] transition ${
-                hasActive && !open ? 'text-white' : 'text-zinc-300 hover:bg-[#1c1c20]'
+                pageOpen ? 'bg-[#232327] text-white' : hasActive && !open ? 'text-white' : 'text-zinc-300 hover:bg-[#1c1c20]'
               }`}
               title={project.notes ? project.notes.split('\n')[0] : project.name}
             >
-              <FiChevronRight className={`text-[10px] text-zinc-500 flex-shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setCollapsed((prev) => ({ ...prev, [project.id]: open }));
+                }}
+                className="p-0.5 -m-0.5 rounded text-zinc-500 hover:text-white flex-shrink-0"
+                title={open ? 'Hide its conversations' : 'Show its conversations'}
+                aria-expanded={open}
+              >
+                <FiChevronRight className={`text-[10px] transition-transform ${open ? 'rotate-90' : ''}`} />
+              </button>
               <FiFolder className={`text-[11px] flex-shrink-0 ${project.archived ? 'text-zinc-600' : 'text-amber-300/80'}`} />
               {isEditing('project', project.id) ? (
                 <span className="flex-1 min-w-0 flex" onClick={(event) => event.stopPropagation()}>{titleInput(project, 'project')}</span>
@@ -430,6 +445,8 @@ export default function Sidebar({
   onRenameProject,
   onArchiveProject,
   onDeleteProject,
+  onOpenProject,
+  openProjectId,
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   // Results from inside the conversations, fetched a moment after typing stops.
@@ -551,6 +568,8 @@ export default function Sidebar({
           onRenameProject={onRenameProject}
           onArchiveProject={onArchiveProject}
           onDeleteProject={onDeleteProject}
+          onOpenProject={onOpenProject}
+          openProjectId={openProjectId}
         />
       )}
       </React.Fragment>

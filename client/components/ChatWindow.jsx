@@ -73,7 +73,7 @@ function formatHeaderDate(msgs) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-export default function ChatWindow({ bot, threadId: threadIdProp, conversation, project, onProjectsChanged, onSaveWorkNotes, onConversationPatched, onNewConversation, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onBotPatched, onToggleComputer, onOpenFiles, onOpenTakeover, onOpenAudit, onOpenSettings, defaultModel, prefill, onBotsChanged }) {
+export default function ChatWindow({ bot, threadId: threadIdProp, conversation, project, onProjectsChanged, onSaveWorkNotes, onOpenProject, onConversationPatched, onNewConversation, models, catalogError, onRefreshModels, messages, setMessagesFor, streamingBots, onStreamingChange, turnStates, onUpdateBotModel, onEditBot, onUpdateBot, onBotPatched, onToggleComputer, onOpenFiles, onOpenTakeover, onOpenAudit, onOpenSettings, defaultModel, prefill, onBotsChanged }) {
   // The conversation shown: its id is the thread id the server keys
   // messages, turns and undo by (a bot's first conversation has the bot's id).
   const threadId = threadIdProp || bot?.id;
@@ -1374,7 +1374,7 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
           onSave={onConversationPatched ? (items) => onConversationPatched(threadId, { todo: items }, { save: true }) : null}
           hasMore={Boolean(project?.notes || conversation?.work_notes)}
         >
-          <WorkNotesSection project={project} conversation={conversation} onSave={onSaveWorkNotes} />
+          <WorkNotesSection project={project} conversation={conversation} onSave={onSaveWorkNotes} onOpenProject={onOpenProject} />
         </TodoCard>
       )}
       </div>
