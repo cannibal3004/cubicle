@@ -463,7 +463,7 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, onDemonst
           {activeTab === 'display' && (loading && !computer ? <div className="w-full h-full flex items-center justify-center text-xs text-zinc-500">Loading…</div> : maximized && hasVnc ? (
             <div className="w-full h-full rounded-xl border border-zinc-800 flex items-center justify-center text-xs text-zinc-500">Showing in the large view.</div>
           ) : display)}
-          {activeTab === 'files' && <ComputerFiles bot={bot} />}
+          {activeTab === 'files' && <ComputerFiles bot={bot} initialPath={initial?.path ? { path: initial.path, nonce: initial.nonce } : null} />}
           {activeTab === 'activity' && activity}
         </div>
       </div>

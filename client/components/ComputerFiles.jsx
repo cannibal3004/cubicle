@@ -63,7 +63,9 @@ const ICONS = { image: FiImage, pdf: FiFileText, text: FiFileText, archive: FiAr
 // /workspace and the shared folder. Works on the host copy, so it needs no
 // running computer. Uploads land as plain files: the bot is not told, and
 // nothing is extracted or attached to the chat.
-export default function ComputerFiles({ bot }) {
+// `initialPath` ({path, nonce}) opens a folder of the computer's, again each time it is asked for
+// (a project's folder, from its page).
+export default function ComputerFiles({ bot, initialPath }) {
   const botId = bot?.id;
   const [source, setSource] = useState('computer');
   const [path, setPath] = useState('');
@@ -96,13 +98,28 @@ export default function ComputerFiles({ bot }) {
     [source, path, botId]
   );
 
+  const pendingPath = useRef(initialPath?.path || '');
+  const seenRequest = useRef(initialPath?.nonce);
   useEffect(() => {
     setPath('');
     setListing(null);
     setConfirming(null);
-    load(source, '');
+    const start = pendingPath.current;
+    pendingPath.current = '';
+    load(source, start);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, botId]);
+  useEffect(() => {
+    if (!initialPath?.path || initialPath.nonce === seenRequest.current) return;
+    seenRequest.current = initialPath.nonce;
+    if (source === 'computer') {
+      load('computer', initialPath.path);
+    } else {
+      pendingPath.current = initialPath.path;
+      setSource('computer');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPath?.nonce]);
 
   useEffect(() => () => {
     if (preview?.url) URL.revokeObjectURL(preview.url);

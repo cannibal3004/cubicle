@@ -8,6 +8,7 @@ import Marketplace from './Marketplace';
 import AuditPanel from './AuditPanel';
 import SettingsPage from './SettingsPage';
 import BotSettingsPage from './BotSettingsPage';
+import ProjectPage from './ProjectPage';
 import ConfirmDialog from './ConfirmDialog';
 
 import {
@@ -27,9 +28,12 @@ import {
   sendMessage,
   startTurn,
   fetchProjects,
+  fetchProject,
   createProject,
   updateProject,
   deleteProject,
+  openProjectFolder,
+  fetchConversation,
 } from '../lib/api';
 
 // What the bot is asked in the conversation that sorts its notes into two tiers.
@@ -58,7 +62,7 @@ export default function Dashboard() {
   // The signed-in account (id, username, role), from the session check.
   const [currentUser, setCurrentUser] = useState(null);
   const [activeBotId, setActiveBotId] = useState('');
-  const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'computer' | 'marketplace' | 'audit' | 'settings' | 'bot'
+  const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'computer' | 'marketplace' | 'audit' | 'settings' | 'bot' | 'project'
   // Transcripts are cached per bot so a reply that is still streaming for
   // one bot survives switching to another bot or another tab.
   // Messages and streaming are kept per conversation (thread id; a bot's
@@ -136,9 +140,21 @@ export default function Dashboard() {
   const [chatPrefill, setChatPrefill] = useState(null);
   // How the computer page should open: which tab, and whether maximized (a takeover).
   const [computerView, setComputerView] = useState({ tab: 'display', maximize: false, nonce: 0 });
-  const openComputer = (tab = 'display', maximize = false) => {
-    setComputerView({ tab, maximize, nonce: Date.now() });
+  // `path`: a folder to open in the files tab (a project's).
+  const openComputer = (tab = 'display', maximize = false, path = '') => {
+    setComputerView({ tab, maximize, path, nonce: Date.now() });
     setActiveTab('computer');
+  };
+  // A project's page: null, or { id, botId }. Shown on the 'project' tab.
+  const [projectPage, setProjectPage] = useState(null);
+  const openProjectPage = (project) => {
+    setActiveBotId(project.bot_id);
+    setProjectPage({ id: project.id, botId: project.bot_id });
+    setActiveTab('project');
+  };
+  const closeProjectPage = () => {
+    setProjectPage(null);
+    setActiveTab((tab) => (tab === 'project' ? 'chat' : tab));
   };
   // The bot settings page: null, or { mode: 'create' | 'edit', botId, section: {id, nonce} }. It stays
   // mounted (hidden) while another view is shown, so unsaved edits wait for you.
@@ -256,15 +272,21 @@ export default function Dashboard() {
         if (settingsData?.default_model) {
           setDefaultModel(settingsData.default_model);
         }
+        // The page's address (a link to a conversation or a project) wins over the first bot.
+        const route = parseAddress(window.location.pathname);
+        const applied = route ? await applyAddress(route, botsData) : false;
         const firstVisible = botsData.find((b) => !b.archived) || botsData[0];
-        if (firstVisible) {
+        if (!applied && firstVisible) {
           setActiveBotId(firstVisible.id);
         }
       } catch (err) {
         console.error('Initialization error:', err);
+      } finally {
+        setRouted(true);
       }
     }
     initData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authState]);
 
   // Reload the model list, bypassing the server cache (used after the
@@ -315,6 +337,88 @@ export default function Dashboard() {
   const activeConversation = activeConversations.find((c) => c.id === activeThreadId) || null;
   const activeProjects = projectsByBot[activeBotId] || [];
   const activeProject = activeConversation?.project_id ? activeProjects.find((p) => p.id === activeConversation.project_id) || null : null;
+
+  const pageProject = projectPage ? (projectsByBot[projectPage.botId] || []).find((p) => p.id === projectPage.id) || null : null;
+  // A project that went (deleted here or elsewhere) closes its page once its bot's list is in.
+  useEffect(() => {
+    if (activeTab === 'project' && projectPage && projectsByBot[projectPage.botId] && !pageProject) closeProjectPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, projectPage, projectsByBot, pageProject]);
+
+  // ---- addresses: /c/<conversation id> and /p/<project id> ---------------------------------
+  // The address follows the chat and the project page (other views keep the last one), so a
+  // conversation can be linked, bookmarked and reached with the back button. The first write
+  // after loading, and after back or forward, replaces the entry instead of adding one.
+  const [routed, setRouted] = useState(false);
+  const replaceAddress = useRef(true);
+  const botsRef = useRef([]);
+  botsRef.current = bots;
+
+  // A route: { kind: 'c' | 'p', id }, or null for any other address.
+  function parseAddress(pathname) {
+    const match = /^\/(c|p)\/([^/]+)\/?$/.exec(pathname || '');
+    return match ? { kind: match[1], id: decodeURIComponent(match[2]) } : null;
+  }
+
+  // Opens what a route names. True when it was found among the person's bots.
+  async function applyAddress(route, botsList = botsRef.current) {
+    const known = (botId) => (botsList || []).some((b) => b.id === botId);
+    try {
+      if (route.kind === 'c') {
+        const listed = Object.entries(conversationsRef.current).find(([, list]) => (list || []).some((c) => c.id === route.id));
+        const botId = listed ? listed[0] : known(route.id) ? route.id : (await fetchConversation(route.id))?.bot_id;
+        if (!known(botId)) return false;
+        rememberThread(botId, route.id);
+        setActiveBotId(botId);
+        setActiveTab('chat');
+        return true;
+      }
+      const project = await fetchProject(route.id);
+      if (!known(project?.bot_id)) return false;
+      setActiveBotId(project.bot_id);
+      setProjectPage({ id: project.id, botId: project.bot_id });
+      setActiveTab('project');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  useEffect(() => {
+    if (!routed) return;
+    let want = null;
+    if (activeTab === 'project' && projectPage) want = `/p/${encodeURIComponent(projectPage.id)}`;
+    // Only once the bot's conversations are in: until then the open one is a guess.
+    else if (activeTab === 'chat' && activeThreadId && conversationsByBot[activeBotId]) want = `/c/${encodeURIComponent(activeThreadId)}`;
+    if (!want) return;
+    if (window.location.pathname !== want) {
+      if (replaceAddress.current) window.history.replaceState(window.history.state, '', want);
+      else window.history.pushState(window.history.state, '', want);
+    }
+    replaceAddress.current = false;
+  }, [routed, activeTab, projectPage, activeThreadId, activeBotId, conversationsByBot]);
+
+  useEffect(() => {
+    const onPop = () => {
+      const route = parseAddress(window.location.pathname);
+      if (!route) return;
+      replaceAddress.current = true;
+      applyAddress(route);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The tab's title names what is open, so history entries and bookmarks read well.
+  useEffect(() => {
+    const bot = bots.find((b) => b.id === activeBotId);
+    const parts =
+      activeTab === 'project' && pageProject
+        ? [pageProject.name, bot?.name]
+        : [activeConversation?.title, bot?.name];
+    document.title = [...parts.filter(Boolean), 'Cubicle'].join(' · ');
+  }, [bots, activeBotId, activeTab, pageProject, activeConversation?.title]);
 
   const activeBotStreaming = Boolean(activeThreadId && streamingBots[activeThreadId]);
 
@@ -601,6 +705,8 @@ export default function Dashboard() {
         onRenameProject={(p, name) => handleRenameProject(p, name).catch((err) => window.alert(err.message || 'Could not rename the project.'))}
         onArchiveProject={(p, archived) => handleArchiveProject(p, archived).catch((err) => console.error('Archive failed:', err))}
         onDeleteProject={(p) => handleDeleteProject(p).catch((err) => window.alert(err.message || 'Could not delete the project.'))}
+        onOpenProject={openProjectPage}
+        openProjectId={activeTab === 'project' ? projectPage?.id : null}
         onOpenSettings={() => setActiveTab((tab) => (tab === 'settings' ? 'chat' : 'settings'))}
         onOpenNewBot={() => openBotPage(null)}
         onEditBot={(bot) => openBotPage(bot)}
@@ -652,6 +758,7 @@ export default function Dashboard() {
               loadConversations(botId);
             }}
             onSaveWorkNotes={handleSaveWorkNotes}
+            onOpenProject={openProjectPage}
             onConversationPatched={handleConversationPatched}
             onNewConversation={() => handleNewConversation(activeBotId, activeConversation?.project_id || null)}
             models={models}
@@ -704,6 +811,30 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'audit' && <AuditPanel />}
+
+        {activeTab === 'project' && pageProject && (
+          <ProjectPage
+            key={pageProject.id}
+            project={pageProject}
+            bot={bots.find((b) => b.id === pageProject.bot_id)}
+            conversations={conversationsByBot[pageProject.bot_id] || []}
+            turnStates={turnStates}
+            onClose={closeProjectPage}
+            onOpenConversation={(conversation) => handleSelectConversation(pageProject.bot_id, conversation.id)}
+            onNewConversation={() => handleNewConversation(pageProject.bot_id, pageProject.id).catch((err) => window.alert(err.message || 'Could not start a conversation.'))}
+            onRename={(name) => handleRenameProject(pageProject, name)}
+            onArchive={(archived) => handleArchiveProject(pageProject, archived)}
+            onDelete={async () => {
+              await handleDeleteProject(pageProject);
+              closeProjectPage();
+            }}
+            onSaveNotes={async (text) => mergeProject(pageProject.bot_id, await updateProject(pageProject.id, { notes: text }))}
+            onOpenFolder={async () => {
+              const opened = await openProjectFolder(pageProject.id);
+              openComputer('files', false, opened.path);
+            }}
+          />
+        )}
 
         {/* The bot settings page: a view like Settings, kept mounted while hidden so a draft survives a visit to the chat. */}
         {botPage && (botPage.mode === 'create' || pageBot) && (

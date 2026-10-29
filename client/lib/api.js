@@ -339,6 +339,20 @@ export function fetchProjectLog(projectId, limit = 100) {
   return conversationRequest(`/projects/${encodeURIComponent(projectId)}/log?limit=${limit}`, {}, 'Could not load the log.');
 }
 
+export function fetchProject(projectId) {
+  return conversationRequest(`/projects/${encodeURIComponent(projectId)}`, {}, 'Could not load the project.');
+}
+
+// Makes sure the project's folder exists in the bot's computer; resolves to {path} for the file viewer.
+export function openProjectFolder(projectId) {
+  return conversationRequest(`/projects/${encodeURIComponent(projectId)}/folder`, { method: 'POST' }, 'Could not open the project folder.');
+}
+
+// One conversation (any of the person's bots'), as a link to it is resolved.
+export function fetchConversation(conversationId) {
+  return conversationRequest(`/conversations/${encodeURIComponent(conversationId)}`, {}, 'Could not load the conversation.');
+}
+
 // The thinking levels to offer (the model's own) and the two Auto picks between; fetched once.
 let thinkingLevelsPromise = null;
 export function fetchThinkingLevels() {

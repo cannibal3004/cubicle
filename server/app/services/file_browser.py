@@ -156,6 +156,22 @@ def store_files(source: str, path: str, bot_id: Optional[str], files: Iterable[T
     return stored
 
 
+def ensure_directory(source: str, path: str, bot_id: Optional[str]) -> None:
+    """Create the folder at `path` (and its parents) unless it is there already."""
+    _, root = _root(source, bot_id)
+    folder = root
+    try:
+        for part in _confine(root, path).relative_to(root).parts:
+            folder = folder / part
+            if not folder.exists():
+                folder.mkdir()
+                _open_to_the_computer(folder, 0o777)
+            elif not folder.is_dir():
+                raise FileShareError(f"{part} is a file, not a folder.")
+    except OSError as exc:
+        raise FileShareError(f"Could not create the folder: {exc}") from exc
+
+
 def make_directory(source: str, path: str, bot_id: Optional[str], name: str) -> Dict[str, Any]:
     source, root = _root(source, bot_id)
     folder = _confine(root, path)
