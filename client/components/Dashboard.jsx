@@ -693,7 +693,7 @@ export default function Dashboard() {
         turnStates={turnStates}
         waitingApprovals={waitingApprovals}
         conversations={activeConversations}
-        activeThreadId={activeThreadId}
+        activeThreadId={activeTab === 'project' ? '' : activeThreadId}
         onSelectConversation={handleSelectConversation}
         onNewConversation={(botId, projectId) => handleNewConversation(botId, projectId).catch((err) => console.error('Could not start a conversation:', err))}
         onRenameConversation={(c, title) => handleRenameConversation(c, title).catch((err) => console.error('Rename failed:', err))}
