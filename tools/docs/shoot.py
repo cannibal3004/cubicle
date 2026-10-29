@@ -346,8 +346,11 @@ def main():
             open_page(page, "/")
             save(page, "sign-in")
         if not wanted or "shared" in wanted:
+            # Sam opens the app and picks Atlas under "Shared with me".
             page = context_for(seed["sam_token"]).new_page()
-            open_page(page, f"/c/{B['atlas']}")
+            open_page(page, "/")
+            page.get_by_text("Atlas", exact=True).first.click()
+            page.wait_for_timeout(1500)
             save(page, "shared-bot-teammate")
         browser.close()
     if failures:

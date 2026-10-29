@@ -12,7 +12,7 @@ import ThinkingPicker, { thinkingLabel, useThinkingLevels } from './ThinkingPick
 import TodoCard from './TodoCard';
 import WorkNotesSection from './WorkNotesSection';
 import MascotAvatar from './MascotAvatar';
-import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiEdit2, FiArrowDown, FiArrowUp, FiSquare, FiFile, FiFolder, FiRotateCw, FiVideo, FiAlertTriangle } from 'react-icons/fi';
+import { FiPlus, FiMic, FiMicOff, FiMonitor, FiX, FiImage, FiArrowDown, FiArrowUp, FiSquare, FiSliders, FiFile, FiFolder, FiRotateCw, FiVideo, FiAlertTriangle } from 'react-icons/fi';
 import ComputerStatusButton from './ComputerStatusButton';
 import {
   sendMessage,
@@ -1039,7 +1039,7 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
               className="p-1 rounded-md text-zinc-500 hover:text-white hover:bg-[#1f1f23] transition"
               title="Bot settings"
             >
-              <FiEdit2 className="text-xs" />
+              <FiSliders className="text-xs" />
             </button>
           )}
         </div>
