@@ -383,7 +383,7 @@ function StepResult({ call }) {
         <div className="space-y-1.5">
           {stdout ? <DetailValue value={String(stdout)} block /> : !stderr && <span className="text-zinc-600">(no output)</span>}
           {stderr && <DetailValue value={String(stderr)} tone="text-rose-200/90" block />}
-          {Object.keys(rest).length > 0 && <DetailRows values={rest} />}
+          {Object.keys(rest).some((key) => !HIDDEN_ARGUMENTS.has(key)) && <DetailRows values={rest} />}
         </div>
         {trimNote}
       </DetailSection>
