@@ -247,8 +247,8 @@ function approvalText(call) {
   return '';
 }
 
-// Arguments the server adds for its own bookkeeping, not what the bot asked for.
-const HIDDEN_ARGUMENTS = new Set(['bot_id', 'thread_id']);
+// Fields the server adds for its own bookkeeping, not what the bot asked for or got back.
+const HIDDEN_ARGUMENTS = new Set(['bot_id', 'thread_id', 'computer_id', 'provider', 'operation']);
 
 function CopyButton({ text }) {
   const [copied, setCopied] = useState(false);
@@ -274,8 +274,9 @@ function CopyButton({ text }) {
 // the rest as JSON.
 function DetailValue({ value, tone = 'text-zinc-300', block = false }) {
   if (value === null || value === undefined || value === '') return <span className="text-zinc-600">(empty)</span>;
-  const text = typeof value === 'string' ? value.replace(/\n$/, '') : JSON.stringify(value, null, 2);
-  if (block || typeof value !== 'string' || text.includes('\n') || text.length > 90) {
+  const structured = typeof value === 'object';
+  const text = typeof value === 'string' ? value.replace(/\n$/, '') : structured ? JSON.stringify(value, null, 2) : String(value);
+  if (block || structured || text.includes('\n') || text.length > 90) {
     return (
       <div className="relative group/val">
         <pre className={`max-h-60 overflow-auto rounded-md bg-black/30 border border-[#26262b] px-2.5 py-1.5 text-[11px] leading-relaxed whitespace-pre-wrap break-words ${tone}`}>{text}</pre>
@@ -319,6 +320,8 @@ function DetailSection({ label, children, right }) {
 function StepArguments({ call }) {
   const args = parseMaybeJson(call.arguments || call.raw_arguments);
   if (args === null || args === undefined || args === '') return null;
+  // Nothing the bot chose (no arguments, or only bookkeeping): no section.
+  if (typeof args === 'object' && !Array.isArray(args) && !Object.keys(args).some((key) => !HIDDEN_ARGUMENTS.has(key))) return null;
   if (typeof args !== 'object' || Array.isArray(args)) {
     return (
       <DetailSection label="Arguments">
@@ -465,7 +468,6 @@ function ToolStep({ call }) {
       {hover && !open && <StepHoverCard call={call} anchor={hover} />}
       {open && (
         <div className="mt-1 mb-2 ml-4 space-y-2.5 rounded-lg border border-[#26262b] bg-[#0e0e10] px-3 py-2.5 text-[11px] font-mono cursor-text">
-          {call.summary && <p className="font-sans text-zinc-400 leading-relaxed break-words">{stepSummary(call.summary)}</p>}
           {call.status === 'waiting' && call.waiting && <p className="font-sans text-amber-300/90">{call.waiting}</p>}
           <StepArguments call={call} />
           {call.error && (
