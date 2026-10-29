@@ -296,6 +296,10 @@ def build_history_messages(history: List[Dict[str, Any]], *, replay_tools: bool)
                 text = "\n\n".join(([text] if text.strip() else []) + blocks)
             if turn_context:
                 text = f"{text}\n\n{TURN_CONTEXT_LEAD}\n\n{turn_context}"
+            # Tools offered since the tool list was set (services/tool_selection.py, TOOL_ADD_STYLE=message).
+            tools_added = ((message.get("raw_payload") or {}).get("tools_added") or {}).get("text")
+            if tools_added:
+                text = f"{text}\n\n{tools_added}"
             # How hard to think on this message (services/thinking.py, the hint style): last of all.
             thinking_hint = (message.get("raw_payload") or {}).get("thinking_hint")
             if thinking_hint:

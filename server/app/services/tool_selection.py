@@ -15,6 +15,7 @@ means the turn is offered everything, as before.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -273,3 +274,67 @@ async def select_tools_kept(
         offered_toolkits.add(toolkit)
     selected, info = _selection_for(specs, names)
     return selected, info, {"since": since, "limit": limit, "names": names}
+
+
+# ---- tools that arrive partway through a stretch ------------------------------------------
+# Even kept per stretch, the offer grows between compactions: an app named in a
+# message, an app connected or an MCP server added, a tool switched on. Each
+# addition to the tool list at the top of the prompt costs a full read of the
+# conversation. With TOOL_ADD_STYLE=message the list sent stays the one the
+# stretch began with, and a tool offered later is described at the end of the
+# user message of the turn it arrives on, stored there like the thinking hint so
+# later turns replay it unchanged. The next compaction folds it into the list.
+# (halogen-flash-server does the same for Claude Code's tool search on
+# /v1/messages; on /v1/chat/completions it hands back a call to a tool described
+# that way like any other.) A call to it runs: a turn can call any of the bot's
+# tools (callable_specs), offered or not.
+
+STYLE_LIST = "list"
+STYLE_MESSAGE = "message"
+ADDED_LEAD = "[Tools added to this conversation. Call them the same way as the tools you were given at the start.]"
+
+
+def adds_in_message() -> bool:
+    return settings.TOOL_ADD_STYLE == STYLE_MESSAGE
+
+
+def render_added(definitions: List[Dict[str, Any]]) -> str:
+    """The block that introduces tools in a message: Qwen's own <tools> notation, one definition a line."""
+    lines = "\n".join(json.dumps(definition, ensure_ascii=False) for definition in definitions)
+    return f"{ADDED_LEAD}\n<tools>\n{lines}\n</tools>"
+
+
+def introduced(history: Iterable[Dict[str, Any]]) -> List[str]:
+    """Tools the stretch's messages have already described (the stretch: since the latest compaction)."""
+    from app.services.context_builder import live_messages
+
+    names: List[str] = []
+    for message in live_messages(list(history)):
+        added = (message.get("raw_payload") or {}).get("tools_added") or {}
+        for name in added.get("names") or []:
+            if isinstance(name, str) and name not in names:
+                names.append(name)
+    return names
+
+
+def hold_list(
+    offered: List[ToolSpec],
+    callable_specs: List[ToolSpec],
+    *,
+    kept: Optional[Dict[str, Any]],
+    since: str,
+    note: str,
+    history: Iterable[Dict[str, Any]],
+) -> Tuple[List[ToolSpec], List[ToolSpec], Dict[str, Any]]:
+    """The tool list to send, the tools to describe in this turn's message, and the record to store.
+
+    The list is the one the stretch began with (`kept`, when it is for this stretch), minus
+    any tool that no longer exists; the first turn of a stretch sends what it is offered."""
+    if not (isinstance(kept, dict) and kept.get("since") == since and isinstance(kept.get("names"), list)):
+        return offered, [], {"since": since, "names": [spec.name for spec in offered], "note": note}
+    listed = set(kept["names"])
+    # Catalog order, as the stretch's first turn sent it.
+    held = [spec for spec in callable_specs if spec.name in listed]
+    shown = listed | set(introduced(history))
+    added = [spec for spec in offered if spec.name not in shown]
+    return held, added, kept
