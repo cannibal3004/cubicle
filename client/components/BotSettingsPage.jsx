@@ -397,7 +397,7 @@ export default function BotSettingsPage({
                   onRefresh={onRefreshModels}
                   onSelectModel={(m) => set('model', m)}
                   align="left"
-                  triggerClassName="w-full justify-between bg-[#222226] border border-[#2e2e34] rounded-xl px-3.5 py-2.5"
+                  triggerClassName="w-full flex items-center gap-2 bg-[#222226] hover:bg-[#26262b] border border-[#2e2e34] rounded-xl px-3.5 py-2.5 text-xs text-zinc-200 transition"
                 />
               </Card>
             )}
