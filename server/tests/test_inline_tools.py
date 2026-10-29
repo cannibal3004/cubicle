@@ -43,6 +43,10 @@ class InlineToolTests(chat_harness.ChatStreamRouteTests):
         self.assertEqual(text[: at["c1"]], "Let me write the first one down.\n\nNow the second.")
         # What follows the last call is the answer.
         self.assertEqual(text[at["c1"]:].strip(), "Both are in your notes.")
+        # Each call that ran says how long it took, and what it was given, for the chat's details.
+        for record in [r for r in saved["raw_payload"]["tool_calls"] if r["status"] == "completed"]:
+            self.assertIsInstance(record.get("ran_ms"), int)
+            self.assertIsInstance(record.get("arguments"), dict)
 
     def test_each_rounds_thinking_is_placed_where_it_began(self):
         from app.services.bot_memory import register_memory_actions

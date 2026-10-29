@@ -446,27 +446,32 @@ async def _perform_action(
         where = f"\"{other['title']}\"" if other.get("title") else "another conversation"
         turn.emit({"type": "tool.waiting", **base, "reason": f"Waiting for the computer: {where} is running {current.get('action') or 'something'}."})
 
+    # How long the action itself ran (not the wait for approval or for the computer), for the chat.
+    ran_from = time.monotonic()
     try:
         if computer_turns.takes_turns(action_name):
             # The bot's other conversations share this computer: changes to it take turns.
             async with computer_turns.computer_turn(bot_id, thread_id, _computer_label(action_request), on_wait=waiting):
+                ran_from = time.monotonic()
                 action_result = await action_gateway.execute(action_request)
         else:
             action_result = await action_gateway.execute(action_request)
     except ActionGatewayError as exc:
         error = redact(str(exc))
-        turn.emit({"type": "tool.failed", **base, "error": error})
-        return {"status": "failed", "error": f"Action could not execute ({action_name}): {error}", "request": action_request}
+        ran_ms = int((time.monotonic() - ran_from) * 1000)
+        turn.emit({"type": "tool.failed", **base, "error": error, "ranMs": ran_ms})
+        return {"status": "failed", "error": f"Action could not execute ({action_name}): {error}", "request": action_request, "ran_ms": ran_ms}
+    ran_ms = int((time.monotonic() - ran_from) * 1000)
 
     if action_result.status == "completed":
         result = redact.apply(action_result.result or {})
-        turn.emit({"type": "tool.completed", **base, "result": _compact_result(result)})
-        return {"status": "completed", "result": result, "request": action_request, "gate": verdict,
+        turn.emit({"type": "tool.completed", **base, "result": _compact_result(result), "ranMs": ran_ms})
+        return {"status": "completed", "result": result, "request": action_request, "gate": verdict, "ran_ms": ran_ms,
                 **({"trusted_by": rechecked_by} if rechecked_by in ("trusted", "allowed_command") else {})}
 
     error = redact(action_result.error or "The action failed.")
-    turn.emit({"type": "tool.failed", **base, "error": error})
-    return {"status": "failed", "error": f"Action failed ({action_name}): {error}", "request": action_request, "gate": verdict}
+    turn.emit({"type": "tool.failed", **base, "error": error, "ranMs": ran_ms})
+    return {"status": "failed", "error": f"Action failed ({action_name}): {error}", "request": action_request, "gate": verdict, "ran_ms": ran_ms}
 
 
 def _computer_label(action_request: Any) -> str:
@@ -1514,6 +1519,8 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         record["arguments"] = request_obj.arguments
                     if outcome.get("gate") is not None:
                         record["gate"] = outcome["gate"].to_event()
+                    if outcome.get("ran_ms") is not None:
+                        record["ran_ms"] = outcome["ran_ms"]
                     if status == "completed":
                         result = outcome.get("result") or {}
                         payload = _compact_result(result)

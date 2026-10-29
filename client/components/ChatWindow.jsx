@@ -481,6 +481,10 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
                 trusted: Boolean(event.trusted) || Boolean(existing?.trusted),
                 trusted_by: event.trustedBy || existing?.trusted_by || null,
                 summary: event.action?.preview || existing?.summary || null,
+                // For the step's details: what it was given, what came back, how long it ran.
+                arguments: event.action?.arguments || existing?.arguments || null,
+                result: event.result ?? existing?.result ?? null,
+                ran_ms: event.ranMs ?? existing?.ran_ms ?? null,
                 // Where in the reply the call came: the text streamed so far.
                 at: existing ? existing.at : (msg.text || '').length,
               };
