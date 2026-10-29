@@ -42,7 +42,7 @@ def help_answer(raw):
     picture = next((m.group(0) for s in result.get("sections") or [] for m in [re.search(r"!\[[^\]]*\]\([^)]+\)", s.get("text", ""))] if m), "")
     return (
         "Add it to my **always-allowed commands**: open my settings (the sliders in the chat header), go to **Tools**, and add "
-        "`df -h` under *Always-allowed commands*. Next time I run it, it goes straight through. You can also tick "
+        "`zpool status` under *Always-allowed commands*. Next time I run it, it goes straight through. You can also tick "
         f"**Always allow for this bot** on the approval card the next time I ask.\n\nRight now my always-allowed commands are {allowed}. "
         f"More in [{first.get('title', 'the help')}]({first.get('link', '/help')}).\n\n{picture}"
     )

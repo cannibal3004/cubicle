@@ -40,6 +40,11 @@ Each bot can have many conversations. **New conversation** under the bot starts 
 gives it a title. A conversation has its own address (`/c/...`), so you can bookmark it, link to it, or
 go back to it with the browser's back button.
 
+## Getting help
+
+**Help** in the sidebar has these pages, with a search. Or just ask a bot: "how do I share you with a
+teammate?" It looks the answer up here and tells you how it applies to it.
+
 ## Where to go next
 
 - [Chatting with a bot](chat.md) covers the message box, slash commands, undo and the rest.

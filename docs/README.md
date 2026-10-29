@@ -7,6 +7,8 @@ These pages explain how it works. In Cubicle they are under **Help** in the side
 things up in them for you: ask it "how do I share a bot?" and it answers from here, with your own
 settings in mind.
 
+![A bot answering from the help](images/help-answer.png)
+
 ## Using Cubicle
 
 - [Getting started](getting-started.md): the screen, your first bot, your first conversation

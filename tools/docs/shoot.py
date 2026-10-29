@@ -212,10 +212,10 @@ def live_thinking(page):
 
 @shot
 def help_answer(page):
-    thread = throwaway(page, B["atlas"], "Running df without asking")
+    thread = throwaway(page, B["atlas"], "Running zpool status without asking")
     try:
         open_page(page, f"/c/{thread}", height=1300)
-        page.locator("form textarea").fill("How do I let you run df -h without asking me every time?")
+        page.locator("form textarea").fill("How do I let you run zpool status without asking me every time?")
         page.get_by_title("Send (Enter)").click()
         page.get_by_title("Send (Enter)").wait_for(timeout=60000)
         page.wait_for_timeout(2000)
