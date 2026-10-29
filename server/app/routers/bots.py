@@ -154,6 +154,19 @@ def parse_drafted(text: str, count: int) -> List[str]:
     return kept[:count]
 
 
+def clean_gate_threshold(raw: Any) -> Optional[float]:
+    """The bot's own risk threshold, or None to follow App Settings ("inherit")."""
+    if raw in ("inherit", "", None):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="gate_threshold must be a number from 0.01 to 0.99, or \"inherit\".") from exc
+    if not 0.01 <= value <= 0.99:
+        raise HTTPException(status_code=422, detail="gate_threshold must be between 0.01 and 0.99.")
+    return round(value, 2)
+
+
 class BotInput(BaseModel):
     name: str = Field(default="", max_length=MAX_NAME)
     role: str = Field(default="", max_length=MAX_SHORT)
@@ -168,6 +181,9 @@ class BotInput(BaseModel):
     orchestrator: bool = False
     suggestions: List[str] = Field(default_factory=list)
     thinking: str = Field(default="", max_length=20)
+    tool_settings: Dict[str, Any] = Field(default_factory=dict)
+    auto_approval: Literal["inherit", "off", "shadow", "on"] = "inherit"
+    gate_threshold: Optional[Any] = None
 
 
 class BotUpdate(BaseModel):
@@ -253,9 +269,9 @@ async def create_bot(bot_data: BotInput):
         "accent_color": bot_data.accent_color.strip() or "#3b82f6",
         "system_prompt": bot_data.system_prompt.strip() or f"You are {name}, a helpful AI assistant.",
         "tools": bot_data.tools,
-        "tool_settings": {},
-        "auto_approval": "inherit",
-        "gate_threshold": None,
+        "tool_settings": clean_tool_settings(bot_data.tool_settings),
+        "auto_approval": bot_data.auto_approval,
+        "gate_threshold": clean_gate_threshold(bot_data.gate_threshold),
         "trusted_tools": clean_trusted_tools(bot_data.trusted_tools),
         "allowed_commands": clean_allowed_commands(bot_data.allowed_commands),
         "orchestrator": bool(bot_data.orchestrator),
@@ -317,17 +333,7 @@ async def update_bot(bot_id: str, updates: BotUpdate):
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         procedures_before = [p for p in (bots[index].get("procedures") or []) if isinstance(p, dict)]
     if "gate_threshold" in changes:
-        raw = changes["gate_threshold"]
-        if raw in ("inherit", "", None):
-            changes["gate_threshold"] = None
-        else:
-            try:
-                value = float(raw)
-            except (TypeError, ValueError) as exc:
-                raise HTTPException(status_code=422, detail="gate_threshold must be a number from 0.01 to 0.99, or \"inherit\".") from exc
-            if not 0.01 <= value <= 0.99:
-                raise HTTPException(status_code=422, detail="gate_threshold must be between 0.01 and 0.99.")
-            changes["gate_threshold"] = round(value, 2)
+        changes["gate_threshold"] = clean_gate_threshold(changes["gate_threshold"])
     memory_note = None
     if "memory" in changes:
         try:

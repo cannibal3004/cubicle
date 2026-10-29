@@ -63,6 +63,15 @@ class BotsRouterTests(unittest.TestCase):
             asyncio.run(bots_router.create_bot(bots_router.BotInput(name="   ")))
         self.assertEqual(caught.exception.status_code, 422)
 
+    def test_a_new_bot_keeps_the_tool_and_approval_settings_it_was_created_with(self):
+        bot = asyncio.run(bots_router.create_bot(bots_router.BotInput(
+            name="Careful", tool_settings={"groups": {"todo": False}}, auto_approval="shadow", gate_threshold=0.456,
+        )))
+        self.assertEqual((bot["tool_settings"]["groups"], bot["auto_approval"], bot["gate_threshold"]), ({"todo": False}, "shadow", 0.46))
+        with self.assertRaises(HTTPException) as caught:
+            asyncio.run(bots_router.create_bot(bots_router.BotInput(name="Bad", gate_threshold=2)))
+        self.assertEqual(caught.exception.status_code, 422)
+
     def test_update_only_touches_editable_fields_and_archives(self):
         bot = asyncio.run(bots_router.create_bot(bots_router.BotInput(name="Helper", model="m1")))
         updated = asyncio.run(bots_router.update_bot(bot["id"], bots_router.BotUpdate(name="Renamed", system_prompt="Be terse.", model="")))

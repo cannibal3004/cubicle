@@ -1019,9 +1019,9 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
           {bot && onEditBot && (
             <button
               type="button"
-              onClick={onEditBot}
+              onClick={() => onEditBot()}
               className="p-1 rounded-md text-zinc-500 hover:text-white hover:bg-[#1f1f23] transition"
-              title="Edit this bot"
+              title="Bot settings"
             >
               <FiEdit2 className="text-xs" />
             </button>
@@ -1055,7 +1055,7 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
               onSave={(toolSettings) => onUpdateBot(bot.id, { tool_settings: toolSettings })}
               onSaveAutoApproval={(mode) => onUpdateBot(bot.id, { auto_approval: mode })}
               onSaveGateThreshold={(value) => onUpdateBot(bot.id, { gate_threshold: value === null ? 'inherit' : value })}
-              onOpenEditor={onEditBot}
+              onOpenEditor={onEditBot && (() => onEditBot('tools'))}
             />
           )}
 
