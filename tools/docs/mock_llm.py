@@ -7,6 +7,7 @@ stack runs it as its own service.
 """
 
 import json
+import re
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,15 +30,40 @@ def words(text, field):
         yield {field: " ".join(parts[index:index + 3]) + (" " if index + 3 < len(parts) else "")}
 
 
+def help_answer(raw):
+    """An answer built from a cubicle_help result: the first section, its link, and a screenshot it offers."""
+    try:
+        result = json.loads(raw)
+    except ValueError:
+        return "I couldn't read the help just now."
+    first = (result.get("sections") or [{}])[0]
+    this_bot = result.get("this_bot") or {}
+    allowed = ", ".join(f"`{c}`" for c in this_bot.get("always_allowed_commands") or []) or "none yet"
+    picture = next((m.group(0) for s in result.get("sections") or [] for m in [re.search(r"!\[[^\]]*\]\([^)]+\)", s.get("text", ""))] if m), "")
+    return (
+        "Add it to my **always-allowed commands**: open my settings (the sliders in the chat header), go to **Tools**, and add "
+        "`df -h` under *Always-allowed commands*. Next time I run it, it goes straight through. You can also tick "
+        f"**Always allow for this bot** on the approval card the next time I ask.\n\nRight now my always-allowed commands are {allowed}. "
+        f"More in [{first.get('title', 'the help')}]({first.get('link', '/help')}).\n\n{picture}"
+    )
+
+
 def script(messages):
     """What to stream for this conversation: (deltas, pause between them in seconds)."""
     last = messages[-1] if messages else {}
     user = next((m for m in reversed(messages) if m.get("role") == "user"), {})
     asked = str(user.get("content") or "").lower()
     if last.get("role") == "tool":
-        result = str(last.get("content") or "").lower()
-        text = "Okay, I've left it where it is." if "denied" in result else "Done: it's gone from the shared folder."
+        raw = str(last.get("content") or "")
+        if '"sections"' in raw:
+            return list(words(help_answer(raw), "content")), 0.01
+        text = "Okay, I've left it where it is." if "denied" in raw.lower() else "Done: it's gone from the shared folder."
         return list(words(text, "content")), 0.02
+    if asked.startswith("how do i"):
+        thinking = "A question about Cubicle itself: look it up in its help rather than answer from memory."
+        call = {"index": 0, "id": f"call_{uuid.uuid4().hex[:12]}", "type": "function",
+                "function": {"name": "cubicle_help", "arguments": json.dumps({"question": user.get("content")})}}
+        return list(words(thinking, "reasoning_content")) + [{"tool_calls": [call]}], 0.02
     if "delete the old" in asked:
         thinking = "Alex wants the 2025 comparison removed. It's in reports/ in the shared folder; deleting needs Alex's approval, so ask."
         call = {"index": 0, "id": f"call_{uuid.uuid4().hex[:12]}", "type": "function",

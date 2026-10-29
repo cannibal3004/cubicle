@@ -348,6 +348,31 @@ export function openProjectFolder(projectId) {
   return conversationRequest(`/projects/${encodeURIComponent(projectId)}/folder`, { method: 'POST' }, 'Could not open the project folder.');
 }
 
+// ---- Cubicle's help (docs/) ------------------------------------------------------------------
+
+export function fetchHelpIndex() {
+  return conversationRequest('/help', {}, 'Could not load the help.');
+}
+
+export function fetchHelpPage(path) {
+  return conversationRequest(`/help/pages/${path.split('/').map(encodeURIComponent).join('/')}`, {}, 'Could not load that help page.');
+}
+
+export function searchHelp(query) {
+  return conversationRequest(`/help/search?q=${encodeURIComponent(query)}`, {}, 'Could not search the help.');
+}
+
+// An API path as the browser should fetch it: "/api/v1/..." lives at API_BASE_URL (the same
+// origin behind the compose proxy, another port in development).
+export function apiUrl(path) {
+  return typeof path === 'string' && path.startsWith('/api/v1/') ? `${API_BASE_URL}${path.slice('/api/v1'.length)}` : path;
+}
+
+// Where a help page's image is served from (its markdown names it as images/<name>).
+export function helpImageUrl(name) {
+  return `${API_BASE_URL}/help/images/${encodeURIComponent(name)}`;
+}
+
 // One conversation (any of the person's bots'), as a link to it is resolved.
 export function fetchConversation(conversationId) {
   return conversationRequest(`/conversations/${encodeURIComponent(conversationId)}`, {}, 'Could not load the conversation.');

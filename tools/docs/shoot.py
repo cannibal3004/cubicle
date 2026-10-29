@@ -210,6 +210,28 @@ def live_thinking(page):
         finish_and_delete(page, thread)
 
 
+@shot
+def help_answer(page):
+    thread = throwaway(page, B["atlas"], "Running df without asking")
+    try:
+        open_page(page, f"/c/{thread}", height=1300)
+        page.locator("form textarea").fill("How do I let you run df -h without asking me every time?")
+        page.get_by_title("Send (Enter)").click()
+        page.get_by_title("Send (Enter)").wait_for(timeout=60000)
+        page.wait_for_timeout(2000)
+        save(page, "help-answer", page.locator(".dark-bubble-bot").last)
+    finally:
+        finish_and_delete(page, thread)
+
+
+# ---- help --------------------------------------------------------------------------------------
+
+@shot
+def help_view(page):
+    open_page(page, "/help/approvals")
+    save(page, "help-view")
+
+
 # ---- the computer (only when the stack runs the real runtime: screenshots.py --computer) ------
 
 def computer_shot(func):

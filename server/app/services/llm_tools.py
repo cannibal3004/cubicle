@@ -563,6 +563,23 @@ SCHEDULE_TOOLS: List[ToolSpec] = [
 ]
 
 
+# Cubicle's own help pages (services/help.py), searched for the user's how-do-I questions.
+HELP_TOOLS: List[ToolSpec] = [
+    ToolSpec(
+        name="cubicle_help",
+        description=(
+            "Look up how Cubicle, the app you and the user are in, works: its help pages, searched for the question. Use it when the "
+            "user asks how to do something in Cubicle (share a bot, let a command run without asking, set up a schedule, connect an "
+            "app) or what a part of it does. The result has the matching sections, links to the pages, screenshots you can include, "
+            "and how you yourself are set up, so you can answer for this bot rather than in general."
+        ),
+        parameters=_obj({"question": {"type": "string", "description": "The question, in the user's words or close to them"}}, ["question"]),
+        group="help",
+        needs_approval=False,
+    ),
+]
+
+
 # Connecting apps through Composio, with Cubicle's own flow (the same one the
 # marketplace uses). Composio's COMPOSIO_MANAGE_CONNECTIONS only works inside
 # a Composio tool-router session, which this app does not use.
@@ -754,6 +771,7 @@ def available_tools(
     specs.extend(TODO_TOOLS)
     specs.extend(SCHEDULE_TOOLS)
     specs.extend(QUESTION_TOOLS)
+    specs.extend(HELP_TOOLS)
     if orchestrator:
         specs.extend(ORCHESTRATION_TOOLS)
     if connector_management:
@@ -936,6 +954,12 @@ def describe_tools(
             "information you cannot find; give short options when there are natural ones. Do not ask in a scheduled run unless "
             "you cannot continue without the answer, since nobody may be watching, and do not ask things you can look up."
         )
+    if "help" in groups:
+        lines.append(
+            "- Cubicle's help: when the user asks how to do something in Cubicle or what a part of it does, cubicle_help looks it up "
+            "in the app's own pages and says how you are set up; answer from it rather than from memory, link the page, and include "
+            "a screenshot it offers when it shows what you describe."
+        )
     if "schedule" in groups:
         lines.append(
             "- Schedules: schedule_create runs a prompt for you later in your Scheduled conversation, once or on a cadence, after the user "
@@ -1081,7 +1105,7 @@ PROJECT_CALLS: Dict[str, Any] = {
 THREAD_ACTIONS = {
     "todo.list", "todo.add", "todo.update", "memory.read", "memory.write", "memory.edit", "user.ask",
     "projects.list", "projects.create", "projects.join", "work_notes.read", "work_notes.write", "work_notes.edit",
-    "project_log.add", "project_log.read", "bots.send",
+    "project_log.add", "project_log.read", "bots.send", "help.search",
 }
 
 
@@ -1466,6 +1490,11 @@ def _build_invocation(
             target={"toolkits": slugs, "bot_id": bot_id},
             preview=f"Check connections: {', '.join(slugs)}",
         )
+    if name == "cubicle_help":
+        question = _string(arguments, "question", required=True, max_len=1000).strip()
+        if not question:
+            raise ToolCallError("'question' is required.")
+        return ActionInvocation(name="help.search", arguments={"bot_id": bot_id, "question": question}, target={"bot_id": bot_id}, preview=f"Look up in Cubicle's help: {question[:120]}")
     if name in PROJECT_CALLS:
         action, fields = PROJECT_CALLS[name]
         payload: Dict[str, Any] = {"bot_id": bot_id}

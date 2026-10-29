@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { FiX, FiChevronRight, FiTool, FiZap, FiShield, FiEdit2, FiCopy, FiCheck } from 'react-icons/fi';
 import FileCard from './FileCard';
+import { apiUrl } from '../lib/api';
 
 // The steps a user message carries after a demonstration on the bot's computer.
 function DemonstrationChip({ demonstration }) {
@@ -138,6 +139,8 @@ function ToolCallList({ calls }) {
 // The markdown styling of a bot reply, shared by every text segment of it.
 const BOT_MARKDOWN = {
   p: ({ node, ...props }) => <div className="mb-2 last:mb-0 leading-relaxed" {...props} />,
+  // An image in a reply: a help page's screenshot (/api/v1/help/images/...) or one from the web.
+  img: ({ node, src, alt }) => <img src={apiUrl(src)} alt={alt || ''} loading="lazy" className="my-2 max-w-full rounded-xl border border-[#2b2b32] shadow-md" />,
   h1: ({ node, ...props }) => <h1 className="text-sm font-bold text-white mt-3 mb-1.5 first:mt-0" {...props} />,
   h2: ({ node, ...props }) => <h2 className="text-sm font-bold text-white mt-3 mb-1.5 first:mt-0" {...props} />,
   h3: ({ node, ...props }) => <h3 className="text-xs font-semibold text-zinc-100 mt-2.5 mb-1 first:mt-0" {...props} />,

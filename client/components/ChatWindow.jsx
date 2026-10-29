@@ -730,7 +730,7 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
     switch (spec.name) {
       case 'help': {
         const lines = commands.map((c) => `${c.usage}\n    ${c.description}`);
-        addLocalMessage(`Slash commands\n\n${lines.join('\n')}`);
+        addLocalMessage(`Slash commands\n\n${lines.join('\n')}\n\nThe full guide is under Help in the sidebar, and you can ask any bot how Cubicle works.`);
         return;
       }
       case 'clear': {
