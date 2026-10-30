@@ -21,6 +21,9 @@ class ServerInput(BaseModel):
     headers: Optional[Dict[str, str]] = None
     enabled: Optional[bool] = None
     trust_read_only: Optional[bool] = None
+    # Which of its tools the server offers: all, only (tool_names), except (tool_names).
+    tool_mode: Optional[str] = None
+    tool_names: Optional[List[str]] = None
     # system: every bot of every account (admins only); user: the caller's bots.
     scope: str = "user"
 
@@ -35,6 +38,8 @@ class ServerUpdate(BaseModel):
     headers: Optional[Dict[str, str]] = None
     enabled: Optional[bool] = None
     trust_read_only: Optional[bool] = None
+    tool_mode: Optional[str] = None
+    tool_names: Optional[List[str]] = None
 
 
 def _guard(action):
@@ -68,7 +73,11 @@ def _entry(record: Dict[str, Any]) -> Dict[str, Any]:
             "status": status.get("status") or ("stopped" if entry["enabled"] else "disabled"),
             "error": status.get("error") or "",
             "tool_count": status.get("tools", 0),
+            # How many of them the tool filter lets through to the bots.
+            "offered_count": status.get("offered", 0),
             "server_name": status.get("server_name") or "",
+            # A URL server's protocol once connected: http (streamable) or sse.
+            "via": status.get("via") or "",
         }
     )
     return entry
@@ -111,6 +120,12 @@ async def mcp_remove_server(server_id: str, request: Request):
 async def mcp_test_server(server_id: str, request: Request):
     record = _record(request, server_id)
     return await mcp_manager.test(record)
+
+
+@router.get("/servers/{server_id}/tools")
+async def mcp_server_tools(server_id: str, request: Request):
+    """All the server's tools, each marked offered or not, for choosing which it offers."""
+    return await mcp_manager.all_tools(_record(request, server_id))
 
 
 @router.post("/servers/{server_id}/reconnect")
@@ -190,4 +205,11 @@ async def bot_mcp_test(bot_id: str, server_id: str):
     _owned_bot(bot_id)
     record = _guard(lambda: mcp_manager.bot_store(bot_id).get(server_id))
     return await mcp_manager.test(record)
+
+
+@router.get("/bots/{bot_id}/servers/{server_id}/tools")
+async def bot_mcp_tools(bot_id: str, server_id: str):
+    _owned_bot(bot_id)
+    record = _guard(lambda: mcp_manager.bot_store(bot_id).get(server_id))
+    return await mcp_manager.all_tools(record)
 

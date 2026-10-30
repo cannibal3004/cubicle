@@ -2,8 +2,8 @@
 
 A server is configured once (App Settings, or by a bot through the mcp_*
 tools after approval) and kept in the settings store under `mcp_servers`:
-a name, a transport (a command to run over stdio, or a streamable-HTTP
-URL), environment variables or headers, and whether its tools may be
+a name, a transport (a command to run over stdio, or a URL: streamable HTTP,
+or the older SSE protocol, tried in turn), environment variables or headers, and whether its tools may be
 trusted as read-only. Any env or header value of the form `$NAME` is a
 reference to an app secret, resolved when the server starts and never
 stored resolved.
@@ -33,11 +33,22 @@ from app.services.storage_service import StorageService, current_storage, storag
 
 logger = logging.getLogger(__name__)
 
-TRANSPORTS = ("stdio", "http", "computer")
+TRANSPORTS = ("stdio", "http", "sse", "computer")
+# A URL server ("http") speaks streamable HTTP or the older SSE protocol. Both are tried while
+# connecting, SSE first when the path says so (.../sse, .../sse/...); "sse" is SSE only.
+_SSE_PATH = re.compile(r"/sse(?:/|$)")
+# An SSE stream may stay quiet between calls; it is not dropped for that.
+SSE_READ_TIMEOUT = 24 * 3600.0
+# A URL server whose session ended under it (restarted, most often) is connected again at once,
+# then after these waits (seconds) while it is still away, then every minute.
+RECONNECT_DELAYS = (1.0, 2.0, 5.0, 10.0, 30.0, 60.0)
 MAX_SERVERS = 30
 MAX_NAME_CHARS = 60
 MAX_ARGS = 40
 MAX_ENV = 30
+# Which of a server's tools it offers: all, only the named ones, or all but the named ones.
+TOOL_MODES = ("all", "only", "except")
+MAX_TOOL_NAMES = 1000
 _SECRET_REF = re.compile(r"\$\{([A-Z][A-Z0-9_]{0,63})\}|\$([A-Z][A-Z0-9_]{0,63})\b")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$")
 _ID = re.compile(r"^mcp-[a-f0-9]{8}$")
@@ -116,7 +127,7 @@ def clean_server(data: Any, *, existing: Optional[Dict[str, Any]] = None) -> Dic
     merged = {**base, **{k: v for k, v in data.items() if v is not None}}
     transport = str(merged.get("transport") or ("http" if merged.get("url") else "stdio")).strip().lower()
     if transport not in TRANSPORTS:
-        raise McpError("'transport' must be stdio (a command), http (a URL), or computer (a command run inside the bot's computer).")
+        raise McpError("'transport' must be stdio (a command), http (a URL), sse (a URL speaking only the older SSE protocol), or computer (a command run inside the bot's computer).")
     record: Dict[str, Any] = {
         "id": base.get("id") or f"mcp-{uuid.uuid4().hex[:8]}",
         "name": _clean_name(merged.get("name")),
@@ -128,6 +139,7 @@ def clean_server(data: Any, *, existing: Optional[Dict[str, Any]] = None) -> Dic
         "headers": {},
         "enabled": bool(merged.get("enabled", True)),
         "trust_read_only": bool(merged.get("trust_read_only", False)),
+        **_clean_tool_filter(merged.get("tool_mode"), merged.get("tool_names")),
         "created_by": base.get("created_by") or (str(merged.get("created_by") or "user")),
         "created_at": base.get("created_at") or time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
@@ -143,10 +155,40 @@ def clean_server(data: Any, *, existing: Optional[Dict[str, Any]] = None) -> Dic
     else:
         url = str(merged.get("url") or "").strip()
         if not re.match(r"^https?://[^\s]+$", url) or len(url) > 500:
-            raise McpError("An http server needs an http(s) URL.")
+            raise McpError(f"An {transport} server needs an http(s) URL.")
         record["url"] = url
         record["headers"] = _kept_hidden(_clean_map(merged.get("headers"), "headers"), base.get("headers"), "headers")
     return record
+
+
+def _clean_tool_filter(mode: Any, names: Any) -> Dict[str, Any]:
+    mode = str(mode or "all").strip().lower()
+    if mode not in TOOL_MODES:
+        raise McpError("'tool_mode' must be all, only or except.")
+    if mode == "all":
+        return {"tool_mode": "all", "tool_names": []}
+    if isinstance(names, str):
+        names = [n for n in re.split(r"[,\n]", names)]
+    if not isinstance(names, (list, tuple)):
+        raise McpError("'tool_names' must be a list of the server's tool names.")
+    cleaned: List[str] = []
+    for name in names:
+        text = str(name or "").strip()
+        if text and len(text) <= 200 and text not in cleaned:
+            cleaned.append(text)
+    if len(cleaned) > MAX_TOOL_NAMES:
+        raise McpError(f"At most {MAX_TOOL_NAMES} tool names.")
+    return {"tool_mode": mode, "tool_names": cleaned}
+
+
+def offers(record: Dict[str, Any], tool_name: str) -> bool:
+    """Whether the server offers this tool of its own (by the name it lists), per its tool filter."""
+    mode = record.get("tool_mode") or "all"
+    if mode == "only":
+        return tool_name in (record.get("tool_names") or [])
+    if mode == "except":
+        return tool_name not in (record.get("tool_names") or [])
+    return True
 
 
 def _kept_hidden(values: Dict[str, str], stored: Any, label: str) -> Dict[str, str]:
@@ -208,6 +250,8 @@ def public(record: Dict[str, Any]) -> Dict[str, Any]:
         "headers": {name: _shown(value) for name, value in (record.get("headers") or {}).items()},
         "enabled": bool(record.get("enabled", True)),
         "trust_read_only": bool(record.get("trust_read_only", False)),
+        "tool_mode": record.get("tool_mode") or "all",
+        "tool_names": list(record.get("tool_names") or []),
         "created_by": record.get("created_by") or "user",
         "created_at": record.get("created_at"),
         "secret_references": secret_references(record),
@@ -402,6 +446,10 @@ class McpTool:
     title: Optional[str] = None
 
 
+# What _unless_lost returns when the session is lost first.
+_LOST = object()
+
+
 @dataclass
 class _Request:
     name: str
@@ -420,9 +468,13 @@ class McpConnection:
     tools: List[McpTool] = field(default_factory=list)
     server_name: str = ""
     connected_at: Optional[float] = None
+    # The protocol the session runs over (a URL server's may be either).
+    via: str = ""
     _task: Optional["asyncio.Task[None]"] = None
     _queue: "asyncio.Queue[Optional[_Request]]" = field(default_factory=asyncio.Queue)
     _ready: "asyncio.Event" = field(default_factory=asyncio.Event)
+    # Set when a URL server's stream ends under the session.
+    _lost: "asyncio.Event" = field(default_factory=asyncio.Event)
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -465,32 +517,39 @@ class McpConnection:
         except asyncio.TimeoutError:
             raise McpError(f"{self.record['name']} did not answer {name} within {int(timeout)} seconds.")
 
+    def _protocols(self) -> List[str]:
+        transport = self.record["transport"]
+        if transport != "http":
+            return [transport]
+        from urllib.parse import urlparse
+
+        protocols = ["sse", "http"] if _SSE_PATH.search(urlparse(self.record.get("url") or "").path) else ["http", "sse"]
+        # The one that answered before goes first.
+        return sorted(protocols, key=lambda protocol: protocol != self.via)
+
     async def _run(self) -> None:
         try:
-            async with self._session() as session:
-                init = await session.initialize()
-                info = getattr(init, "server_info", None)
-                self.server_name = str(getattr(info, "name", "") or "")
-                self.tools = await self._list_tools(session)
-                self.status = "connected"
-                self.connected_at = time.time()
-                self._ready.set()
-                logger.info("MCP server %s connected: %d tools", self.record["name"], len(self.tools))
-                while True:
-                    request = await self._queue.get()
-                    if request is None:
+            away: Optional[int] = None  # attempts since the session was lost
+            while True:
+                if self._ready.is_set():
+                    self._ready = asyncio.Event()  # whoever waits now waits for this attempt
+                self.status = "connecting"
+                try:
+                    if not await self._connect():
                         return
-                    try:
-                        result = await session.call_tool(request.name, request.arguments)
-                        if not request.future.done():
-                            request.future.set_result(result)
-                    except Exception as exc:  # One failed call must not end the session.
-                        if not request.future.done():
-                            request.future.set_exception(McpError(str(exc) or exc.__class__.__name__))
-                        if self.record.get("transport") == "computer":
-                            # The computer restarted or the server died: the
-                            # next turn starts a fresh session (and server).
-                            raise
+                    # The server restarted or went away under the session: connect again.
+                    logger.info("MCP server %s: the connection was lost; reconnecting", self.record["name"])
+                    away = 0
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as exc:
+                    if away is None:
+                        raise
+                    # Still away: say so, and try again a little later.
+                    self.status, self.error = "error", _first_message(exc)
+                    self._ready.set()
+                    await asyncio.sleep(RECONNECT_DELAYS[min(away, len(RECONNECT_DELAYS) - 1)])
+                    away += 1
         except asyncio.CancelledError:
             raise
         except BaseException as exc:  # anyio raises groups; keep the first message.
@@ -508,12 +567,109 @@ class McpConnection:
                 if pending is not None and not pending.future.done():
                     pending.future.set_exception(McpError(self.error or "The MCP server stopped."))
 
+    async def _connect(self) -> bool:
+        """Connect over the first protocol that answers and serve calls; True when the session was lost."""
+        protocols = self._protocols()
+        for index, protocol in enumerate(protocols):
+            try:
+                return await self._serve(protocol)
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                # Only a failure to connect moves on to the other protocol.
+                if self.status == "connected" or index == len(protocols) - 1:
+                    raise
+                logger.info("MCP server %s did not connect over %s (%s); trying %s", self.record["name"], protocol, _first_message(exc), protocols[index + 1])
+        return False
+
+    async def _serve(self, protocol: str) -> bool:
+        """One session over one protocol, serving calls until stopped (False) or lost (True)."""
+        self._lost = asyncio.Event()
+        async with self._session(protocol) as session:
+            init = await session.initialize()
+            info = getattr(init, "server_info", None)
+            self.server_name = str(getattr(info, "name", "") or "")
+            self.tools = await self._list_tools(session)
+            self.status, self.error = "connected", ""
+            self.connected_at = time.time()
+            self._ready.set()
+            logger.info("MCP server %s connected over %s: %d tools", self.record["name"], protocol, len(self.tools))
+            while True:
+                request = await self._unless_lost(self._queue.get())
+                if request is _LOST:
+                    return True
+                if request is None:
+                    return False
+                try:
+                    result = await self._unless_lost(session.call_tool(request.name, request.arguments))
+                    if result is _LOST:
+                        if not request.future.done():
+                            request.future.set_exception(McpError(f"The connection to {self.record['name']} was lost (the server restarted or went away); it is reconnecting, try again in a moment."))
+                        return True
+                    if not request.future.done():
+                        request.future.set_result(result)
+                except Exception as exc:  # One failed call must not end the session.
+                    if not request.future.done():
+                        request.future.set_exception(McpError(str(exc) or exc.__class__.__name__))
+                    if self.record.get("transport") == "computer":
+                        # The computer restarted or the server died: the
+                        # next turn starts a fresh session (and server).
+                        raise
+                    if self._lost.is_set():
+                        return True
+
+    async def _unless_lost(self, awaitable: Any) -> Any:
+        """The awaitable's result, or _LOST if the session is lost first."""
+        work = asyncio.ensure_future(awaitable)
+        lost = asyncio.ensure_future(self._lost.wait())
+        try:
+            await asyncio.wait({work, lost}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            lost.cancel()
+            if not work.done():
+                work.cancel()
+                with contextlib.suppress(BaseException):
+                    await work
+        if work.cancelled():
+            return _LOST
+        return work.result()
+
     @contextlib.asynccontextmanager
-    async def _session(self):
+    async def _watched(self, streams: Any):
+        """A URL server's messages passed on until its stream ends (a restart, a dropped
+        connection): then the session is lost, and is connected again."""
+        import anyio
+
+        send, receive = anyio.create_memory_object_stream(0)
+
+        async def forward() -> None:
+            async with send:
+                async for item in streams[0]:
+                    await send.send(item)
+            self._lost.set()
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(forward)
+            try:
+                yield receive, streams[1]
+            finally:
+                group.cancel_scope.cancel()
+
+    @contextlib.asynccontextmanager
+    async def _session(self, protocol: str):
         from mcp import ClientSession
 
         record = self.record
-        if record["transport"] == "stdio":
+        self.via = protocol
+        if protocol == "sse":
+            from mcp.client.sse import sse_client
+
+            headers = resolve_values(record.get("headers") or {}, self.secrets)
+            async with sse_client(record["url"], headers=headers, timeout=CONNECT_TIMEOUT, sse_read_timeout=SSE_READ_TIMEOUT) as streams:
+                async with self._watched(streams) as watched:
+                    async with ClientSession(watched[0], watched[1]) as session:
+                        yield session
+        elif record["transport"] == "stdio":
             from mcp.client.stdio import StdioServerParameters, stdio_client
 
             env = {name: os.environ[name] for name in _INHERITED_ENV if name in os.environ}
@@ -536,8 +692,10 @@ class McpConnection:
                 headers = resolve_values(record.get("headers") or {}, self.secrets)
             async with httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(CALL_TIMEOUT, connect=CONNECT_TIMEOUT)) as client:
                 async with streamable_http_client(url, http_client=client) as streams:
-                    async with ClientSession(streams[0], streams[1]) as session:
-                        yield session
+                    # A computer server's session ending is the computer's business (see _serve).
+                    async with (contextlib.nullcontext(streams) if record["transport"] == "computer" else self._watched(streams)) as watched:
+                        async with ClientSession(watched[0], watched[1]) as session:
+                            yield session
 
     @staticmethod
     async def _list_tools(session: Any) -> List[McpTool]:
@@ -720,7 +878,9 @@ class McpManager:
                 "status": connection.status,
                 "error": connection.error,
                 "tools": len(connection.tools),
+                "offered": sum(1 for tool in connection.tools if offers(connection.record, tool.name)),
                 "server_name": connection.server_name,
+                "via": connection.via if connection.status == "connected" else "",
             }
         return out
 
@@ -769,6 +929,19 @@ class McpManager:
             return {"ok": False, "error": str(exc)}
         finally:
             await probe.stop()
+
+    async def all_tools(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """Every tool the server lists, offered or not, each marked (for choosing which it offers):
+        from its live session when it has one, otherwise from a test connection."""
+        connection = self._connections.get(record["id"])
+        if connection is not None and connection.status == "connected" and connection.record == record:
+            listing = {"ok": True, "server_name": connection.server_name,
+                       "tools": [{"name": t.name, "read_only": t.read_only, "description": t.description[:160]} for t in connection.tools]}
+        else:
+            listing = await self.test(record)
+        for tool in listing.get("tools", []):
+            tool["offered"] = offers(record, tool["name"])
+        return listing
 
 
 mcp_store = McpStore()

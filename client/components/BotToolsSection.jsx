@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
-import { FiChevronRight, FiShield } from 'react-icons/fi';
+import React, { useMemo, useState } from 'react';
+import { FiChevronRight, FiSearch, FiShield } from 'react-icons/fi';
 import { useToolCatalog } from '../lib/toolCatalog';
 import { Switch } from './ToolsPopover';
 import {
@@ -62,8 +62,17 @@ function ToolRow({ tool, on, parentOn, onChange, trusted, onTrust }) {
   );
 }
 
+// A section with more tools than this gets a search box and switches for what it shows.
+const SEARCH_FROM = 8;
+
 function Section({ title, subtitle, on, disabled, onToggle, tools, settings, onChange, trusted, onTrustedChange }) {
   const [expanded, setExpanded] = useState(false);
+  const [query, setQuery] = useState('');
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? tools.filter((tool) => tool.name.toLowerCase().includes(q) || (tool.description || '').toLowerCase().includes(q)) : tools;
+  }, [tools, query]);
+  const setShown = (checked) => onChange(shown.reduce((next, tool) => withTool(next, tool.name, checked), settings));
   const enabledCount = tools.filter((tool) => isToolOn(settings, tool.name)).length;
   const trustedCount = on ? tools.filter((tool) => tool.needs_approval && isToolOn(settings, tool.name) && isTrusted(trusted, tool.name)).length : 0;
   return (
@@ -87,7 +96,32 @@ function Section({ title, subtitle, on, disabled, onToggle, tools, settings, onC
       </div>
       {expanded && (
         <div className="border-t border-[#1f1f23] py-1">
-          {tools.map((tool) => (
+          {tools.length > SEARCH_FROM && (
+            <div className="flex items-center gap-2 px-3 py-1.5">
+              <div className="relative flex-1">
+                <FiSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[11px] text-zinc-500" />
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder={`Search ${tools.length} tools`}
+                  className="w-full bg-[#1b1b1f] border border-[#2e2e34] rounded-lg pl-7 pr-2 py-1.5 text-[11px] text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-400"
+                />
+              </div>
+              {['on', 'off'].map((state) => (
+                <button
+                  key={state}
+                  type="button"
+                  disabled={!on || !shown.length}
+                  onClick={() => setShown(state === 'on')}
+                  className="px-2 py-1 rounded-lg text-[11px] text-zinc-300 hover:text-white bg-[#1f1f23] hover:bg-[#27272b] disabled:opacity-40 transition whitespace-nowrap"
+                >
+                  {query ? `Shown ${state}` : `All ${state}`}
+                </button>
+              ))}
+            </div>
+          )}
+          {shown.map((tool) => (
             <ToolRow
               key={tool.name}
               tool={tool}

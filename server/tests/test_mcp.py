@@ -189,6 +189,34 @@ class LiveProbeServerTests(unittest.IsolatedAsyncioTestCase):
         self.store.update(record["id"], {"enabled": False})
         self.assertEqual(mcp_tool_specs(self.manager), [])
 
+    async def test_a_server_offers_only_the_tools_chosen(self):
+        """A server listing hundreds of tools (DigitalOcean's): the bots get the chosen ones; the picker sees all."""
+        record = self.store.add(probe_definition(env={"PROBE_TOKEN": "$PROBE_TOKEN"}, tool_mode="only", tool_names=["add", "shout", "gone"]))
+        self.assertEqual((public(record)["tool_mode"], public(record)["tool_names"]), ("only", ["add", "shout", "gone"]))
+        await self.manager.connection(record["id"]).wait_ready()
+        self.assertEqual(sorted(s.name for s in mcp_tool_specs(self.manager)), ["probe_add", "probe_shout"])
+        self.assertEqual(self.manager.statuses()[record["id"]]["offered"], 2)
+        listing = await self.manager.all_tools(record)
+        self.assertEqual({t["name"]: t["offered"] for t in listing["tools"]}, {"add": True, "secret_name": False, "shout": True})
+
+        record = self.store.update(record["id"], {"tool_mode": "except", "tool_names": ["shout"]})
+        await self.manager.connection(record["id"]).wait_ready()
+        self.assertEqual(sorted(s.name for s in mcp_tool_specs(self.manager)), ["probe_add", "probe_secret_name"])
+        # Back to all: the names are dropped.
+        record = self.store.update(record["id"], {"tool_mode": "all", "tool_names": ["shout"]})
+        self.assertEqual((record["tool_mode"], record["tool_names"]), ("all", []))
+        await self.manager.connection(record["id"]).wait_ready()
+        self.assertEqual(len(mcp_tool_specs(self.manager)), 3)
+        with self.assertRaisesRegex(McpError, "all, only or except"):
+            clean_server(probe_definition(tool_mode="some"))
+
+        # A bot adding a server names the tools the job needs.
+        call = build_invocation("mcp_add_server", {"name": "Probe2", "scope": "user", "transport": "stdio", "command": "python", "tools": ["add"]}, "bot-1")
+        self.assertEqual((call.arguments["server"]["tool_mode"], call.arguments["server"]["tool_names"]), ("only", ["add"]))
+        self.assertIn("offers only 1 of its tools", call.preview)
+        plain = build_invocation("mcp_add_server", {"name": "Probe3", "scope": "user", "transport": "stdio", "command": "python"}, "bot-1")
+        self.assertEqual(plain.arguments["server"]["tool_mode"], "all")
+
     async def test_a_server_that_cannot_start_reports_its_error(self):
         record = self.store.add({"name": "Broken", "command": sys.executable, "args": ["-c", "import sys; sys.exit(3)"]})
         connection = self.manager.connection(record["id"])
@@ -245,6 +273,86 @@ class LiveProbeServerTests(unittest.IsolatedAsyncioTestCase):
             removed = await mcp_tools.remove_server(build_invocation("mcp_remove_server", {"id": outcome["server"]["id"]}, "bot-1"))
             self.assertEqual(removed["removed"]["name"], "Broken")
             self.assertEqual(len(self.manager.records()), 2)
+
+
+class SseServerTests(unittest.IsolatedAsyncioTestCase):
+    """A server that speaks only the older SSE protocol (mem0's OpenMemory, for one), on a real port."""
+
+    def _port(self):
+        import socket
+
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            return sock.getsockname()[1]
+
+    def _serve(self, sse_path, port=None):
+        """The fixture server in its own process (so it can be killed like a container); its URL."""
+        import subprocess
+        import time
+        import urllib.request
+
+        port = port or self._port()
+        process = subprocess.Popen([sys.executable, str(Path(__file__).parent / "fixtures" / "mcp_sse_server.py"), str(port), sse_path])
+        self.addCleanup(lambda: (process.kill(), process.wait(10)))
+        url = f"http://127.0.0.1:{port}{sse_path}"
+        for _ in range(200):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/nothing", timeout=1)
+            except urllib.error.HTTPError:
+                break  # it answers
+            except OSError:
+                time.sleep(0.05)
+        return url, process
+
+    async def _connect(self, record):
+        connection = mcp_service.McpConnection(record=record)
+        self.addAsyncCleanup(connection.stop)
+        await connection.wait_ready(timeout=30)
+        return connection
+
+    async def test_a_url_falls_back_to_sse_and_sse_can_be_chosen(self):
+        # A path that does not say sse: streamable HTTP is tried first, then SSE.
+        url, _ = self._serve("/events")
+        connection = await self._connect(clean_server({"name": "Memory", "url": url}))
+        self.assertEqual((connection.record["transport"], connection.status, connection.via), ("http", "connected", "sse"))
+        self.assertEqual([t.name for t in connection.tools], ["remember"])
+        result = await connection.call("remember", {"text": "the NAS is nas.lan"})
+        self.assertIn("kept: the NAS is nas.lan", result.content[0].text)
+        # Chosen outright.
+        forced = await self._connect(clean_server({"name": "Memory", "transport": "sse", "url": url}))
+        self.assertEqual((forced.status, forced.via), ("connected", "sse"))
+
+    async def test_a_restarted_server_is_connected_again(self):
+        """mem0 restarted with its container: the session is lost, then connected again by itself."""
+        port = self._port()
+        url, process = self._serve("/sse", port)
+        connection = await self._connect(clean_server({"name": "Memory", "url": url}))
+        process.kill()
+        process.wait(10)
+        for _ in range(100):
+            if connection.status != "connected":
+                break
+            await asyncio.sleep(0.05)
+        self.assertNotEqual(connection.status, "connected")  # noticed, not left looking connected
+        # While it is away, a call fails at once rather than hanging.
+        with self.assertRaises(McpError):
+            await connection.call("remember", {"text": "lost"}, timeout=5)
+        self._serve("/sse", port)
+        for _ in range(200):
+            if connection.status == "connected":
+                break
+            await asyncio.sleep(0.05)
+        self.assertEqual((connection.status, connection.error), ("connected", ""))
+        result = await connection.call("remember", {"text": "back"}, timeout=10)
+        self.assertIn("kept: back", result.content[0].text)
+
+    def test_a_path_that_says_sse_tries_sse_first(self):
+        protocols = lambda url, transport="http": mcp_service.McpConnection(record={"name": "x", "transport": transport, "url": url})._protocols()
+        self.assertEqual(protocols("http://nas:8765/mcp/openmemory/sse/default_user"), ["sse", "http"])
+        self.assertEqual(protocols("https://mcp.example.com/sse"), ["sse", "http"])
+        self.assertEqual(protocols("https://mcp.exa.ai/mcp"), ["http", "sse"])
+        self.assertEqual(protocols("https://example.com/sseverything/mcp"), ["http", "sse"])
+        self.assertEqual(protocols("https://mcp.example.com/mcp", "sse"), ["sse"])
 
 
 if __name__ == "__main__":

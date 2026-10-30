@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
+import McpToolPicker from './McpToolPicker';
 import { FiServer, FiTrash2, FiRefreshCw, FiPlus, FiPower, FiPlay, FiEdit2, FiCheck } from 'react-icons/fi';
 
 const STATUS_STYLES = {
@@ -34,11 +35,14 @@ export function argsText(args) {
 // MCP servers: a command run over stdio or a streamable-HTTP URL, whose tools
 // the bots get like a connected app's. Secrets never go in here: write $NAME
 // to use an app secret.
-export default function McpServersSection({ admin = false, load, create, update, remove, test, testDraft, reconnect }) {
+export default function McpServersSection({ admin = false, load, create, update, remove, test, testDraft, reconnect, loadTools }) {
   const [items, setItems] = useState([]);
   const [showForm, setShowForm] = useState(false);
   // The id of the server the form is changing, or null when it adds one.
   const [editing, setEditing] = useState(null);
+  // The tool choice made in the form ({tool_mode, tool_names}), or null when untouched.
+  const [toolFilter, setToolFilter] = useState(null);
+  const loadEditingTools = useCallback(() => loadTools(editing), [loadTools, editing]);
   const [name, setName] = useState('');
   const [transport, setTransport] = useState('stdio');
   const [command, setCommand] = useState('');
@@ -88,8 +92,8 @@ export default function McpServersSection({ admin = false, load, create, update,
     command: transport === 'stdio' ? command.trim() : undefined,
     args: transport === 'stdio' ? args.trim() : undefined,
     env: transport === 'stdio' ? parseMap(vars) : undefined,
-    url: transport === 'http' ? url.trim() : undefined,
-    headers: transport === 'http' ? parseMap(vars) : undefined,
+    url: transport !== 'stdio' ? url.trim() : undefined,
+    headers: transport !== 'stdio' ? parseMap(vars) : undefined,
     trust_read_only: trust,
     scope: admin ? scope : 'user',
   });
@@ -105,6 +109,7 @@ export default function McpServersSection({ admin = false, load, create, update,
     setTrust(false);
     setDraftResult(null);
     setEditing(null);
+    setToolFilter(null);
     setShowForm(false);
   };
 
@@ -112,11 +117,11 @@ export default function McpServersSection({ admin = false, load, create, update,
   const startEdit = (item) => {
     setEditing(item.id);
     setName(item.name);
-    setTransport(item.transport === 'http' ? 'http' : 'stdio');
+    setTransport(['http', 'sse'].includes(item.transport) ? item.transport : 'stdio');
     setCommand(item.command || '');
     setArgs(argsText(item.args));
     setUrl(item.url || '');
-    setVars(mapText(item.transport === 'http' ? item.headers : item.env));
+    setVars(mapText(item.transport === 'stdio' ? item.env : item.headers));
     setTrust(!!item.trust_read_only);
     setDraftResult(null);
     setShowForm(true);
@@ -124,7 +129,7 @@ export default function McpServersSection({ admin = false, load, create, update,
 
   const submit = async () => {
     const ok = editing
-      ? await run(() => update(editing, { ...draft(), scope: undefined }), 'Could not save the server.')
+      ? await run(() => update(editing, { ...draft(), scope: undefined, ...(toolFilter || {}) }), 'Could not save the server.')
       : await run(() => create(draft()), 'Could not add the server.');
     if (ok) closeForm();
   };
@@ -167,9 +172,15 @@ export default function McpServersSection({ admin = false, load, create, update,
                 </div>
                 <div className="pl-6 mt-0.5 text-[10px] text-zinc-500 flex flex-wrap gap-x-3">
                   <span className={STATUS_STYLES[item.status] || 'text-zinc-400'}>{item.status}</span>
-                  {item.status === 'connected' && <span>{item.tool_count} tools{item.server_name ? ` · ${item.server_name}` : ''}</span>}
+                  {item.status === 'connected' && <span>{item.tool_count} tools{item.server_name ? ` · ${item.server_name}` : ''}{item.via === 'sse' ? ' · over SSE' : ''}</span>}
                   {item.error && <span className="text-rose-300 truncate" title={item.error}>{item.error}</span>}
                   <span>{item.scope === 'system' ? 'system · everyone' : 'yours'}</span>
+                  {item.tool_mode === 'all' && item.offered_count > 60 && (
+                    <span className="text-amber-400/90" title="Edit the server to choose which tools it offers">
+                      offers all {item.offered_count} tools: choose which in Edit
+                    </span>
+                  )}
+                  {item.tool_mode !== 'all' && item.status === 'connected' && <span>offers {item.offered_count} of {item.tool_count}</span>}
                   {item.trust_read_only && <span>trusted read-only</span>}
                   {item.secret_references?.length > 0 && <span>secrets: {item.secret_references.join(', ')}</span>}
                   {item.created_by === 'bot' && <span>added by a bot</span>}
@@ -197,7 +208,8 @@ export default function McpServersSection({ admin = false, load, create, update,
             <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name, e.g. Context7" maxLength={60} className={`${inputClass} flex-1`} />
             <select value={transport} onChange={(e) => setTransport(e.target.value)} className={inputClass}>
               <option value="stdio">Command (stdio)</option>
-              <option value="http">URL (streamable HTTP)</option>
+              <option value="http">URL (streamable HTTP or SSE)</option>
+              <option value="sse">URL (SSE only)</option>
             </select>
           </div>
           {transport === 'stdio' ? (
@@ -215,6 +227,9 @@ export default function McpServersSection({ admin = false, load, create, update,
             rows={2}
             className={`${inputClass} w-full resize-y`}
           />
+          {editing && loadTools && (
+            <McpToolPicker load={loadEditingTools} mode={items.find((i) => i.id === editing)?.tool_mode} onChange={setToolFilter} />
+          )}
           {admin && !editing && (
             <label className="flex items-center gap-2 text-[11px] text-zinc-400">
               <select value={scope} onChange={(e) => setScope(e.target.value)} className={inputClass}>
