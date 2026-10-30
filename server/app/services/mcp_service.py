@@ -39,6 +39,9 @@ TRANSPORTS = ("stdio", "http", "sse", "computer")
 _SSE_PATH = re.compile(r"/sse(?:/|$)")
 # An SSE stream may stay quiet between calls; it is not dropped for that.
 SSE_READ_TIMEOUT = 24 * 3600.0
+# A URL server whose session ended under it (restarted, most often) is connected again at once,
+# then after these waits (seconds) while it is still away, then every minute.
+RECONNECT_DELAYS = (1.0, 2.0, 5.0, 10.0, 30.0, 60.0)
 MAX_SERVERS = 30
 MAX_NAME_CHARS = 60
 MAX_ARGS = 40
@@ -407,6 +410,10 @@ class McpTool:
     title: Optional[str] = None
 
 
+# What _unless_lost returns when the session is lost first.
+_LOST = object()
+
+
 @dataclass
 class _Request:
     name: str
@@ -430,6 +437,8 @@ class McpConnection:
     _task: Optional["asyncio.Task[None]"] = None
     _queue: "asyncio.Queue[Optional[_Request]]" = field(default_factory=asyncio.Queue)
     _ready: "asyncio.Event" = field(default_factory=asyncio.Event)
+    # Set when a URL server's stream ends under the session.
+    _lost: "asyncio.Event" = field(default_factory=asyncio.Event)
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -478,22 +487,33 @@ class McpConnection:
             return [transport]
         from urllib.parse import urlparse
 
-        return ["sse", "http"] if _SSE_PATH.search(urlparse(self.record.get("url") or "").path) else ["http", "sse"]
+        protocols = ["sse", "http"] if _SSE_PATH.search(urlparse(self.record.get("url") or "").path) else ["http", "sse"]
+        # The one that answered before goes first.
+        return sorted(protocols, key=lambda protocol: protocol != self.via)
 
     async def _run(self) -> None:
         try:
-            protocols = self._protocols()
-            for index, protocol in enumerate(protocols):
+            away: Optional[int] = None  # attempts since the session was lost
+            while True:
+                if self._ready.is_set():
+                    self._ready = asyncio.Event()  # whoever waits now waits for this attempt
+                self.status = "connecting"
                 try:
-                    await self._serve(protocol)
-                    return
+                    if not await self._connect():
+                        return
+                    # The server restarted or went away under the session: connect again.
+                    logger.info("MCP server %s: the connection was lost; reconnecting", self.record["name"])
+                    away = 0
                 except asyncio.CancelledError:
                     raise
                 except BaseException as exc:
-                    # Only a failure to connect moves on to the other protocol.
-                    if self.status == "connected" or index == len(protocols) - 1:
+                    if away is None:
                         raise
-                    logger.info("MCP server %s did not connect over %s (%s); trying %s", self.record["name"], protocol, _first_message(exc), protocols[index + 1])
+                    # Still away: say so, and try again a little later.
+                    self.status, self.error = "error", _first_message(exc)
+                    self._ready.set()
+                    await asyncio.sleep(RECONNECT_DELAYS[min(away, len(RECONNECT_DELAYS) - 1)])
+                    away += 1
         except asyncio.CancelledError:
             raise
         except BaseException as exc:  # anyio raises groups; keep the first message.
@@ -511,23 +531,45 @@ class McpConnection:
                 if pending is not None and not pending.future.done():
                     pending.future.set_exception(McpError(self.error or "The MCP server stopped."))
 
-    async def _serve(self, protocol: str) -> None:
-        """One session over one protocol, serving calls until stopped."""
+    async def _connect(self) -> bool:
+        """Connect over the first protocol that answers and serve calls; True when the session was lost."""
+        protocols = self._protocols()
+        for index, protocol in enumerate(protocols):
+            try:
+                return await self._serve(protocol)
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                # Only a failure to connect moves on to the other protocol.
+                if self.status == "connected" or index == len(protocols) - 1:
+                    raise
+                logger.info("MCP server %s did not connect over %s (%s); trying %s", self.record["name"], protocol, _first_message(exc), protocols[index + 1])
+        return False
+
+    async def _serve(self, protocol: str) -> bool:
+        """One session over one protocol, serving calls until stopped (False) or lost (True)."""
+        self._lost = asyncio.Event()
         async with self._session(protocol) as session:
             init = await session.initialize()
             info = getattr(init, "server_info", None)
             self.server_name = str(getattr(info, "name", "") or "")
             self.tools = await self._list_tools(session)
-            self.status = "connected"
+            self.status, self.error = "connected", ""
             self.connected_at = time.time()
             self._ready.set()
-            logger.info("MCP server %s connected: %d tools", self.record["name"], len(self.tools))
+            logger.info("MCP server %s connected over %s: %d tools", self.record["name"], protocol, len(self.tools))
             while True:
-                request = await self._queue.get()
+                request = await self._unless_lost(self._queue.get())
+                if request is _LOST:
+                    return True
                 if request is None:
-                    return
+                    return False
                 try:
-                    result = await session.call_tool(request.name, request.arguments)
+                    result = await self._unless_lost(session.call_tool(request.name, request.arguments))
+                    if result is _LOST:
+                        if not request.future.done():
+                            request.future.set_exception(McpError(f"The connection to {self.record['name']} was lost (the server restarted or went away); it is reconnecting, try again in a moment."))
+                        return True
                     if not request.future.done():
                         request.future.set_result(result)
                 except Exception as exc:  # One failed call must not end the session.
@@ -537,6 +579,45 @@ class McpConnection:
                         # The computer restarted or the server died: the
                         # next turn starts a fresh session (and server).
                         raise
+                    if self._lost.is_set():
+                        return True
+
+    async def _unless_lost(self, awaitable: Any) -> Any:
+        """The awaitable's result, or _LOST if the session is lost first."""
+        work = asyncio.ensure_future(awaitable)
+        lost = asyncio.ensure_future(self._lost.wait())
+        try:
+            await asyncio.wait({work, lost}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            lost.cancel()
+            if not work.done():
+                work.cancel()
+                with contextlib.suppress(BaseException):
+                    await work
+        if work.cancelled():
+            return _LOST
+        return work.result()
+
+    @contextlib.asynccontextmanager
+    async def _watched(self, streams: Any):
+        """A URL server's messages passed on until its stream ends (a restart, a dropped
+        connection): then the session is lost, and is connected again."""
+        import anyio
+
+        send, receive = anyio.create_memory_object_stream(0)
+
+        async def forward() -> None:
+            async with send:
+                async for item in streams[0]:
+                    await send.send(item)
+            self._lost.set()
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(forward)
+            try:
+                yield receive, streams[1]
+            finally:
+                group.cancel_scope.cancel()
 
     @contextlib.asynccontextmanager
     async def _session(self, protocol: str):
@@ -549,8 +630,9 @@ class McpConnection:
 
             headers = resolve_values(record.get("headers") or {}, self.secrets)
             async with sse_client(record["url"], headers=headers, timeout=CONNECT_TIMEOUT, sse_read_timeout=SSE_READ_TIMEOUT) as streams:
-                async with ClientSession(streams[0], streams[1]) as session:
-                    yield session
+                async with self._watched(streams) as watched:
+                    async with ClientSession(watched[0], watched[1]) as session:
+                        yield session
         elif record["transport"] == "stdio":
             from mcp.client.stdio import StdioServerParameters, stdio_client
 
@@ -574,8 +656,10 @@ class McpConnection:
                 headers = resolve_values(record.get("headers") or {}, self.secrets)
             async with httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(CALL_TIMEOUT, connect=CONNECT_TIMEOUT)) as client:
                 async with streamable_http_client(url, http_client=client) as streams:
-                    async with ClientSession(streams[0], streams[1]) as session:
-                        yield session
+                    # A computer server's session ending is the computer's business (see _serve).
+                    async with (contextlib.nullcontext(streams) if record["transport"] == "computer" else self._watched(streams)) as watched:
+                        async with ClientSession(watched[0], watched[1]) as session:
+                            yield session
 
     @staticmethod
     async def _list_tools(session: Any) -> List[McpTool]:

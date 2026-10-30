@@ -250,37 +250,31 @@ class LiveProbeServerTests(unittest.IsolatedAsyncioTestCase):
 class SseServerTests(unittest.IsolatedAsyncioTestCase):
     """A server that speaks only the older SSE protocol (mem0's OpenMemory, for one), on a real port."""
 
-    def _serve(self, sse_path):
+    def _port(self):
         import socket
-        import threading
-
-        import uvicorn
-        from mcp.server.mcpserver import MCPServer
-
-        server = MCPServer("sse-probe")
-
-        @server.tool()
-        def remember(text: str) -> str:
-            """Keep a note."""
-            return f"kept: {text}"
 
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
-            port = sock.getsockname()[1]
-        web = uvicorn.Server(uvicorn.Config(server.sse_app(sse_path=sse_path), host="127.0.0.1", port=port, log_level="error"))
-        thread = threading.Thread(target=web.run, daemon=True)
-        thread.start()
-        for _ in range(100):
-            if web.started:
-                break
-            threading.Event().wait(0.05)
+            return sock.getsockname()[1]
 
-        def stop():
-            web.should_exit = True
-            thread.join(5)
+    def _serve(self, sse_path, port=None):
+        """The fixture server in its own process (so it can be killed like a container); its URL."""
+        import subprocess
+        import time
+        import urllib.request
 
-        self.addCleanup(stop)
-        return f"http://127.0.0.1:{port}{sse_path}"
+        port = port or self._port()
+        process = subprocess.Popen([sys.executable, str(Path(__file__).parent / "fixtures" / "mcp_sse_server.py"), str(port), sse_path])
+        self.addCleanup(lambda: (process.kill(), process.wait(10)))
+        url = f"http://127.0.0.1:{port}{sse_path}"
+        for _ in range(200):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/nothing", timeout=1)
+            except urllib.error.HTTPError:
+                break  # it answers
+            except OSError:
+                time.sleep(0.05)
+        return url, process
 
     async def _connect(self, record):
         connection = mcp_service.McpConnection(record=record)
@@ -290,7 +284,7 @@ class SseServerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_url_falls_back_to_sse_and_sse_can_be_chosen(self):
         # A path that does not say sse: streamable HTTP is tried first, then SSE.
-        url = self._serve("/events")
+        url, _ = self._serve("/events")
         connection = await self._connect(clean_server({"name": "Memory", "url": url}))
         self.assertEqual((connection.record["transport"], connection.status, connection.via), ("http", "connected", "sse"))
         self.assertEqual([t.name for t in connection.tools], ["remember"])
@@ -299,6 +293,30 @@ class SseServerTests(unittest.IsolatedAsyncioTestCase):
         # Chosen outright.
         forced = await self._connect(clean_server({"name": "Memory", "transport": "sse", "url": url}))
         self.assertEqual((forced.status, forced.via), ("connected", "sse"))
+
+    async def test_a_restarted_server_is_connected_again(self):
+        """mem0 restarted with its container: the session is lost, then connected again by itself."""
+        port = self._port()
+        url, process = self._serve("/sse", port)
+        connection = await self._connect(clean_server({"name": "Memory", "url": url}))
+        process.kill()
+        process.wait(10)
+        for _ in range(100):
+            if connection.status != "connected":
+                break
+            await asyncio.sleep(0.05)
+        self.assertNotEqual(connection.status, "connected")  # noticed, not left looking connected
+        # While it is away, a call fails at once rather than hanging.
+        with self.assertRaises(McpError):
+            await connection.call("remember", {"text": "lost"}, timeout=5)
+        self._serve("/sse", port)
+        for _ in range(200):
+            if connection.status == "connected":
+                break
+            await asyncio.sleep(0.05)
+        self.assertEqual((connection.status, connection.error), ("connected", ""))
+        result = await connection.call("remember", {"text": "back"}, timeout=10)
+        self.assertIn("kept: back", result.content[0].text)
 
     def test_a_path_that_says_sse_tries_sse_first(self):
         protocols = lambda url, transport="http": mcp_service.McpConnection(record={"name": "x", "transport": transport, "url": url})._protocols()
