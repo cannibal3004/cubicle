@@ -78,7 +78,7 @@ function ImageViewer({ image, onClose }) {
           event.stopPropagation();
           setActual((value) => !value);
         }}
-        className={`rounded-xl border border-[#26262b] shadow-2xl ${actual ? 'max-w-none m-6 cursor-zoom-out' : 'max-w-full max-h-[calc(100vh-5rem)] object-contain cursor-zoom-in'}`}
+        className={`rounded-xl border border-[#26262b] shadow-2xl ${actual ? 'max-w-none flex-shrink-0 self-start mx-auto my-6 cursor-zoom-out' : 'max-w-full max-h-[calc(100vh-5rem)] object-contain cursor-zoom-in'}`}
       />
       {image.alt && !actual && <p className="mt-3 text-xs text-zinc-400 text-center">{image.alt}</p>}
     </div>
