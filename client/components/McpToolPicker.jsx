@@ -3,11 +3,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { FiChevronRight, FiSearch } from 'react-icons/fi';
 
-// The part of a name before its first _ - or . ("droplet" of droplet_create): tools that share
-// it are grouped, so a server with hundreds of tools reads as a few dozen families.
+// A name up to its first _ - or . ("droplet-" of droplet-create): tools that share it are
+// grouped, so a server with hundreds of tools reads as a few dozen families.
 function prefixOf(name) {
-  const match = /^([A-Za-z0-9]+)[_.-]/.exec(name);
-  return match ? match[1].toLowerCase() : '';
+  const match = /^[A-Za-z0-9]+[_.-]/.exec(name);
+  return match ? match[0].toLowerCase() : '';
 }
 
 function groupTools(tools) {
@@ -76,7 +76,10 @@ export default function McpToolPicker({ load, mode = 'all', onChange }) {
   const setMany = (names, on) => {
     const next = new Set(offered);
     names.forEach((name) => (on ? next.add(name) : next.delete(name)));
-    apply(next);
+    // Clearing the whole list means picking from scratch: tools it adds later wait to be picked too.
+    // Offering the whole list means offering everything, later ones included.
+    const whole = names.length === tools.length;
+    apply(next, whole ? on : newOn);
   };
 
   if (error) return <p className="text-[11px] text-rose-400">Tools: {error} Save the server once it connects to choose its tools.</p>;
@@ -125,11 +128,11 @@ export default function McpToolPicker({ load, mode = 'all', onChange }) {
                   ref={(el) => el && (el.indeterminate = on > 0 && on < members.length)}
                   onChange={(e) => setMany(members.map((t) => t.name), e.target.checked)}
                   className="accent-cyan-400"
-                  aria-label={`Offer every ${prefix || 'other'} tool`}
+                  aria-label={`Offer every ${prefix ? `${prefix}*` : 'other'} tool`}
                 />
                 <button type="button" onClick={() => setOpen((prev) => ({ ...prev, [prefix]: !expanded }))} className="flex items-center gap-1.5 min-w-0 flex-1 text-left">
                   <FiChevronRight className={`text-[11px] text-zinc-500 transition-transform ${expanded ? 'rotate-90' : ''}`} />
-                  <span className="text-[11px] text-zinc-200 font-mono truncate">{prefix ? `${prefix}_*` : 'Other tools'}</span>
+                  <span className="text-[11px] text-zinc-200 font-mono truncate">{prefix ? `${prefix}*` : 'Other tools'}</span>
                   <span className="text-[10px] text-zinc-500 flex-shrink-0">{on} of {members.length}</span>
                 </button>
               </div>
