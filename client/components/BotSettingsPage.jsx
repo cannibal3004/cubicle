@@ -40,6 +40,7 @@ import {
   updateBotMcpServer,
   deleteBotMcpServer,
   testBotMcpServer,
+  fetchBotMcpServerTools,
 } from '../lib/api';
 
 const MAX_SUGGESTIONS = 6;
@@ -201,6 +202,7 @@ export default function BotSettingsPage({
   const changeMcp = useCallback((id, changes) => updateBotMcpServer(botId, id, changes), [botId]);
   const removeMcp = useCallback((id) => deleteBotMcpServer(botId, id), [botId]);
   const testMcp = useCallback((id) => testBotMcpServer(botId, id), [botId]);
+  const loadMcpTools = useCallback((id) => fetchBotMcpServerTools(botId, id), [botId]);
 
   const save = async () => {
     if (!values.name.trim()) {
@@ -660,7 +662,7 @@ export default function BotSettingsPage({
             )}
             {show('tools') && isEdit && (
               <Card title="MCP servers on this computer" help="Tool servers only this bot gets, run inside its computer. Saved as you go.">
-                <BotMcpSection load={loadMcp} create={addMcp} update={changeMcp} remove={removeMcp} test={testMcp} />
+                <BotMcpSection load={loadMcp} create={addMcp} update={changeMcp} remove={removeMcp} test={testMcp} loadTools={loadMcpTools} />
               </Card>
             )}
 

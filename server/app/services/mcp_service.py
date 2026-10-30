@@ -46,6 +46,9 @@ MAX_SERVERS = 30
 MAX_NAME_CHARS = 60
 MAX_ARGS = 40
 MAX_ENV = 30
+# Which of a server's tools it offers: all, only the named ones, or all but the named ones.
+TOOL_MODES = ("all", "only", "except")
+MAX_TOOL_NAMES = 1000
 _SECRET_REF = re.compile(r"\$\{([A-Z][A-Z0-9_]{0,63})\}|\$([A-Z][A-Z0-9_]{0,63})\b")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$")
 _ID = re.compile(r"^mcp-[a-f0-9]{8}$")
@@ -136,6 +139,7 @@ def clean_server(data: Any, *, existing: Optional[Dict[str, Any]] = None) -> Dic
         "headers": {},
         "enabled": bool(merged.get("enabled", True)),
         "trust_read_only": bool(merged.get("trust_read_only", False)),
+        **_clean_tool_filter(merged.get("tool_mode"), merged.get("tool_names")),
         "created_by": base.get("created_by") or (str(merged.get("created_by") or "user")),
         "created_at": base.get("created_at") or time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
@@ -155,6 +159,36 @@ def clean_server(data: Any, *, existing: Optional[Dict[str, Any]] = None) -> Dic
         record["url"] = url
         record["headers"] = _kept_hidden(_clean_map(merged.get("headers"), "headers"), base.get("headers"), "headers")
     return record
+
+
+def _clean_tool_filter(mode: Any, names: Any) -> Dict[str, Any]:
+    mode = str(mode or "all").strip().lower()
+    if mode not in TOOL_MODES:
+        raise McpError("'tool_mode' must be all, only or except.")
+    if mode == "all":
+        return {"tool_mode": "all", "tool_names": []}
+    if isinstance(names, str):
+        names = [n for n in re.split(r"[,\n]", names)]
+    if not isinstance(names, (list, tuple)):
+        raise McpError("'tool_names' must be a list of the server's tool names.")
+    cleaned: List[str] = []
+    for name in names:
+        text = str(name or "").strip()
+        if text and len(text) <= 200 and text not in cleaned:
+            cleaned.append(text)
+    if len(cleaned) > MAX_TOOL_NAMES:
+        raise McpError(f"At most {MAX_TOOL_NAMES} tool names.")
+    return {"tool_mode": mode, "tool_names": cleaned}
+
+
+def offers(record: Dict[str, Any], tool_name: str) -> bool:
+    """Whether the server offers this tool of its own (by the name it lists), per its tool filter."""
+    mode = record.get("tool_mode") or "all"
+    if mode == "only":
+        return tool_name in (record.get("tool_names") or [])
+    if mode == "except":
+        return tool_name not in (record.get("tool_names") or [])
+    return True
 
 
 def _kept_hidden(values: Dict[str, str], stored: Any, label: str) -> Dict[str, str]:
@@ -216,6 +250,8 @@ def public(record: Dict[str, Any]) -> Dict[str, Any]:
         "headers": {name: _shown(value) for name, value in (record.get("headers") or {}).items()},
         "enabled": bool(record.get("enabled", True)),
         "trust_read_only": bool(record.get("trust_read_only", False)),
+        "tool_mode": record.get("tool_mode") or "all",
+        "tool_names": list(record.get("tool_names") or []),
         "created_by": record.get("created_by") or "user",
         "created_at": record.get("created_at"),
         "secret_references": secret_references(record),
@@ -842,6 +878,7 @@ class McpManager:
                 "status": connection.status,
                 "error": connection.error,
                 "tools": len(connection.tools),
+                "offered": sum(1 for tool in connection.tools if offers(connection.record, tool.name)),
                 "server_name": connection.server_name,
                 "via": connection.via if connection.status == "connected" else "",
             }
@@ -892,6 +929,19 @@ class McpManager:
             return {"ok": False, "error": str(exc)}
         finally:
             await probe.stop()
+
+    async def all_tools(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """Every tool the server lists, offered or not, each marked (for choosing which it offers):
+        from its live session when it has one, otherwise from a test connection."""
+        connection = self._connections.get(record["id"])
+        if connection is not None and connection.status == "connected" and connection.record == record:
+            listing = {"ok": True, "server_name": connection.server_name,
+                       "tools": [{"name": t.name, "read_only": t.read_only, "description": t.description[:160]} for t in connection.tools]}
+        else:
+            listing = await self.test(record)
+        for tool in listing.get("tools", []):
+            tool["offered"] = offers(record, tool["name"])
+        return listing
 
 
 mcp_store = McpStore()

@@ -48,6 +48,11 @@ SSE first when the path has `/sse` in it, and a server reached over SSE says so 
   read-only** when it cannot change anything (documentation and search servers), and all its tools run
   without asking.
 - Each server's tools appear like a connected app's, named `<server>_<tool>`, and can be switched per
-  bot.
+  bot (Bot settings → Tools, where a long list has a search box and all on / all off).
+- **Choosing a server's tools.** Some servers list hundreds of tools (DigitalOcean's has over 400).
+  Edit the server and tick the ones its bots may have: search, tick a whole family (`droplet_*`) at
+  once, and say whether tools it adds in a later version are offered too. The list shows "offers 12
+  of 412"; a server offering more than 60 tools with no choice made is flagged. Some servers can also
+  be narrowed where they start (`@digitalocean/mcp --services droplets,apps`).
 - A bot can add a server itself (`mcp_add_server`, which asks first): for a bot's own server it
   installs it with its terminal, adds it, and reports the tools it found.

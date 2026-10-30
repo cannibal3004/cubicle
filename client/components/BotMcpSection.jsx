@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { FiServer, FiTrash2, FiPlus, FiPower, FiPlay, FiEdit2, FiCheck } from 'react-icons/fi';
 import { argsText, mapText } from './McpServersSection';
+import McpToolPicker from './McpToolPicker';
 
 const STATUS_STYLES = {
   connected: 'text-emerald-300',
@@ -24,11 +25,14 @@ function parseMap(text) {
 // MCP servers that run inside this bot's computer: a command the bot (or
 // you) installed there, bridged to the API by the computer. Only this bot
 // gets their tools.
-export default function BotMcpSection({ load, create, update, remove, test }) {
+export default function BotMcpSection({ load, create, update, remove, test, loadTools }) {
   const [items, setItems] = useState([]);
   const [showForm, setShowForm] = useState(false);
   // The id of the server the form is changing, or null when it adds one.
   const [editing, setEditing] = useState(null);
+  // The tool choice made in the form ({tool_mode, tool_names}), or null when untouched.
+  const [toolFilter, setToolFilter] = useState(null);
+  const loadEditingTools = useCallback(() => loadTools(editing), [loadTools, editing]);
   const [name, setName] = useState('');
   const [command, setCommand] = useState('');
   const [args, setArgs] = useState('');
@@ -75,6 +79,7 @@ export default function BotMcpSection({ load, create, update, remove, test }) {
     setVars('');
     setTrust(false);
     setEditing(null);
+    setToolFilter(null);
     setShowForm(false);
   };
 
@@ -92,7 +97,7 @@ export default function BotMcpSection({ load, create, update, remove, test }) {
   const submit = async () => {
     const server = { name: name.trim(), transport: 'computer', command: command.trim(), args: args.trim(), env: parseMap(vars), trust_read_only: trust };
     const ok = editing
-      ? await run(() => update(editing, server), 'Could not save the server.')
+      ? await run(() => update(editing, { ...server, ...(toolFilter || {}) }), 'Could not save the server.')
       : await run(() => create(server), 'Could not add the server.');
     if (ok) closeForm();
   };
@@ -134,6 +139,12 @@ export default function BotMcpSection({ load, create, update, remove, test }) {
                   <span className={STATUS_STYLES[item.status] || 'text-zinc-400'}>{item.status}</span>
                   {item.status === 'connected' && <span>{item.tool_count} tools{item.server_name ? ` · ${item.server_name}` : ''}</span>}
                   {item.error && <span className="text-rose-300 truncate" title={item.error}>{item.error}</span>}
+                  {item.tool_mode === 'all' && item.offered_count > 60 && (
+                    <span className="text-amber-400/90" title="Edit the server to choose which tools it offers">
+                      offers all {item.offered_count} tools: choose which in Edit
+                    </span>
+                  )}
+                  {item.tool_mode !== 'all' && item.status === 'connected' && <span>offers {item.offered_count} of {item.tool_count}</span>}
                   {item.trust_read_only && <span>trusted read-only</span>}
                   {item.secret_references?.length > 0 && <span>uses: {item.secret_references.join(', ')}</span>}
                   {item.created_by === 'bot' && <span>added by the bot</span>}
@@ -169,6 +180,9 @@ export default function BotMcpSection({ load, create, update, remove, test }) {
             rows={2}
             className={`${inputClass} w-full resize-y`}
           />
+          {editing && loadTools && (
+            <McpToolPicker load={loadEditingTools} mode={items.find((i) => i.id === editing)?.tool_mode} onChange={setToolFilter} />
+          )}
           <label className="flex items-center gap-2 text-[11px] text-zinc-400">
             <input type="checkbox" checked={trust} onChange={(e) => setTrust(e.target.checked)} className="accent-cyan-400" />
             Treat all its tools as read-only (no approval); only for servers that cannot change anything.

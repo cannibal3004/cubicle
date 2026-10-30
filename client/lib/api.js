@@ -985,6 +985,8 @@ export const updateBotMcpServer = (botId, id, changes) =>
   secretsCall(`/mcp/bots/${encodeURIComponent(botId)}/servers/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
 export const deleteBotMcpServer = (botId, id) => secretsCall(`/mcp/bots/${encodeURIComponent(botId)}/servers/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const testBotMcpServer = (botId, id) => secretsCall(`/mcp/bots/${encodeURIComponent(botId)}/servers/${encodeURIComponent(id)}/test`, { method: 'POST' });
+// All of a server's tools, each marked offered or not (for choosing which it offers).
+export const fetchBotMcpServerTools = (botId, id) => secretsCall(`/mcp/bots/${encodeURIComponent(botId)}/servers/${encodeURIComponent(id)}/tools`);
 
 export async function fetchMcpServers() {
   return secretsCall('/mcp/servers');
@@ -1004,6 +1006,10 @@ export async function deleteMcpServer(serverId) {
 
 export async function testMcpServer(serverId) {
   return secretsCall(`/mcp/servers/${encodeURIComponent(serverId)}/test`, { method: 'POST' });
+}
+
+export async function fetchMcpServerTools(serverId) {
+  return secretsCall(`/mcp/servers/${encodeURIComponent(serverId)}/tools`);
 }
 
 export async function reconnectMcpServer(serverId) {

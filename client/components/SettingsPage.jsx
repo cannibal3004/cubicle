@@ -20,6 +20,7 @@ import {
   testMcpServer,
   reconnectMcpServer,
   testMcpDefinition,
+  fetchMcpServerTools,
 } from "../lib/api";
 import ModelPicker from "./ModelPicker";
 import SecretsSection from "./SecretsSection";
@@ -984,6 +985,7 @@ export default function SettingsPage({
             test={testMcpServer}
             testDraft={testMcpDefinition}
             reconnect={reconnectMcpServer}
+            loadTools={fetchMcpServerTools}
           />
         </div>
         </div>

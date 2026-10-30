@@ -21,14 +21,15 @@ from typing import Any, Dict, List, Optional
 from app.services.action_gateway import ActionDefinition, ActionInvocation, action_gateway
 from app.services.connector_tools import sanitize_schema
 from app.services.llm_tools import ToolSpec
-from app.services.mcp_service import McpError, mcp_manager, mcp_store, public  # noqa: F401 - mcp_store kept for tests
+from app.services.mcp_service import McpError, mcp_manager, mcp_store, offers, public  # noqa: F401 - mcp_store kept for tests
 
 logger = logging.getLogger(__name__)
 
 READ_ACTION = "mcp.read"
 CALL_ACTION = "mcp.call"
 _NAME_CHARS = re.compile(r"[^a-z0-9_]+")
-MAX_TOOLS_PER_SERVER = 60
+# More than this many tools offered from one server, with no choice made, earns a warning in its settings.
+MANY_TOOLS = 60
 
 
 def toolkit_slug(server_id: str) -> str:
@@ -76,11 +77,16 @@ def mcp_tool_specs(manager: Any = None, bot_id: Optional[str] = None) -> List[To
         logger.warning("MCP tools unavailable: %s", exc)
         return []
     for record, tools in servers:
-        for tool in tools[:MAX_TOOLS_PER_SERVER]:
+        for tool in offered_tools(record, tools):
             spec = spec_for(record, tool, taken)
             taken.add(spec.name)
             specs.append(spec)
     return specs
+
+
+def offered_tools(record: Dict[str, Any], tools: List[Any]) -> List[Any]:
+    """The server's tools its tool filter lets through (a server may list hundreds)."""
+    return [tool for tool in tools if offers(record, tool.name)]
 
 
 # ---- executing a server's tool ---------------------------------------------------
@@ -105,7 +111,7 @@ async def execute_mcp_tool(call: ActionInvocation) -> Dict[str, Any]:
 def _server_summary(record: Dict[str, Any]) -> Dict[str, Any]:
     status = mcp_manager.statuses().get(record["id"], {})
     entry = public(record)
-    entry.update({"status": status.get("status") or ("stopped" if entry["enabled"] else "disabled"), "error": status.get("error") or "", "tool_count": status.get("tools", 0)})
+    entry.update({"status": status.get("status") or ("stopped" if entry["enabled"] else "disabled"), "error": status.get("error") or "", "tool_count": status.get("tools", 0), "offered_count": status.get("offered", 0)})
     return entry
 
 
@@ -131,13 +137,18 @@ async def add_server(call: ActionInvocation) -> Dict[str, Any]:
         record = store.update(record["id"], {"enabled": False})
         return {"server": _server_summary(record), "connected": False, "error": test.get("error"), "note": "Saved but switched off: it did not connect. Tell the user what failed."}
     mcp_manager.connection(record["id"], bot_id).start()
-    return {"server": _server_summary(record), "connected": True, "tools": test.get("tools", []), "note": "Its tools are offered from your next turn."}
+    tools = [t for t in test.get("tools", []) if offers(record, t["name"])]
+    note = "Its tools are offered from your next turn."
+    if record.get("tool_mode") == "only":
+        missing = [n for n in record.get("tool_names") or [] if n not in {t["name"] for t in test.get("tools", [])}]
+        note += f" It offers {len(tools)} of its {len(test.get('tools', []))} tools." + (f" Not among them: {', '.join(missing[:20])}." if missing else "")
+    return {"server": _server_summary(record), "connected": True, "tools": tools, "note": note}
 
 
 async def test_server(call: ActionInvocation) -> Dict[str, Any]:
     arguments = call.arguments if isinstance(call.arguments, dict) else {}
     record = mcp_manager.find(str(arguments.get("id") or ""), _bot_of(call))
-    return {"server": _server_summary(record), **(await mcp_manager.test(record))}
+    return {"server": _server_summary(record), **(await mcp_manager.all_tools(record))}
 
 
 async def remove_server(call: ActionInvocation) -> Dict[str, Any]:

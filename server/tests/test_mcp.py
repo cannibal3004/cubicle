@@ -189,6 +189,34 @@ class LiveProbeServerTests(unittest.IsolatedAsyncioTestCase):
         self.store.update(record["id"], {"enabled": False})
         self.assertEqual(mcp_tool_specs(self.manager), [])
 
+    async def test_a_server_offers_only_the_tools_chosen(self):
+        """A server listing hundreds of tools (DigitalOcean's): the bots get the chosen ones; the picker sees all."""
+        record = self.store.add(probe_definition(env={"PROBE_TOKEN": "$PROBE_TOKEN"}, tool_mode="only", tool_names=["add", "shout", "gone"]))
+        self.assertEqual((public(record)["tool_mode"], public(record)["tool_names"]), ("only", ["add", "shout", "gone"]))
+        await self.manager.connection(record["id"]).wait_ready()
+        self.assertEqual(sorted(s.name for s in mcp_tool_specs(self.manager)), ["probe_add", "probe_shout"])
+        self.assertEqual(self.manager.statuses()[record["id"]]["offered"], 2)
+        listing = await self.manager.all_tools(record)
+        self.assertEqual({t["name"]: t["offered"] for t in listing["tools"]}, {"add": True, "secret_name": False, "shout": True})
+
+        record = self.store.update(record["id"], {"tool_mode": "except", "tool_names": ["shout"]})
+        await self.manager.connection(record["id"]).wait_ready()
+        self.assertEqual(sorted(s.name for s in mcp_tool_specs(self.manager)), ["probe_add", "probe_secret_name"])
+        # Back to all: the names are dropped.
+        record = self.store.update(record["id"], {"tool_mode": "all", "tool_names": ["shout"]})
+        self.assertEqual((record["tool_mode"], record["tool_names"]), ("all", []))
+        await self.manager.connection(record["id"]).wait_ready()
+        self.assertEqual(len(mcp_tool_specs(self.manager)), 3)
+        with self.assertRaisesRegex(McpError, "all, only or except"):
+            clean_server(probe_definition(tool_mode="some"))
+
+        # A bot adding a server names the tools the job needs.
+        call = build_invocation("mcp_add_server", {"name": "Probe2", "scope": "user", "transport": "stdio", "command": "python", "tools": ["add"]}, "bot-1")
+        self.assertEqual((call.arguments["server"]["tool_mode"], call.arguments["server"]["tool_names"]), ("only", ["add"]))
+        self.assertIn("offers only 1 of its tools", call.preview)
+        plain = build_invocation("mcp_add_server", {"name": "Probe3", "scope": "user", "transport": "stdio", "command": "python"}, "bot-1")
+        self.assertEqual(plain.arguments["server"]["tool_mode"], "all")
+
     async def test_a_server_that_cannot_start_reports_its_error(self):
         record = self.store.add({"name": "Broken", "command": sys.executable, "args": ["-c", "import sys; sys.exit(3)"]})
         connection = self.manager.connection(record["id"])
