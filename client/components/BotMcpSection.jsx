@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { FiServer, FiTrash2, FiPlus, FiPower, FiPlay } from 'react-icons/fi';
+import { FiServer, FiTrash2, FiPlus, FiPower, FiPlay, FiEdit2, FiCheck } from 'react-icons/fi';
+import { argsText, mapText } from './McpServersSection';
 
 const STATUS_STYLES = {
   connected: 'text-emerald-300',
@@ -26,6 +27,8 @@ function parseMap(text) {
 export default function BotMcpSection({ load, create, update, remove, test }) {
   const [items, setItems] = useState([]);
   const [showForm, setShowForm] = useState(false);
+  // The id of the server the form is changing, or null when it adds one.
+  const [editing, setEditing] = useState(null);
   const [name, setName] = useState('');
   const [command, setCommand] = useState('');
   const [args, setArgs] = useState('');
@@ -65,19 +68,33 @@ export default function BotMcpSection({ load, create, update, remove, test }) {
     }
   };
 
+  const closeForm = () => {
+    setName('');
+    setCommand('');
+    setArgs('');
+    setVars('');
+    setTrust(false);
+    setEditing(null);
+    setShowForm(false);
+  };
+
+  // Values typed in rather than written as $NAME come back hidden; saved unchanged, they stay as they are.
+  const startEdit = (item) => {
+    setEditing(item.id);
+    setName(item.name);
+    setCommand(item.command || '');
+    setArgs(argsText(item.args));
+    setVars(mapText(item.env));
+    setTrust(!!item.trust_read_only);
+    setShowForm(true);
+  };
+
   const submit = async () => {
-    const ok = await run(
-      () => create({ name: name.trim(), transport: 'computer', command: command.trim(), args: args.trim(), env: parseMap(vars), trust_read_only: trust }),
-      'Could not add the server.'
-    );
-    if (ok) {
-      setName('');
-      setCommand('');
-      setArgs('');
-      setVars('');
-      setTrust(false);
-      setShowForm(false);
-    }
+    const server = { name: name.trim(), transport: 'computer', command: command.trim(), args: args.trim(), env: parseMap(vars), trust_read_only: trust };
+    const ok = editing
+      ? await run(() => update(editing, server), 'Could not save the server.')
+      : await run(() => create(server), 'Could not add the server.');
+    if (ok) closeForm();
   };
 
   const inputClass =
@@ -101,6 +118,9 @@ export default function BotMcpSection({ load, create, update, remove, test }) {
                   <span className="ml-auto flex items-center gap-1 flex-shrink-0">
                     <button type="button" disabled={busy} onClick={async () => { const r = await run(() => test(item.id), 'Test failed.'); if (r) setResults((prev) => ({ ...prev, [item.id]: r })); }} className="px-2 py-1 rounded-lg text-[11px] text-zinc-300 hover:text-white hover:bg-[#1f1f23] disabled:opacity-50 transition" title="Start the computer if needed, connect and list its tools">
                       <FiPlay className="text-[10px]" />
+                    </button>
+                    <button type="button" disabled={busy} onClick={() => startEdit(item)} className="px-2 py-1 rounded-lg text-[11px] text-zinc-300 hover:text-white hover:bg-[#1f1f23] disabled:opacity-50 transition" title="Edit">
+                      <FiEdit2 className="text-[10px]" />
                     </button>
                     <button type="button" disabled={busy} onClick={() => run(() => update(item.id, { enabled: !item.enabled }), 'Could not change the server.')} className={`px-2 py-1 rounded-lg text-[11px] hover:bg-[#1f1f23] disabled:opacity-50 transition ${item.enabled ? 'text-emerald-300' : 'text-zinc-500'}`} title={item.enabled ? 'Switch off' : 'Switch on'}>
                       <FiPower className="text-[10px]" />
@@ -155,9 +175,9 @@ export default function BotMcpSection({ load, create, update, remove, test }) {
           </label>
           <div className="flex items-center gap-2">
             <button type="button" onClick={submit} disabled={busy || !name.trim() || !command.trim()} className="px-3 py-2 rounded-xl text-xs font-medium bg-zinc-100 text-black hover:bg-white disabled:opacity-40 transition flex items-center gap-1.5">
-              <FiPlus className="text-xs" /> Add
+              {editing ? <><FiCheck className="text-xs" /> Save</> : <><FiPlus className="text-xs" /> Add</>}
             </button>
-            <button type="button" onClick={() => setShowForm(false)} className="px-3 py-2 rounded-xl text-xs text-zinc-400 hover:text-white transition">
+            <button type="button" onClick={closeForm} className="px-3 py-2 rounded-xl text-xs text-zinc-400 hover:text-white transition">
               Cancel
             </button>
           </div>

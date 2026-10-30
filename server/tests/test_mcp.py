@@ -64,6 +64,32 @@ class ServerDefinitionTests(unittest.TestCase):
             with self.assertRaisesRegex(McpError, message):
                 clean_server(bad)
 
+    def test_a_value_typed_in_is_never_shown_and_an_edit_keeps_it(self):
+        """A key pasted into env or headers instead of a $NAME reference: the bot's tools and the
+        settings page see it hidden; sending the hidden value back keeps the stored one."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = McpStore(StorageService(Path(tmp)))
+            record = store.add({"name": "DigitalOcean", "command": "npx", "args": ["@digitalocean/mcp"],
+                                "env": {"DIGITALOCEAN_API_TOKEN": "dop_v1_abc123", "REGION": "${DO_REGION}", "EMPTY": ""}})
+            shown = public(record)
+            self.assertEqual(shown["env"], {"DIGITALOCEAN_API_TOKEN": mcp_service.HIDDEN, "REGION": "${DO_REGION}", "EMPTY": ""})
+            self.assertNotIn("dop_v1_abc123", repr(shown))
+            # The bot's list tool shows the same.
+            with mock.patch.object(mcp_tools.mcp_manager, "records", lambda bot_id=None: [record]):
+                listed = asyncio.run(mcp_tools.list_servers(ActionInvocation(name="mcp.servers_list", arguments={}, target={}, preview="")))
+            self.assertNotIn("dop_v1_abc123", repr(listed))
+            # An edit that sends the hidden value back changes the rest and keeps the token.
+            edited = store.update(record["id"], {"args": ["-y", "@digitalocean/mcp"], "env": shown["env"]})
+            self.assertEqual(edited["env"]["DIGITALOCEAN_API_TOKEN"], "dop_v1_abc123")
+            self.assertEqual(edited["args"], ["-y", "@digitalocean/mcp"])
+            # A new value replaces it; a hidden value under a new name has nothing to keep.
+            self.assertEqual(store.update(record["id"], {"env": {"DIGITALOCEAN_API_TOKEN": "$DO_TOKEN"}})["env"], {"DIGITALOCEAN_API_TOKEN": "$DO_TOKEN"})
+            with self.assertRaisesRegex(McpError, "enter the value for OTHER"):
+                store.update(record["id"], {"env": {"OTHER": mcp_service.HIDDEN}})
+            http = store.add({"name": "Exa", "url": "https://mcp.exa.ai/mcp", "headers": {"Authorization": "Bearer exa-secret"}})
+            self.assertEqual(public(http)["headers"], {"Authorization": mcp_service.HIDDEN})
+            self.assertEqual(store.update(http["id"], {"headers": public(http)["headers"]})["headers"], {"Authorization": "Bearer exa-secret"})
+
     def test_store_adds_updates_and_removes(self):
         with tempfile.TemporaryDirectory() as tmp:
             storage = StorageService(Path(tmp))

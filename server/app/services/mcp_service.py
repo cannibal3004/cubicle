@@ -41,6 +41,9 @@ MAX_ENV = 30
 _SECRET_REF = re.compile(r"\$\{([A-Z][A-Z0-9_]{0,63})\}|\$([A-Z][A-Z0-9_]{0,63})\b")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$")
 _ID = re.compile(r"^mcp-[a-f0-9]{8}$")
+# What a literal env or header value is shown as: it may be a key typed in instead of a $NAME
+# reference, so it never goes back out. Sent back unchanged, it keeps the stored value.
+HIDDEN = "********"
 # What a stdio server's process inherits besides its own variables. Secrets
 # reach it only through explicit references.
 _INHERITED_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT", "COMSPEC", "PATHEXT", "APPDATA", "LOCALAPPDATA", "USERPROFILE")
@@ -136,14 +139,30 @@ def clean_server(data: Any, *, existing: Optional[Dict[str, Any]] = None) -> Dic
             raise McpError("The command looks wrong.")
         record["command"] = command
         record["args"] = _clean_args(merged.get("args"))
-        record["env"] = _clean_map(merged.get("env"), "env")
+        record["env"] = _kept_hidden(_clean_map(merged.get("env"), "env"), base.get("env"), "env")
     else:
         url = str(merged.get("url") or "").strip()
         if not re.match(r"^https?://[^\s]+$", url) or len(url) > 500:
             raise McpError("An http server needs an http(s) URL.")
         record["url"] = url
-        record["headers"] = _clean_map(merged.get("headers"), "headers")
+        record["headers"] = _kept_hidden(_clean_map(merged.get("headers"), "headers"), base.get("headers"), "headers")
     return record
+
+
+def _kept_hidden(values: Dict[str, str], stored: Any, label: str) -> Dict[str, str]:
+    """An edit sends hidden values back as HIDDEN: those keep what is stored under the same name."""
+    stored = stored if isinstance(stored, dict) else {}
+    for name, value in values.items():
+        if value == HIDDEN:
+            if name not in stored:
+                raise McpError(f"{label}: enter the value for {name}.")
+            values[name] = stored[name]
+    return values
+
+
+def _shown(value: Any) -> str:
+    text = str(value or "")
+    return text if not text or _refs_in(text) else HIDDEN
 
 
 def _refs_in(value: str) -> List[str]:
@@ -176,16 +195,17 @@ def resolve_values(values: Dict[str, str], secrets: Dict[str, str]) -> Dict[str,
 
 
 def public(record: Dict[str, Any]) -> Dict[str, Any]:
-    """The record as the API and the model see it: secret references stay references."""
+    """The record as the API and the model see it: secret references stay references, and a value
+    without one (a key typed in directly) is shown as HIDDEN."""
     return {
         "id": record["id"],
         "name": record["name"],
         "transport": record["transport"],
         "command": record.get("command") or "",
         "args": list(record.get("args") or []),
-        "env": dict(record.get("env") or {}),
+        "env": {name: _shown(value) for name, value in (record.get("env") or {}).items()},
         "url": record.get("url") or "",
-        "headers": dict(record.get("headers") or {}),
+        "headers": {name: _shown(value) for name, value in (record.get("headers") or {}).items()},
         "enabled": bool(record.get("enabled", True)),
         "trust_read_only": bool(record.get("trust_read_only", False)),
         "created_by": record.get("created_by") or "user",
