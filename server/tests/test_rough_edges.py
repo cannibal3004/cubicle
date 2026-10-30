@@ -57,6 +57,41 @@ class LiveSecretsAndBackgroundTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(seen["payload"]["background"])
         self.assertEqual(seen["timeout"], 10.0)
 
+    async def test_an_mcp_server_gets_a_secret_added_after_the_computer_started(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        secrets = {"OLD_TOKEN": "old"}
+        provider = DockerComputerProvider(
+            image="cubicle-computer:test", workspace_root=root / "computers", seccomp_profile=root / "none.json",
+            start_timeout=0.5, environment=lambda bot_id: dict(secrets), docker_command=FakeDockerCommand(), shared_dir="",
+        )
+        status = provider.get_or_create("bot-mcp")
+
+        async def ready(_record):
+            return {"status": "healthy"}
+
+        provider._wait_until_ready = ready
+        await provider.start(status.computer_id)
+        seen = {}
+
+        async def capture(_record, method, route, payload=None, timeout=None):
+            seen.update({"route": route, "payload": payload})
+            return {"operation": "mcp.start", "started": True}
+
+        provider._request = capture
+        secrets["DIGITALOCEAN_PAT"] = "dop-new"
+        server = {"id": "mcp-1a2b3c4d", "command": "npx", "args": ["@digitalocean/mcp"],
+                  "env": {"DIGITALOCEAN_API_TOKEN": "$DIGITALOCEAN_PAT", "AUTH": "Bearer ${DIGITALOCEAN_PAT}", "HOME_DIR": "$HOME/x", "MODE": "fast"}}
+        await provider.mcp_start(status.computer_id, server)
+        self.assertEqual(seen["route"], "/mcp/start")
+        # Secrets are filled in; other names are left for the computer to resolve.
+        self.assertEqual(seen["payload"]["env"], {"DIGITALOCEAN_API_TOKEN": "dop-new", "AUTH": "Bearer dop-new", "HOME_DIR": "$HOME/x", "MODE": "fast"})
+        # A secret deleted since the computer started is missing, not the stale value it started with.
+        del secrets["OLD_TOKEN"]
+        with self.assertRaisesRegex(Exception, "OLD_TOKEN is not set"):
+            await provider.mcp_start(status.computer_id, {**server, "env": {"T": "$OLD_TOKEN"}})
+
     def test_the_tool_takes_background(self):
         call = build_invocation("computer_terminal_execute", {"command": "rsync -a /a /b", "background": True}, "bot-1")
         self.assertTrue(call.arguments["background"])
