@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { FiX, FiHelpCircle, FiSearch } from 'react-icons/fi';
+import { FiX, FiHelpCircle, FiSearch, FiZoomIn } from 'react-icons/fi';
 import { fetchHelpIndex, fetchHelpPage, searchHelp, helpImageUrl } from '../lib/api';
 
 // GitHub's anchor for a heading: the docs link to sections this way (#letting-things-run-without-asking).
@@ -51,6 +51,40 @@ function heading(Tag, className) {
   };
 }
 
+// A picture opened from a page: as large as the window allows (the page shows it at about half its
+// size, too small to read); a click on it shows it at full size, scrolling, when it is larger still.
+// Escape or a click outside closes it.
+function ImageViewer({ image, onClose }) {
+  const [actual, setActual] = useState(false);
+  useEffect(() => {
+    const onKey = (event) => event.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div
+      className={`fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col animate-fade-in ${actual ? 'overflow-auto' : 'items-center justify-center p-6'}`}
+      onClick={onClose}
+      role="dialog"
+      aria-label={image.alt || 'Picture'}
+    >
+      <button type="button" onClick={onClose} className="fixed top-3 right-3 p-2 rounded-lg text-zinc-300 hover:text-white bg-black/50 hover:bg-black/70 transition" title="Close (Esc)">
+        <FiX className="text-lg" />
+      </button>
+      <img
+        src={image.src}
+        alt={image.alt}
+        onClick={(event) => {
+          event.stopPropagation();
+          setActual((value) => !value);
+        }}
+        className={`rounded-xl border border-[#26262b] shadow-2xl ${actual ? 'max-w-none m-6 cursor-zoom-out' : 'max-w-full max-h-[calc(100vh-5rem)] object-contain cursor-zoom-in'}`}
+      />
+      {image.alt && !actual && <p className="mt-3 text-xs text-zinc-400 text-center">{image.alt}</p>}
+    </div>
+  );
+}
+
 // Cubicle's help pages (docs/): the index on the left with a search above it, the page on the right.
 // Links between pages stay in here; each page has its own address (/help/<page>).
 export default function HelpPage({ path = 'README.md', anchor = '', onNavigate, onClose }) {
@@ -59,6 +93,8 @@ export default function HelpPage({ path = 'README.md', anchor = '', onNavigate, 
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState(null);
+  // The picture opened large: { src, alt } or null.
+  const [zoomed, setZoomed] = useState(null);
   const bodyRef = useRef(null);
 
   useEffect(() => {
@@ -130,13 +166,19 @@ export default function HelpPage({ path = 'README.md', anchor = '', onNavigate, 
     img: ({ node, src, alt }) => {
       const name = String(src || '').split('/').pop();
       const local = src && !/^[a-z]+:/i.test(src) && !src.startsWith('/');
+      const url = local ? helpImageUrl(name) : src;
       return (
-        <img
-          src={local ? helpImageUrl(name) : src}
-          alt={alt || ''}
-          loading="lazy"
-          className="my-4 max-w-full rounded-xl border border-[#26262b] shadow-lg"
-        />
+        <button
+          type="button"
+          onClick={() => setZoomed({ src: url, alt: alt || '' })}
+          className="group relative my-4 block max-w-full cursor-zoom-in"
+          title="Click to enlarge"
+        >
+          <img src={url} alt={alt || ''} loading="lazy" className="max-w-full rounded-xl border border-[#26262b] shadow-lg group-hover:border-zinc-500 transition" />
+          <span className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/60 text-zinc-200 opacity-0 group-hover:opacity-100 transition">
+            <FiZoomIn className="text-sm" />
+          </span>
+        </button>
       );
     },
     a: ({ node, href, children }) => {
@@ -248,6 +290,7 @@ export default function HelpPage({ path = 'README.md', anchor = '', onNavigate, 
           </article>
         </div>
       </div>
+      {zoomed && <ImageViewer image={zoomed} onClose={() => setZoomed(null)} />}
     </section>
   );
 }
