@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { FiX, FiHelpCircle, FiSearch, FiZoomIn } from 'react-icons/fi';
@@ -290,7 +291,8 @@ export default function HelpPage({ path = 'README.md', anchor = '', onNavigate, 
           </article>
         </div>
       </div>
-      {zoomed && <ImageViewer image={zoomed} onClose={() => setZoomed(null)} />}
+      {/* On the body: the help's own fade-in would hold a fixed layer to the help's area. */}
+      {zoomed && createPortal(<ImageViewer image={zoomed} onClose={() => setZoomed(null)} />, document.body)}
     </section>
   );
 }
