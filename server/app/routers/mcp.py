@@ -69,6 +69,8 @@ def _entry(record: Dict[str, Any]) -> Dict[str, Any]:
             "error": status.get("error") or "",
             "tool_count": status.get("tools", 0),
             "server_name": status.get("server_name") or "",
+            # A URL server's protocol once connected: http (streamable) or sse.
+            "via": status.get("via") or "",
         }
     )
     return entry

@@ -88,8 +88,8 @@ export default function McpServersSection({ admin = false, load, create, update,
     command: transport === 'stdio' ? command.trim() : undefined,
     args: transport === 'stdio' ? args.trim() : undefined,
     env: transport === 'stdio' ? parseMap(vars) : undefined,
-    url: transport === 'http' ? url.trim() : undefined,
-    headers: transport === 'http' ? parseMap(vars) : undefined,
+    url: transport !== 'stdio' ? url.trim() : undefined,
+    headers: transport !== 'stdio' ? parseMap(vars) : undefined,
     trust_read_only: trust,
     scope: admin ? scope : 'user',
   });
@@ -112,11 +112,11 @@ export default function McpServersSection({ admin = false, load, create, update,
   const startEdit = (item) => {
     setEditing(item.id);
     setName(item.name);
-    setTransport(item.transport === 'http' ? 'http' : 'stdio');
+    setTransport(['http', 'sse'].includes(item.transport) ? item.transport : 'stdio');
     setCommand(item.command || '');
     setArgs(argsText(item.args));
     setUrl(item.url || '');
-    setVars(mapText(item.transport === 'http' ? item.headers : item.env));
+    setVars(mapText(item.transport === 'stdio' ? item.env : item.headers));
     setTrust(!!item.trust_read_only);
     setDraftResult(null);
     setShowForm(true);
@@ -167,7 +167,7 @@ export default function McpServersSection({ admin = false, load, create, update,
                 </div>
                 <div className="pl-6 mt-0.5 text-[10px] text-zinc-500 flex flex-wrap gap-x-3">
                   <span className={STATUS_STYLES[item.status] || 'text-zinc-400'}>{item.status}</span>
-                  {item.status === 'connected' && <span>{item.tool_count} tools{item.server_name ? ` · ${item.server_name}` : ''}</span>}
+                  {item.status === 'connected' && <span>{item.tool_count} tools{item.server_name ? ` · ${item.server_name}` : ''}{item.via === 'sse' ? ' · over SSE' : ''}</span>}
                   {item.error && <span className="text-rose-300 truncate" title={item.error}>{item.error}</span>}
                   <span>{item.scope === 'system' ? 'system · everyone' : 'yours'}</span>
                   {item.trust_read_only && <span>trusted read-only</span>}
@@ -197,7 +197,8 @@ export default function McpServersSection({ admin = false, load, create, update,
             <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name, e.g. Context7" maxLength={60} className={`${inputClass} flex-1`} />
             <select value={transport} onChange={(e) => setTransport(e.target.value)} className={inputClass}>
               <option value="stdio">Command (stdio)</option>
-              <option value="http">URL (streamable HTTP)</option>
+              <option value="http">URL (streamable HTTP or SSE)</option>
+              <option value="sse">URL (SSE only)</option>
             </select>
           </div>
           {transport === 'stdio' ? (

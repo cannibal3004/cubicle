@@ -26,7 +26,9 @@ offered, name the app in a message ("use GitHub for this") and they are added.
 ## MCP servers
 
 An MCP server can be a command (`npx -y @upstash/context7-mcp`, `uvx some-server`) or a URL (a vendor's
-hosted MCP endpoint). There are three places one can live:
+hosted MCP endpoint). A URL server may speak streamable HTTP or the older SSE protocol: both are tried,
+SSE first when the path has `/sse` in it, and a server reached over SSE says so in its status. Choose
+**URL (SSE only)** to skip the other. There are three places one can live:
 
 | Where | Who gets its tools | Where you add it |
 | --- | --- | --- |

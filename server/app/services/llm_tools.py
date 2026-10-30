@@ -710,7 +710,7 @@ MCP_TOOLS: List[ToolSpec] = [
         description=(
             "Add an MCP server (the user approves). scope 'computer' (preferred) runs a command inside your own computer, next to your "
             "files and the packages you installed there; only you get its tools, and $NAME in env resolves from the computer's environment "
-            "(the user's secrets). scope 'user' runs a stdio command in the host API or connects to a streamable-HTTP url, for every bot of "
+            "(the user's secrets). scope 'user' runs a stdio command in the host API or connects to a url (streamable HTTP, or SSE), for every bot of "
             "the user. For an API key, never ask the user to paste it into the chat: tell them to add it as a secret and write $NAME as the "
             "env or header value. The server is connected and tested at once; its tools are offered from your next turn. Set "
             "trust_read_only only for servers that cannot change anything (documentation, search)."
@@ -719,7 +719,7 @@ MCP_TOOLS: List[ToolSpec] = [
             {
                 "name": {"type": "string", "description": "A short name, e.g. Context7"},
                 "scope": {"type": "string", "enum": ["computer", "user"], "description": "computer: in your own computer, only for you (default); user: for every bot of the user"},
-                "transport": {"type": "string", "enum": ["stdio", "http"], "description": "scope user only; a computer server is always a command"},
+                "transport": {"type": "string", "enum": ["stdio", "http", "sse"], "description": "scope user only; a computer server is always a command. http: a URL, streamable HTTP or the older SSE protocol, whichever answers; sse: SSE only"},
                 "command": {"type": "string", "description": "stdio: the program to run, e.g. npx or uvx"},
                 "args": {"type": "array", "items": {"type": "string"}, "description": "stdio: its arguments"},
                 "env": {"type": "object", "additionalProperties": {"type": "string"}, "description": "stdio: environment variables; use $NAME for an app secret"},
@@ -1443,12 +1443,12 @@ def _build_invocation(
         if scope == "computer":
             fields["transport"] = "computer"
         elif not fields.get("transport"):
-            raise ToolCallError("A user-scope server needs 'transport': stdio or http.")
+            raise ToolCallError("A user-scope server needs 'transport': stdio, or http (or sse) for a URL.")
         try:
             record = clean_server(fields)
         except McpError as exc:
             raise ToolCallError(str(exc)) from exc
-        where = f"{record['command']} {' '.join(record['args'])}".strip() if record["transport"] != "http" else record["url"]
+        where = f"{record['command']} {' '.join(record['args'])}".strip() if record["transport"] not in ("http", "sse") else record["url"]
         place = "in your computer" if scope == "computer" else "for every bot"
         return ActionInvocation(
             name="mcp.servers_add",

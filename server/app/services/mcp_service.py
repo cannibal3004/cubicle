@@ -2,8 +2,8 @@
 
 A server is configured once (App Settings, or by a bot through the mcp_*
 tools after approval) and kept in the settings store under `mcp_servers`:
-a name, a transport (a command to run over stdio, or a streamable-HTTP
-URL), environment variables or headers, and whether its tools may be
+a name, a transport (a command to run over stdio, or a URL: streamable HTTP,
+or the older SSE protocol, tried in turn), environment variables or headers, and whether its tools may be
 trusted as read-only. Any env or header value of the form `$NAME` is a
 reference to an app secret, resolved when the server starts and never
 stored resolved.
@@ -33,7 +33,12 @@ from app.services.storage_service import StorageService, current_storage, storag
 
 logger = logging.getLogger(__name__)
 
-TRANSPORTS = ("stdio", "http", "computer")
+TRANSPORTS = ("stdio", "http", "sse", "computer")
+# A URL server ("http") speaks streamable HTTP or the older SSE protocol. Both are tried while
+# connecting, SSE first when the path says so (.../sse, .../sse/...); "sse" is SSE only.
+_SSE_PATH = re.compile(r"/sse(?:/|$)")
+# An SSE stream may stay quiet between calls; it is not dropped for that.
+SSE_READ_TIMEOUT = 24 * 3600.0
 MAX_SERVERS = 30
 MAX_NAME_CHARS = 60
 MAX_ARGS = 40
@@ -116,7 +121,7 @@ def clean_server(data: Any, *, existing: Optional[Dict[str, Any]] = None) -> Dic
     merged = {**base, **{k: v for k, v in data.items() if v is not None}}
     transport = str(merged.get("transport") or ("http" if merged.get("url") else "stdio")).strip().lower()
     if transport not in TRANSPORTS:
-        raise McpError("'transport' must be stdio (a command), http (a URL), or computer (a command run inside the bot's computer).")
+        raise McpError("'transport' must be stdio (a command), http (a URL), sse (a URL speaking only the older SSE protocol), or computer (a command run inside the bot's computer).")
     record: Dict[str, Any] = {
         "id": base.get("id") or f"mcp-{uuid.uuid4().hex[:8]}",
         "name": _clean_name(merged.get("name")),
@@ -143,7 +148,7 @@ def clean_server(data: Any, *, existing: Optional[Dict[str, Any]] = None) -> Dic
     else:
         url = str(merged.get("url") or "").strip()
         if not re.match(r"^https?://[^\s]+$", url) or len(url) > 500:
-            raise McpError("An http server needs an http(s) URL.")
+            raise McpError(f"An {transport} server needs an http(s) URL.")
         record["url"] = url
         record["headers"] = _kept_hidden(_clean_map(merged.get("headers"), "headers"), base.get("headers"), "headers")
     return record
@@ -420,6 +425,8 @@ class McpConnection:
     tools: List[McpTool] = field(default_factory=list)
     server_name: str = ""
     connected_at: Optional[float] = None
+    # The protocol the session runs over (a URL server's may be either).
+    via: str = ""
     _task: Optional["asyncio.Task[None]"] = None
     _queue: "asyncio.Queue[Optional[_Request]]" = field(default_factory=asyncio.Queue)
     _ready: "asyncio.Event" = field(default_factory=asyncio.Event)
@@ -465,32 +472,28 @@ class McpConnection:
         except asyncio.TimeoutError:
             raise McpError(f"{self.record['name']} did not answer {name} within {int(timeout)} seconds.")
 
+    def _protocols(self) -> List[str]:
+        transport = self.record["transport"]
+        if transport != "http":
+            return [transport]
+        from urllib.parse import urlparse
+
+        return ["sse", "http"] if _SSE_PATH.search(urlparse(self.record.get("url") or "").path) else ["http", "sse"]
+
     async def _run(self) -> None:
         try:
-            async with self._session() as session:
-                init = await session.initialize()
-                info = getattr(init, "server_info", None)
-                self.server_name = str(getattr(info, "name", "") or "")
-                self.tools = await self._list_tools(session)
-                self.status = "connected"
-                self.connected_at = time.time()
-                self._ready.set()
-                logger.info("MCP server %s connected: %d tools", self.record["name"], len(self.tools))
-                while True:
-                    request = await self._queue.get()
-                    if request is None:
-                        return
-                    try:
-                        result = await session.call_tool(request.name, request.arguments)
-                        if not request.future.done():
-                            request.future.set_result(result)
-                    except Exception as exc:  # One failed call must not end the session.
-                        if not request.future.done():
-                            request.future.set_exception(McpError(str(exc) or exc.__class__.__name__))
-                        if self.record.get("transport") == "computer":
-                            # The computer restarted or the server died: the
-                            # next turn starts a fresh session (and server).
-                            raise
+            protocols = self._protocols()
+            for index, protocol in enumerate(protocols):
+                try:
+                    await self._serve(protocol)
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as exc:
+                    # Only a failure to connect moves on to the other protocol.
+                    if self.status == "connected" or index == len(protocols) - 1:
+                        raise
+                    logger.info("MCP server %s did not connect over %s (%s); trying %s", self.record["name"], protocol, _first_message(exc), protocols[index + 1])
         except asyncio.CancelledError:
             raise
         except BaseException as exc:  # anyio raises groups; keep the first message.
@@ -508,12 +511,47 @@ class McpConnection:
                 if pending is not None and not pending.future.done():
                     pending.future.set_exception(McpError(self.error or "The MCP server stopped."))
 
+    async def _serve(self, protocol: str) -> None:
+        """One session over one protocol, serving calls until stopped."""
+        async with self._session(protocol) as session:
+            init = await session.initialize()
+            info = getattr(init, "server_info", None)
+            self.server_name = str(getattr(info, "name", "") or "")
+            self.tools = await self._list_tools(session)
+            self.status = "connected"
+            self.connected_at = time.time()
+            self._ready.set()
+            logger.info("MCP server %s connected: %d tools", self.record["name"], len(self.tools))
+            while True:
+                request = await self._queue.get()
+                if request is None:
+                    return
+                try:
+                    result = await session.call_tool(request.name, request.arguments)
+                    if not request.future.done():
+                        request.future.set_result(result)
+                except Exception as exc:  # One failed call must not end the session.
+                    if not request.future.done():
+                        request.future.set_exception(McpError(str(exc) or exc.__class__.__name__))
+                    if self.record.get("transport") == "computer":
+                        # The computer restarted or the server died: the
+                        # next turn starts a fresh session (and server).
+                        raise
+
     @contextlib.asynccontextmanager
-    async def _session(self):
+    async def _session(self, protocol: str):
         from mcp import ClientSession
 
         record = self.record
-        if record["transport"] == "stdio":
+        self.via = protocol
+        if protocol == "sse":
+            from mcp.client.sse import sse_client
+
+            headers = resolve_values(record.get("headers") or {}, self.secrets)
+            async with sse_client(record["url"], headers=headers, timeout=CONNECT_TIMEOUT, sse_read_timeout=SSE_READ_TIMEOUT) as streams:
+                async with ClientSession(streams[0], streams[1]) as session:
+                    yield session
+        elif record["transport"] == "stdio":
             from mcp.client.stdio import StdioServerParameters, stdio_client
 
             env = {name: os.environ[name] for name in _INHERITED_ENV if name in os.environ}
@@ -721,6 +759,7 @@ class McpManager:
                 "error": connection.error,
                 "tools": len(connection.tools),
                 "server_name": connection.server_name,
+                "via": connection.via if connection.status == "connected" else "",
             }
         return out
 

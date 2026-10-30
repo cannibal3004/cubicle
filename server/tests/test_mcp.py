@@ -247,5 +247,67 @@ class LiveProbeServerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(self.manager.records()), 2)
 
 
+class SseServerTests(unittest.IsolatedAsyncioTestCase):
+    """A server that speaks only the older SSE protocol (mem0's OpenMemory, for one), on a real port."""
+
+    def _serve(self, sse_path):
+        import socket
+        import threading
+
+        import uvicorn
+        from mcp.server.mcpserver import MCPServer
+
+        server = MCPServer("sse-probe")
+
+        @server.tool()
+        def remember(text: str) -> str:
+            """Keep a note."""
+            return f"kept: {text}"
+
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        web = uvicorn.Server(uvicorn.Config(server.sse_app(sse_path=sse_path), host="127.0.0.1", port=port, log_level="error"))
+        thread = threading.Thread(target=web.run, daemon=True)
+        thread.start()
+        for _ in range(100):
+            if web.started:
+                break
+            threading.Event().wait(0.05)
+
+        def stop():
+            web.should_exit = True
+            thread.join(5)
+
+        self.addCleanup(stop)
+        return f"http://127.0.0.1:{port}{sse_path}"
+
+    async def _connect(self, record):
+        connection = mcp_service.McpConnection(record=record)
+        self.addAsyncCleanup(connection.stop)
+        await connection.wait_ready(timeout=30)
+        return connection
+
+    async def test_a_url_falls_back_to_sse_and_sse_can_be_chosen(self):
+        # A path that does not say sse: streamable HTTP is tried first, then SSE.
+        url = self._serve("/events")
+        connection = await self._connect(clean_server({"name": "Memory", "url": url}))
+        self.assertEqual((connection.record["transport"], connection.status, connection.via), ("http", "connected", "sse"))
+        self.assertEqual([t.name for t in connection.tools], ["remember"])
+        result = await connection.call("remember", {"text": "the NAS is nas.lan"})
+        self.assertIn("kept: the NAS is nas.lan", result.content[0].text)
+        # Chosen outright.
+        forced = await self._connect(clean_server({"name": "Memory", "transport": "sse", "url": url}))
+        self.assertEqual((forced.status, forced.via), ("connected", "sse"))
+
+    def test_a_path_that_says_sse_tries_sse_first(self):
+        protocols = lambda url, transport="http": mcp_service.McpConnection(record={"name": "x", "transport": transport, "url": url})._protocols()
+        self.assertEqual(protocols("http://nas:8765/mcp/openmemory/sse/default_user"), ["sse", "http"])
+        self.assertEqual(protocols("https://mcp.example.com/sse"), ["sse", "http"])
+        self.assertEqual(protocols("https://mcp.exa.ai/mcp"), ["http", "sse"])
+        self.assertEqual(protocols("https://example.com/sseverything/mcp"), ["http", "sse"])
+        self.assertEqual(protocols("https://mcp.example.com/mcp", "sse"), ["sse"])
+
+
 if __name__ == "__main__":
     unittest.main()
