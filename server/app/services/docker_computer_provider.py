@@ -956,8 +956,26 @@ class DockerComputerProvider:
     async def mcp_start(self, computer_id: str, server: Dict[str, Any]) -> Dict[str, Any]:
         """Run an MCP server inside the computer; the driver bridges its stdio to HTTP."""
         record = self._active_record(computer_id)
-        payload = {"id": server.get("id"), "command": server.get("command"), "args": list(server.get("args") or []), "env": dict(server.get("env") or {})}
+        env = self._with_live_secrets(record, dict(server.get("env") or {}))
+        payload = {"id": server.get("id"), "command": server.get("command"), "args": list(server.get("args") or []), "env": env}
         return await self._request(record, "POST", "/mcp/start", payload, timeout=30)
+
+    _SECRET_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+
+    def _with_live_secrets(self, record: _RuntimeRecord, env: Dict[str, Any]) -> Dict[str, str]:
+        """A server's $NAME values filled in from the secrets as they are now. The driver only knows
+        the variables the computer started with, so a secret added since would be missing there (and
+        a changed one stale). Names that are not secrets are left for the driver to resolve."""
+        live = self._live_secrets(record)
+        current, gone = live.get("env") or {}, set(live.get("unset") or [])
+
+        def fill(match: "re.Match[str]") -> str:
+            name = match.group(1) or match.group(2)
+            if name in gone:
+                raise ComputerProviderError(f"Secret {name} is not set in this computer.")
+            return current.get(name, match.group(0))
+
+        return {name: self._SECRET_REF.sub(fill, str(value)) for name, value in env.items()}
 
     async def mcp_stop(self, computer_id: str, server_id: str) -> Dict[str, Any]:
         record = self._runtimes.get(computer_id)

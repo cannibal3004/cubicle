@@ -38,7 +38,10 @@ hosted MCP endpoint). There are three places one can live:
 
 - **Test** connects and lists the server's tools before you save.
 - Never put a key in a server's definition: write `$NAME` as an environment or header value and the
-  [secret](secrets.md) `NAME` is used when the server starts.
+  [secret](secrets.md) `NAME` is used when the server starts. A value typed in directly is shown as
+  `********`, to you and to the bots.
+- The pencil button edits a server. Hidden values left as `********` keep what is stored; the server
+  reconnects when you save.
 - Tools the server marks read-only run straight away; anything else asks. Mark a server **trusted
   read-only** when it cannot change anything (documentation and search servers), and all its tools run
   without asking.

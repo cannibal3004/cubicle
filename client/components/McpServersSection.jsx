@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { FiServer, FiTrash2, FiRefreshCw, FiPlus, FiPower, FiPlay } from 'react-icons/fi';
+import { FiServer, FiTrash2, FiRefreshCw, FiPlus, FiPower, FiPlay, FiEdit2, FiCheck } from 'react-icons/fi';
 
 const STATUS_STYLES = {
   connected: 'text-emerald-300',
@@ -20,10 +20,15 @@ function parseMap(text) {
   return out;
 }
 
-function mapText(map) {
+export function mapText(map) {
   return Object.entries(map || {})
     .map(([k, v]) => `${k}=${v}`)
     .join('\n');
+}
+
+// The arguments as one line the server splits like a shell would, quoting any with spaces or quotes.
+export function argsText(args) {
+  return (args || []).map((a) => (/^[^\s'"\\]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(' ');
 }
 
 // MCP servers: a command run over stdio or a streamable-HTTP URL, whose tools
@@ -32,6 +37,8 @@ function mapText(map) {
 export default function McpServersSection({ admin = false, load, create, update, remove, test, testDraft, reconnect }) {
   const [items, setItems] = useState([]);
   const [showForm, setShowForm] = useState(false);
+  // The id of the server the form is changing, or null when it adds one.
+  const [editing, setEditing] = useState(null);
   const [name, setName] = useState('');
   const [transport, setTransport] = useState('stdio');
   const [command, setCommand] = useState('');
@@ -89,18 +96,37 @@ export default function McpServersSection({ admin = false, load, create, update,
 
   const canSubmit = name.trim() && (transport === 'stdio' ? command.trim() : url.trim());
 
+  const closeForm = () => {
+    setName('');
+    setCommand('');
+    setArgs('');
+    setUrl('');
+    setVars('');
+    setTrust(false);
+    setDraftResult(null);
+    setEditing(null);
+    setShowForm(false);
+  };
+
+  // Values typed in rather than written as $NAME come back hidden; saved unchanged, they stay as they are.
+  const startEdit = (item) => {
+    setEditing(item.id);
+    setName(item.name);
+    setTransport(item.transport === 'http' ? 'http' : 'stdio');
+    setCommand(item.command || '');
+    setArgs(argsText(item.args));
+    setUrl(item.url || '');
+    setVars(mapText(item.transport === 'http' ? item.headers : item.env));
+    setTrust(!!item.trust_read_only);
+    setDraftResult(null);
+    setShowForm(true);
+  };
+
   const submit = async () => {
-    const ok = await run(() => create(draft()), 'Could not add the server.');
-    if (ok) {
-      setName('');
-      setCommand('');
-      setArgs('');
-      setUrl('');
-      setVars('');
-      setTrust(false);
-      setDraftResult(null);
-      setShowForm(false);
-    }
+    const ok = editing
+      ? await run(() => update(editing, { ...draft(), scope: undefined }), 'Could not save the server.')
+      : await run(() => create(draft()), 'Could not add the server.');
+    if (ok) closeForm();
   };
 
   const inputClass =
@@ -124,6 +150,9 @@ export default function McpServersSection({ admin = false, load, create, update,
                   <span className="ml-auto flex items-center gap-1 flex-shrink-0">
                     <button type="button" disabled={busy} onClick={async () => { const r = await run(() => test(item.id), 'Test failed.'); if (r) setResults((prev) => ({ ...prev, [item.id]: r })); }} className="px-2 py-1 rounded-lg text-[11px] text-zinc-300 hover:text-white hover:bg-[#1f1f23] disabled:opacity-50 transition" title="Connect and list its tools">
                       <FiPlay className="text-[10px]" />
+                    </button>
+                    <button type="button" disabled={busy} onClick={() => startEdit(item)} className="px-2 py-1 rounded-lg text-[11px] text-zinc-300 hover:text-white hover:bg-[#1f1f23] disabled:opacity-50 transition" title="Edit">
+                      <FiEdit2 className="text-[10px]" />
                     </button>
                     <button type="button" disabled={busy} onClick={() => run(() => reconnect(item.id), 'Reconnect failed.')} className="px-2 py-1 rounded-lg text-[11px] text-zinc-300 hover:text-white hover:bg-[#1f1f23] disabled:opacity-50 transition" title="Reconnect">
                       <FiRefreshCw className="text-[10px]" />
@@ -186,7 +215,7 @@ export default function McpServersSection({ admin = false, load, create, update,
             rows={2}
             className={`${inputClass} w-full resize-y`}
           />
-          {admin && (
+          {admin && !editing && (
             <label className="flex items-center gap-2 text-[11px] text-zinc-400">
               <select value={scope} onChange={(e) => setScope(e.target.value)} className={inputClass}>
                 <option value="user">Only my bots</option>
@@ -200,12 +229,15 @@ export default function McpServersSection({ admin = false, load, create, update,
           </label>
           <div className="flex items-center gap-2">
             <button type="button" onClick={submit} disabled={busy || !canSubmit} className="px-3 py-2 rounded-xl text-xs font-medium bg-zinc-100 text-black hover:bg-white disabled:opacity-40 transition flex items-center gap-1.5">
-              <FiPlus className="text-xs" /> Add
+              {editing ? <><FiCheck className="text-xs" /> Save</> : <><FiPlus className="text-xs" /> Add</>}
             </button>
-            <button type="button" onClick={async () => { const r = await run(() => testDraft(draft()), 'Test failed.'); if (r) setDraftResult(r); }} disabled={busy || !canSubmit} className="px-3 py-2 rounded-xl text-xs text-zinc-200 hover:text-white bg-[#1f1f23] disabled:opacity-40 transition">
-              Test first
-            </button>
-            <button type="button" onClick={() => setShowForm(false)} className="px-3 py-2 rounded-xl text-xs text-zinc-400 hover:text-white transition">
+            {/* An edit is tested by saving: the server reconnects and its status shows above. */}
+            {!editing && (
+              <button type="button" onClick={async () => { const r = await run(() => testDraft(draft()), 'Test failed.'); if (r) setDraftResult(r); }} disabled={busy || !canSubmit} className="px-3 py-2 rounded-xl text-xs text-zinc-200 hover:text-white bg-[#1f1f23] disabled:opacity-40 transition">
+                Test first
+              </button>
+            )}
+            <button type="button" onClick={closeForm} className="px-3 py-2 rounded-xl text-xs text-zinc-400 hover:text-white transition">
               Cancel
             </button>
           </div>
