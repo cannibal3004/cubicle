@@ -1661,7 +1661,10 @@ async def list_turns():
     bots shared with them (sidebar badges); a teammate's conversations are not the owner's to see.
 
     `waiting` holds the approval cards from teammates' conversations this person may answer
-    (a shared bot's approvers), with the bot and the person asking named."""
+    (a shared bot's approvers), with the bot and the person asking named.
+
+    `bots` holds the ids of the bots this person sees (their own and those shared with them), so
+    an open page notices one made by a turn or another device, or one a teammate just shared."""
     from app.services.approval_broker import approval_broker
     from app.services.auth_service import auth_service
     from app.services import storage_service as storage_module
@@ -1679,6 +1682,7 @@ async def list_turns():
     return {
         "turns": [turn for turn in turn_manager.overview() if sharing.thread_access(actor, turn.get("thread_id")) is not None],
         "waiting": waiting,
+        "bots": current_storage().bot_ids() + [m["bot_id"] for m in sharing.memberships(actor)],
     }
 
 

@@ -152,7 +152,13 @@ quill = bot(
     "You are Quill. Help Alex write clearly: plain words, short sentences, no filler.",
     suggestions=["Tighten this paragraph", "Draft a polite reply to an email", "Turn my notes into a short update"],
 )
-storage.save_bots([cubie, atlas, iris, quill])
+# The bot Cubie makes in the garden conversation below, so the sidebar shows it as Cubie says.
+fern = bot(
+    "Fern", "Garden watcher", "🌱", "#22c55e",
+    "You are Fern. You watch the garden soil sensors and tell Alex when a bed needs water.",
+    created_at=at(88),
+)
+storage.save_bots([cubie, atlas, iris, quill, fern])
 
 # ---- Atlas: the backups project and the conversation the hero shot shows --------------------
 
@@ -324,7 +330,7 @@ if computer:
 print(json.dumps({
     "computer": computer, "computer_bots": [atlas["id"]] if computer else [],
     "owner_token": owner_token, "sam_token": sam_token,
-    "bots": {"atlas": atlas["id"], "iris": iris["id"], "quill": quill["id"], "cubie": cubie["id"]},
+    "bots": {"atlas": atlas["id"], "iris": iris["id"], "quill": quill["id"], "cubie": cubie["id"], "fern": fern["id"]},
     "conversations": {"backup": backup_conv["id"], "disk": disk["id"], "drives": drives["id"], "garden": garden["id"], "weekly": weekly["id"]},
     "projects": {"backup": backup["id"]},
 }))

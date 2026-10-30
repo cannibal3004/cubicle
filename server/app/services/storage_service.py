@@ -322,6 +322,12 @@ class StorageService:
         # Settings that still name a former tool name are read with today's names.
         return [migrate_bot(payload) for row in rows if isinstance((payload := self._decode_payload(row[0])), dict)]
 
+    def bot_ids(self) -> List[str]:
+        """The owner's bot ids, without reading the bots: cheap enough to ask every few seconds."""
+        with self.database.connect() as connection:
+            rows = connection.execute("SELECT id FROM bots WHERE owner_id = ? ORDER BY rowid", (self.owner_id,)).fetchall()
+        return [row[0] for row in rows]
+
     def save_bots(self, bots: List[Dict[str, Any]]):
         with self.database.connect() as connection:
             connection.execute("DELETE FROM bots WHERE owner_id = ?", (self.owner_id,))

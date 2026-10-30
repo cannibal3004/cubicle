@@ -117,6 +117,8 @@ export default function Dashboard() {
   // Approval cards from teammates' conversations on shared bots this person answers.
   const [waitingApprovals, setWaitingApprovals] = useState([]);
   const lastTurnStates = useRef({});
+  // The bot ids the last poll reported (null before the first).
+  const lastBotIds = useRef(null);
   const conversationsRef = useRef({});
   // Conversations whose first reply just finished: a model is naming them in
   // the background, so their bot's list is refreshed until the title arrives.
@@ -240,7 +242,14 @@ export default function Dashboard() {
           }
         }
       }
-      if (finished) adoptNewBots(); // a turn may have created a bot
+      // A bot appeared or left (a turn made one, a teammate shared or unshared one, another device).
+      let botsChanged = false;
+      if (Array.isArray(overview.bots)) {
+        const botIds = overview.bots.join(',');
+        botsChanged = lastBotIds.current !== null && lastBotIds.current !== botIds;
+        lastBotIds.current = botIds;
+      }
+      if (finished || botsChanged) adoptNewBots(); // a turn may have created a bot
       const titleBots = new Set();
       for (const [threadId, wait] of Object.entries(awaitingTitles.current)) {
         const conversation = (conversationsRef.current[wait.botId] || []).find((c) => c.id === threadId);

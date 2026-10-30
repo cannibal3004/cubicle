@@ -80,6 +80,21 @@ class SharingTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_the_turns_poll_names_the_bots_each_person_sees(self):
+        """An open page polls /chat/turns; a bot shared meanwhile shows up there, so it joins the list."""
+        async def scenario():
+            with self.request(self.bob["id"], path="/api/v1/chat/turns"):
+                await bots_router.get_bots()  # Bob's Cubie
+                own = current_storage().bot_ids()
+                self.assertEqual((await chat_router.list_turns())["bots"], own)
+            sharing.add_member(LOCAL_USER_ID, self.bot, self.bob["id"], sharing.MEMBER, LOCAL_USER_ID)
+            with self.request(self.bob["id"], path="/api/v1/chat/turns"):
+                self.assertEqual((await chat_router.list_turns())["bots"], own + [self.bot])
+            with self.request(LOCAL_USER_ID, path="/api/v1/chat/turns"):
+                self.assertEqual((await chat_router.list_turns())["bots"], [b["id"] for b in self.root.get_bots()])
+
+        asyncio.run(scenario())
+
     def test_conversations_are_private_to_whoever_started_them(self):
         sharing.add_member(LOCAL_USER_ID, self.bot, self.bob["id"], sharing.MEMBER, LOCAL_USER_ID)
         from app.routers import conversations as conversations_router
