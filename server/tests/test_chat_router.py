@@ -493,6 +493,31 @@ class ChatStreamRouteTests(unittest.TestCase):
         stored = self.storage.get_messages(bot["id"])[-1]["raw_payload"]["tool_calls"][0]
         self.assertIn("malformed_arguments", stored["raw_arguments"])
 
+    def test_a_background_job_started_in_a_turn_is_watched_for_its_conversation(self):
+        from app.services import job_watch
+        from app.services.action_gateway import ActionDefinition
+
+        bot = self.storage.get_bots()[0]
+        self.storage.add_message({"id": "m1", "thread_id": bot["id"], "bot_id": bot["id"], "sender": "user", "text": "start the copy"})
+        gateway, _ = self._gateway("allow")
+
+        async def terminal(call):
+            return {"computer_id": "computer-x", "exit_code": 0, "background": True, "job_id": "job-abc", "pid": 77,
+                    "log": "/home/pwuser/.cubicle-jobs/job-abc.log", "exit_file": "/home/pwuser/.cubicle-jobs/job-abc.exit", "stdout": "", "stderr": ""}
+
+        gateway.register_action(ActionDefinition(name="computer.terminal_execute", tool="computer", action="terminal_execute", intent="run", risk="external", requires_approval=True), terminal)
+        stream = _scripted_stream({}, [
+            [{"type": "tool_calls", "calls": [{"id": "c1", "name": "computer_terminal_execute", "arguments": '{"command": "rsync -a /a /b", "background": true}'}]},
+             {"type": "turn.completed", "ok": True}],
+            [{"type": "content.delta", "delta": "Started."}, {"type": "turn.completed", "ok": True}],
+        ])
+        with mock.patch.object(job_watch.settings, "DATA_DIR", Path(self.temp_dir.name)):
+            _, events = self._run_turn(bot["id"], stream=stream, gateway=gateway)
+            completed = next(e for e in events if e["type"] == "tool.completed")
+            self.assertIn("You will get a message", json.dumps(completed["result"]))
+            watched = job_watch.job_watcher.pending()
+        self.assertEqual([(w["job_id"], w["thread_id"], w["command"], w["computer_id"]) for w in watched], [("job-abc", bot["id"], "rsync -a /a /b", "computer-x")])
+
     def test_a_text_reply_cut_at_the_output_limit_says_so(self):
         bot = self.storage.get_bots()[0]
         self.storage.add_message(
