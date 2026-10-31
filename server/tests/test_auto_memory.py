@@ -96,7 +96,7 @@ class AutoMemoryTests(unittest.TestCase):
         with mock.patch.object(auto_memory, "nearest", lambda *a, **k: asyncio.sleep(0, result=[old, wrong])):
             outcome = asyncio.run(auto_memory.capture(self.bot, self.bot, "I moved mini.lan to 192.168.1.45 yesterday, and proxy01 is gone.",
                                                       "Noted both; Dana handles badges.", message_id="msg-1", stream=fake_model(reply, seen)))
-        self.assertEqual(outcome, {"added": 2, "replaced": 1, "forgotten": 1, "skipped": 1})
+        self.assertEqual(outcome, {"added": 2, "replaced": 1, "forgotten": 1, "skipped": 1, "notes_out_of_date": 0})
         self.assertEqual(seen["effort"], "none")  # thinking off
         self.assertIn("nas.lan (TrueNAS)", seen["prompt"])  # the notes, so they are not kept twice
         self.assertIn("1. [mini.lan] The Docker host mini.lan has the IP 192.168.1.40.", seen["prompt"])
@@ -132,6 +132,91 @@ class AutoMemoryTests(unittest.TestCase):
         auto_memory.add_memory(self.bot, "backups", "Backups go to the B2 bucket alex-lab-backups.")
         found = asyncio.run(auto_memory.execute_search(call))
         self.assertEqual(found["memories"][0]["subject"], "backups")
+
+    def test_long_notes_are_shown_by_the_parts_that_relate_to_the_exchange(self):
+        self.assertEqual(auto_memory.notes_for("## Short\n- one line", "anything"), "## Short\n- one line")
+        hosts = "## Hosts\n" + "\n".join(f"- host{i}.lan runs service{i} on 10.0.0.{i}" for i in range(60))
+        lessons = "## Lessons\n" + "\n".join(f"- lesson {i}: measure twice before trusting iostat numbers" for i in range(60))
+        backups = "## Backups\n- restic runs nightly to the B2 bucket alex-lab-backups\n- prune on Sundays"
+        notes = f"# Estate notes\n{hosts}\n{lessons}\n{backups}"
+        shown = auto_memory.notes_for(notes, "the restic backups to B2 failed last night", budget=2000)
+        self.assertIn("alex-lab-backups", shown)
+        self.assertNotIn("iostat", shown)
+        self.assertLessEqual(len(shown), 2000)
+        shown = auto_memory.notes_for(notes, "host42.lan moved to 10.0.0.99", budget=2000)
+        self.assertIn("host42.lan", shown)
+        self.assertIn("## Hosts", shown)  # each part under its heading
+        prompt = auto_memory.build_prompt(notes=notes, related=[], user_text="restic to B2", reply_text="ok", today="2026-10-31")
+        self.assertIn("the parts that relate to this exchange", prompt)
+
+    def test_a_fact_newer_than_the_notes_is_kept_and_the_bot_told_until_the_line_is_fixed(self):
+        from app.services import bot_memory
+
+        self._switch(True)
+        reply = {"memories": [
+            {"op": "add", "subject": "NAS", "text": "The NAS is now nas2.lan (Unraid); nas.lan was retired on 2026-10-31.", "notes_line": "- NAS: nas.lan (TrueNAS)"},
+            {"op": "add", "subject": "printer", "text": "The office printer is at 10.0.0.9.", "notes_line": "- Printer: something the notes never said"},
+        ]}
+        with mock.patch.object(auto_memory, "nearest", lambda *a, **k: asyncio.sleep(0, result=[])):
+            outcome = asyncio.run(auto_memory.capture(self.bot, self.bot, "We replaced the TrueNAS box with nas2.lan running Unraid.",
+                                                      "Noted, nas2.lan it is.", stream=fake_model(reply, {})))
+        self.assertEqual((outcome["added"], outcome["notes_out_of_date"]), (2, 1))  # a line the notes do not say is not kept
+        stale = auto_memory.stale_notes(self.bot)
+        self.assertEqual([r["subject"] for r in stale], ["NAS"])
+        block = auto_memory.stale_notes_context(self.bot)
+        self.assertIn('Your notes say "- NAS: nas.lan (TrueNAS)"', block)
+        self.assertIn("memory_edit", block)
+        listed = asyncio.run(memories_router.list_memories(self.bot, q="", history=False))
+        self.assertEqual(listed["notes_out_of_date"], 1)
+        self.assertEqual(next(m for m in listed["memories"] if m["subject"] == "NAS")["notes_say"], "- NAS: nas.lan (TrueNAS)")
+        # A newer fact about the same thing carries the line on.
+        newer = auto_memory.replace_memory(self.bot, stale[0]["id"], "NAS", "The NAS nas2.lan moved to 10.0.0.30.")
+        self.assertEqual([r["id"] for r in auto_memory.stale_notes(self.bot)], [newer["id"]])
+        # Fixed in the notes: no longer stale.
+        bot_memory.edit_memory(self.bot, "- NAS: nas.lan (TrueNAS)", "- NAS: nas2.lan (Unraid)")
+        self.assertEqual(auto_memory.stale_notes_context(self.bot), "")
+        # Or dismissed by the user.
+        bot_memory.edit_memory(self.bot, "- NAS: nas2.lan (Unraid)", "- NAS: nas.lan (TrueNAS)")
+        self.assertTrue(auto_memory.stale_notes(self.bot))
+        asyncio.run(memories_router.edit_memory(self.bot, newer["id"], memories_router.MemoryEdit(dismiss_notes_conflict=True)))
+        self.assertEqual(auto_memory.stale_notes(self.bot), [])
+
+    def test_memory_save_keeps_facts_and_moves_them_out_of_the_notes_all_or_nothing(self):
+        from app.services import bot_memory
+
+        notes = "## The lab\n- NAS: nas.lan (TrueNAS)\n- Printer: 10.0.0.9, owned by facilities\n\n## Rules\n- Never reboot the NAS in office hours"
+        bot_memory.set_memory(self.bot, notes)
+        old = auto_memory.add_memory(self.bot, "backups", "Backups go to B2.")
+
+        def save(**arguments):
+            return asyncio.run(auto_memory.execute_save(build_invocation("memory_save", arguments, self.bot)))
+
+        # A passage that is not in the notes: nothing is saved, the notes are as they were.
+        with self.assertRaises(auto_memory.MemoryError) as raised:
+            save(facts=[{"subject": "NAS", "text": "The NAS is nas.lan (TrueNAS)."}], remove_from_notes=["- NAS: nas.lan (FreeNAS)"])
+        self.assertIn("Nothing was saved", str(raised.exception))
+        self.assertEqual(len(auto_memory.list_memories(self.bot)), 1)
+        # A credential: refused before anything happens.
+        with self.assertRaises(auto_memory.MemoryError):
+            save(facts=[{"subject": "NAS", "text": "The NAS login is admin / Hunter2-Lab!"}])
+        with self.assertRaises(auto_memory.MemoryError):
+            save(facts=[{"subject": "x", "text": "y", "replaces": "mem-nope"}])
+        result = save(
+            facts=[{"subject": "NAS", "text": "The NAS is nas.lan (TrueNAS)."},
+                   {"subject": "printer", "text": "The printer is at 10.0.0.9, owned by facilities."},
+                   {"subject": "backups", "text": "Backups go to the B2 bucket alex-lab-backups.", "replaces": old["id"]},
+                   {"subject": "backups", "text": "Backups go to B2."}],
+            remove_from_notes=["- NAS: nas.lan (TrueNAS)", "- Printer: 10.0.0.9, owned by facilities"],
+        )
+        self.assertEqual((len(result["saved"]), result["replaced"], result["notes"]["removed"]), (3, 1, 2))
+        self.assertEqual(bot_memory.get_memory(self.bot), "## The lab\n\n## Rules\n- Never reboot the NAS in office hours")
+        current = auto_memory.list_memories(self.bot)
+        self.assertEqual(sorted(m["subject"] for m in current), ["NAS", "backups", "printer"])
+        self.assertTrue(all(m["source"]["by"] == "bot" for m in current))
+        self.assertEqual(auto_memory.get_memory(self.bot, old["id"])["state"], "replaced")
+        # The same fact again is not kept twice.
+        self.assertEqual(save(facts=[{"subject": "NAS", "text": "The NAS is  nas.lan (TrueNAS)."}])["already_remembered"], 1)
+        self.assertIn("memory_save", [s.name for s in available_tools(computer=False, auto_memory=True)])
 
     def test_only_the_owner_sees_and_changes_them(self):
         memory = auto_memory.add_memory(self.bot, "backups", "Backups go to B2.")

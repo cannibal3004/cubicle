@@ -15,6 +15,8 @@ router = APIRouter(prefix="/api/v1/bots", tags=["memories"])
 class MemoryEdit(BaseModel):
     subject: Optional[str] = Field(default=None, max_length=auto_memory.SUBJECT_MAX)
     text: Optional[str] = Field(default=None, max_length=auto_memory.TEXT_MAX)
+    # The notes are right as they are: stop telling the bot the line it contradicts is out of date.
+    dismiss_notes_conflict: bool = False
 
 
 def _own_bot(bot_id: str) -> None:
@@ -35,16 +37,21 @@ async def list_memories(bot_id: str, q: str = Query("", max_length=500), history
     """The bot's memories, newest first: the current ones, or with history the replaced and forgotten ones too."""
     _own_bot(bot_id)
     memories = auto_memory.list_memories(bot_id, include_history=history, query=q)
+    # The notes line a current memory is newer than, while the notes still say it.
+    stale = {r["id"]: r["contradicts_notes"] for r in auto_memory.stale_notes(bot_id)}
     return {
-        "memories": memories,
+        "memories": [{**m, "notes_say": stale[m["id"]]} if m["id"] in stale else m for m in memories],
         "enabled": auto_memory.enabled_for(bot_id),
         "current": len(auto_memory.list_memories(bot_id)),
+        "notes_out_of_date": len(stale),
     }
 
 
 @router.put("/{bot_id}/memories/{memory_id}")
 async def edit_memory(bot_id: str, memory_id: str, body: MemoryEdit) -> Any:
     _own_bot(bot_id)
+    if body.dismiss_notes_conflict:
+        return {"memory": _guard(lambda: auto_memory.dismiss_notes_conflict(bot_id, memory_id))}
     return {"memory": _guard(lambda: auto_memory.edit_memory(bot_id, memory_id, subject=body.subject, text=body.text))}
 
 

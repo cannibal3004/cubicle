@@ -35,7 +35,13 @@ says how many), and it can search them with `memory_search`.
   can see what changed and when. One the conversation shows was simply wrong is forgotten.
 - **No secrets.** Known [secrets](secrets.md) are removed before the model reads anything, the model is
   told never to keep credentials, and a memory that still looks like one is dropped.
-- **Nothing twice.** The model is shown the bot's notes, and leaves out what they already say.
+- **Nothing twice.** The model is shown the bot's notes (for long notes, the parts that relate to the
+  exchange), and leaves out what they already say.
+- **Notes that fall behind.** When a conversation changes something the notes say, the new fact is kept
+  anyway, and the bot is told which line of its notes is out of date so it fixes it. The card shows the
+  line too; **Dismiss** it if the notes are right after all.
+- **Saved on purpose.** The bot can keep a fact itself with `memory_save`, and move single facts out of
+  full notes in the same step: the lines are taken out only once the facts are saved.
 - **Yours only.** Only your own conversations with a bot feed and read its memory: a teammate's
   conversations with a bot you shared do neither.
 

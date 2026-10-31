@@ -798,6 +798,40 @@ AUTO_MEMORY_TOOLS: List[ToolSpec] = [
         group="memory",
         needs_approval=False,
     ),
+    ToolSpec(
+        name="memory_save",
+        description=(
+            "Keep facts in your automatic memory yourself: one fact each (an address, an owner, a version, who to ask), in a sentence "
+            "that stands on its own, at most 600 characters, never a credential. To move single facts out of your notes, list the "
+            "exact passages in remove_from_notes: they are taken out once the facts are saved, and nothing happens if a passage does "
+            "not match once. Only single facts belong here; house rules, how you work and lessons stay in your notes, or become skills. "
+            "A fact that updates a memory gives that memory's id (from memory_search) in replaces."
+        ),
+        parameters=_obj(
+            {
+                "facts": {
+                    "type": "array",
+                    "description": "The facts to keep",
+                    "items": _obj(
+                        {
+                            "subject": {"type": "string", "description": "What it is about, in a few words (a host, a person, a service)"},
+                            "text": {"type": "string", "description": "The fact, in a sentence"},
+                            "replaces": {"type": "string", "description": "The id of the memory this fact updates (optional)"},
+                        },
+                        ["subject", "text"],
+                    ),
+                },
+                "remove_from_notes": {
+                    "type": "array",
+                    "description": "Passages of your notes, copied exactly, to take out once the facts are saved (optional)",
+                    "items": {"type": "string"},
+                },
+            },
+            ["facts"],
+        ),
+        group="memory",
+        needs_approval=False,
+    ),
 ]
 
 
@@ -980,9 +1014,11 @@ def describe_tools(
     if any(spec.name == "memory_search" for spec in specs):
         lines.append(
             "- Automatic memory: besides your notes, the lasting facts of your conversations are kept for you by themselves, and the "
-            "ones that match a message are shown with it (newer than your notes where they differ). memory_search looks for more. So "
-            "do not copy single facts (an address, an owner, a version, a date) into your notes: they are remembered for you, and "
-            "your notes are for what you must always have in mind (house rules, how you work, the systems you look after)."
+            "ones that match a message are shown with it (newer than your notes where they differ). memory_search looks for more, and "
+            "memory_save keeps a fact on purpose. So do not copy single facts (an address, an owner, a version, a date) into your notes: "
+            "they are remembered for you, and your notes are for what you must always have in mind (house rules, how you work, the "
+            "systems you look after). When your notes are getting full, move their single facts to memory with memory_save and "
+            "remove_from_notes. When you are told a line of your notes is out of date, fix it with memory_edit."
         )
     if "projects" in groups:
         lines.append(
@@ -1171,7 +1207,7 @@ PROJECT_CALLS: Dict[str, Any] = {
 
 # Actions that belong to the conversation a call comes from, not just the bot.
 THREAD_ACTIONS = {
-    "todo.list", "todo.add", "todo.update", "memory.read", "memory.write", "memory.edit", "user.ask",
+    "todo.list", "todo.add", "todo.update", "memory.read", "memory.write", "memory.edit", "memory.save", "user.ask",
     "projects.list", "projects.create", "projects.join", "work_notes.read", "work_notes.write", "work_notes.edit",
     "project_log.add", "project_log.read", "bots.send", "help.search",
 }
@@ -1587,6 +1623,24 @@ def _build_invocation(
     if name == "memory_search":
         query = _string(arguments, "query", required=True, max_len=500)
         return ActionInvocation(name="memory.search", arguments={"bot_id": bot_id, "query": query}, target={"bot_id": bot_id}, preview=f"Search the memory of {bot_id}: {query[:80]}")
+    if name == "memory_save":
+        facts = arguments.get("facts")
+        if isinstance(facts, dict):
+            facts = [facts]  # one fact given on its own
+        if not isinstance(facts, list) or not facts:
+            raise ToolCallError("'facts' is a list of {subject, text}, at least one.")
+        passages = arguments.get("remove_from_notes") or []
+        if isinstance(passages, str):
+            passages = [passages]
+        if not isinstance(passages, list) or not all(isinstance(p, str) for p in passages):
+            raise ToolCallError("'remove_from_notes' is a list of passages of your notes, copied exactly.")
+        moved = f", taking {len(passages)} passage{'s' if len(passages) != 1 else ''} out of the notes" if passages else ""
+        return ActionInvocation(
+            name="memory.save",
+            arguments={"bot_id": bot_id, "facts": facts, "remove_from_notes": passages},
+            target={"bot_id": bot_id},
+            preview=f"Remember {len(facts)} fact{'s' if len(facts) != 1 else ''} for {bot_id}{moved}",
+        )
     if name == "memory_read":
         return ActionInvocation(
             name="memory.read", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the notes of {bot_id}"

@@ -830,6 +830,11 @@ async def attach_turn_context(
         counts["memories"] = remembered.count("\n- ")
         turn.emit({"type": "memory.used", "botMsgId": bot_msg_id, "count": counts["memories"]})
         blocks.append(remembered)
+    # Lines of the bot's notes that a newer memory contradicts, until they are fixed (once per stretch of context).
+    stale = _fresh_entries(stale_notes_context(bot_id), "- ", seen) if acting_for_owner() else ""
+    if stale:
+        counts["stale_notes"] = stale.count("\n- ")
+        blocks.append(stale)
     # Entries of the conversation's project log that match this message.
     conversation = conversations.get(thread_id) or {}
     if conversation.get("project_id"):
@@ -860,6 +865,15 @@ async def memory_context(bot_id: str, query: str) -> str:
         return await auto_memory.recall_context(bot_id, query)
     except Exception as exc:  # never let it fail a turn
         logger.warning("Memory recall failed for %s: %s", bot_id, exc)
+        return ""
+
+
+def stale_notes_context(bot_id: str) -> str:
+    """The lines of the bot's notes its automatic memory has newer facts for; "" when none."""
+    try:
+        return auto_memory.stale_notes_context(bot_id)
+    except Exception as exc:  # never let it fail a turn
+        logger.warning("Checking the notes of %s against its memory failed: %s", bot_id, exc)
         return ""
 
 
