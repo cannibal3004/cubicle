@@ -10,6 +10,7 @@ from app.services import user_questions as _user_questions  # noqa: F401 - regis
 from app.routers import admin, questions, attachments, auth, bots, models, chat, approvals, upload, settings as settings_router, connectors, audit, computers, tools, files, gate, commands, secrets, schedules, mcp, search, conversations, projects
 from app.routers import sharing as sharing_router
 from app.routers import help as help_router
+from app.routers import skills as skills_router
 from app.services.mcp_service import mcp_manager
 from app.services.scheduler import scheduler
 from app.services.computer_provider import computer_provider
@@ -124,6 +125,7 @@ app.include_router(commands.router)
 app.include_router(secrets.router)
 app.include_router(schedules.router)
 app.include_router(mcp.router)
+app.include_router(skills_router.router)
 
 
 @app.get("/api/v1/health")

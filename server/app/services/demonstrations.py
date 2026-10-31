@@ -8,7 +8,7 @@ When the user hands the computer back, the recording is saved under the
 bot's data and the hand-back message carries it: the steps go into the
 message text the model reads, and the turn that answers it also gets the
 keyframes as images, once. Later turns see the steps in the history and
-the procedure the bot wrote from them (see services/procedures).
+the skill the bot wrote from them (see services/procedures).
 """
 
 from __future__ import annotations
@@ -37,9 +37,9 @@ _ID = re.compile(r"^rec-[0-9a-f]{8}$")
 
 LEAD = (
     "[While recording, the user showed this on your computer's browser. What they did, in order, with the page it happened on. "
-    "Study it, then write it up as a procedure in your own words: numbered steps, each with the page or URL and the exact label of "
-    "the control, so you can do it yourself next time with your computer tools. Save it with procedure_save under a short title that "
-    "says what it achieves, tell the user the title and the steps, and ask only about what is unclear.]"
+    "Study it, then write it up as a skill of your own in your own words: numbered steps, each with the page or URL and the exact label "
+    "of the control, so you can do it yourself next time with your computer tools. Save it with skill_save under a short name that "
+    "says what it achieves, tell the user the name and the steps, and ask only about what is unclear.]"
 )
 
 

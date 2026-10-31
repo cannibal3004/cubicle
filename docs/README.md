@@ -24,6 +24,7 @@ settings in mind.
 - [Tools and approvals](approvals.md): approval cards, auto-approval, trusted tools, the audit trail
 - [The bot's computer](computer.md): the desktop, files, taking control, showing the bot how
 - [Connected apps and MCP servers](apps-and-mcp.md): Gmail, GitHub and friends; MCP tool servers
+- [Skills](skills.md): instructions for kinds of tasks, installed or written, and the ones a bot writes
 - [Secrets](secrets.md): API keys a bot can use without seeing them
 - [Schedules](schedules.md): prompts that run on their own
 - [Sharing a bot](sharing.md): letting teammates use a bot of yours

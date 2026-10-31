@@ -14,6 +14,8 @@ cryptography==50.0.2
 tzdata==2026.5
 # MCP client: tool servers over stdio and streamable HTTP.
 mcp==2.3.0
+# Skills: the YAML front matter of SKILL.md (the MCP client brings it in; pinned because we import it).
+PyYAML==6.0.3
 # Text from PDF, Word, Excel and PowerPoint attachments.
 markitdown[docx,pdf,pptx,xls,xlsx]==0.1.8
 # Screenshots scaled for the model (markitdown brings it in; pinned because we import it).

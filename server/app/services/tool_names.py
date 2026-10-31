@@ -25,6 +25,9 @@ RENAMED: Dict[str, str] = {
     "computer_write_file": "write_file",
     "computer_edit_file": "edit_file",
     "computer_files_list": "list_files",
+    # Procedures became the bot's own skills.
+    "procedure_save": "skill_save",
+    "procedure_read": "skill_read",
 }
 
 # Names models use by habit for the same jobs (other agents' tool names).

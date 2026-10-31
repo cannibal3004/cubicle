@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/v1/tools", tags=["tools"])
 GROUP_LABELS = {
     "workspace": "Shared folder",
     "computer": "Computer",
-    "procedures": "Procedures (shown by you)",
+    "skills": "Skills",
     "share": "File sharing",
     "memory": "Notes",
     "projects": "Projects and work notes",

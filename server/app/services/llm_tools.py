@@ -417,30 +417,42 @@ PROJECT_TOOLS: List[ToolSpec] = [
 ]
 
 
-PROCEDURE_TOOLS: List[ToolSpec] = [
+# Skills (services/skills): the library's (installed or written in App Settings) and the bot's
+# own (what it wrote, most often after the user showed it a task; these were procedures).
+SKILL_TOOLS: List[ToolSpec] = [
     ToolSpec(
-        name="procedure_save",
+        name="skill_read",
         description=(
-            "Keep a procedure: how to do a task on your computer, written from what the user showed you (or what you worked out). "
-            "Numbered steps in your own words, each naming the page or URL and the exact label of the control, with what to type or "
-            "choose; leave out passwords. Saving under an existing title replaces that procedure. The titles are listed in your tools "
-            "prompt on every turn; procedure_read brings one back."
+            "Load one of your skills by name (listed in your tools prompt): its instructions in full, and the folder in your computer "
+            "with its scripts and files. Read it before a task it fits, then follow it. With 'file', read one of its text files "
+            "(a reference or template the instructions point to)."
         ),
         parameters=_obj(
             {
-                "title": {"type": "string", "description": "Short, says what the procedure achieves (e.g. 'File a PTO request in Workday')"},
-                "steps": {"type": "string", "description": "The numbered steps"},
+                "name": {"type": "string", "description": "The skill's name (a unique part is enough)"},
+                "file": {"type": "string", "description": "A file of the skill to read, by its path in the skill (e.g. reference/forms.md)"},
             },
-            ["title", "steps"],
+            ["name"],
         ),
-        group="procedures",
+        group="skills",
         needs_approval=False,
     ),
     ToolSpec(
-        name="procedure_read",
-        description="Show one of your procedures in full, by title (a unique part of the title is enough). Read it before doing a task it covers.",
-        parameters=_obj({"title": {"type": "string", "description": "The procedure's title"}}, ["title"]),
-        group="procedures",
+        name="skill_save",
+        description=(
+            "Keep a skill of your own: how to do a kind of task, written from what the user showed you or what you worked out, so you "
+            "can do it again. Numbered steps in your own words; for work in the computer's browser, each naming the page or URL and the "
+            "exact label of the control, with what to type or choose. Leave out passwords. Saving under an existing name replaces it."
+        ),
+        parameters=_obj(
+            {
+                "name": {"type": "string", "description": "Short, says what it achieves (e.g. 'File a PTO request in Workday')"},
+                "description": {"type": "string", "description": "When to use it, in a line"},
+                "instructions": {"type": "string", "description": "The numbered steps"},
+            },
+            ["name", "instructions"],
+        ),
+        group="skills",
         needs_approval=False,
     ),
 ]
@@ -768,9 +780,9 @@ def available_tools(
     specs = list(SHARED_FOLDER_TOOLS)
     if computer:
         specs.extend(COMPUTER_TOOLS)
-        specs.extend(PROCEDURE_TOOLS)
     specs.extend(SHARE_TOOLS)
     specs.extend(MEMORY_TOOLS)
+    specs.extend(SKILL_TOOLS)
     specs.extend(PROJECT_TOOLS)
     specs.extend(TODO_TOOLS)
     specs.extend(SCHEDULE_TOOLS)
@@ -930,11 +942,12 @@ def describe_tools(
             "conversation's own. projects_list shows the projects, project_join moves this conversation into one, project_create starts "
             "one. When the work notes change in another conversation of the same project you are told, so read them before relying on them."
         )
-    if "procedures" in groups:
+    if "skills" in groups:
         lines.append(
-            "- Procedures: the user can show you how to do something in your computer's browser (their clicks and typing arrive as a "
-            "recorded list of steps with screens). Write what they showed you up as a procedure and keep it with procedure_save; before a "
-            "task one of your procedures covers, procedure_read it and follow it with your computer tools, adapting when a page has changed."
+            "- Skills: instructions for kinds of tasks, listed below by name and description. Before a task one fits, skill_read it and "
+            "follow it; a skill's scripts are in its folder in your computer. Keep what you learn as a skill of your own with skill_save: "
+            "the user can show you how to do something in your computer's browser (their clicks and typing arrive as a recorded list of "
+            "steps with screens), and you write it up so you can do it again, adapting when a page has changed."
         )
     if "todo" in groups:
         lines.append(
@@ -1537,19 +1550,25 @@ def _build_invocation(
             preview=f"Edit the notes of {bot_id} ({len(old_text)} characters become {len(new_text)})",
         )
 
-    if name == "procedure_save":
-        title = _string(arguments, "title", required=True, max_len=200)
-        steps = _string(arguments, "steps", required=True, max_len=20_000)
+    # procedure_save/read: the former names, as a call from an older conversation or habit uses them.
+    if name in ("skill_save", "procedure_save"):
+        title = _string({**arguments, "name": arguments.get("name") or arguments.get("title")}, "name", required=True, max_len=200)
+        steps = _string({**arguments, "instructions": arguments.get("instructions") or arguments.get("steps")}, "instructions", required=True, max_len=20_000)
+        description = _string(arguments, "description", max_len=1000) or ""
         return ActionInvocation(
-            name="procedure.save",
-            arguments={"bot_id": bot_id, "title": title, "steps": steps},
+            name="skill.save",
+            arguments={"bot_id": bot_id, "name": title, "description": description, "instructions": steps},
             target={"bot_id": bot_id},
-            preview=f"Save the procedure {title!r} for {bot_id} ({len(steps)} characters)",
+            preview=f"Save the skill {title!r} for {bot_id} ({len(steps)} characters)",
         )
-    if name == "procedure_read":
-        title = _string(arguments, "title", required=True, max_len=200)
+    if name in ("skill_read", "procedure_read"):
+        title = _string({**arguments, "name": arguments.get("name") or arguments.get("title")}, "name", required=True, max_len=200)
+        file = _string(arguments, "file", max_len=500) or ""
         return ActionInvocation(
-            name="procedure.read", arguments={"bot_id": bot_id, "title": title}, target={"bot_id": bot_id}, preview=f"Read the procedure {title!r} of {bot_id}"
+            name="skill.read",
+            arguments={"bot_id": bot_id, "name": title, **({"file": file} if file else {})},
+            target={"bot_id": bot_id},
+            preview=f"Read the skill {title!r}" + (f": {file}" if file else ""),
         )
 
     if name in {"github_list_issues", "github_create_issue"}:

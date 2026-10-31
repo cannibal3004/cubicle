@@ -287,7 +287,7 @@ def sidebar(page):
 
 # ---- bot settings --------------------------------------------------------------------------
 
-BOT_SECTIONS = [("General", "general"), ("Model & thinking", "model"), ("Instructions", "instructions"), ("Notes & procedures", "notes"),
+BOT_SECTIONS = [("General", "general"), ("Model & thinking", "model"), ("Instructions", "instructions"), ("Notes & skills", "notes"),
                 ("Tools", "tools"), ("Secrets", "secrets"), ("Schedules", "schedules"), ("Sharing", "sharing")]
 
 
@@ -305,7 +305,7 @@ def bot_settings(page):
 # ---- app settings and the other views ------------------------------------------------------
 
 APP_SECTIONS = [("Account", "account"), ("Users", "users"), ("Model server", "model"), ("Auto-approval", "approval"), ("Connectors", "connectors"),
-                ("Secrets", "secrets"), ("MCP servers", "mcp")]
+                ("Secrets", "secrets"), ("MCP servers", "mcp"), ("Skills", "skills")]
 
 
 @shot

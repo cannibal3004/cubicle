@@ -33,7 +33,7 @@ MAX_SHORT = 200
 MAX_PROMPT = 20_000
 # Only these fields can be changed from the client; ids, counters, and
 # timestamps are the server's.
-EDITABLE_FIELDS = {"name", "role", "description", "avatar", "model", "accent_color", "system_prompt", "tools", "pinned", "tool_settings", "auto_approval", "gate_threshold", "trusted_tools", "allowed_commands", "procedures", "suggestions", "thinking"}  # memory is handled separately
+EDITABLE_FIELDS = {"name", "role", "description", "avatar", "model", "accent_color", "system_prompt", "tools", "pinned", "tool_settings", "auto_approval", "gate_threshold", "trusted_tools", "allowed_commands", "procedures", "skill_settings", "suggestions", "thinking"}  # memory is handled separately
 MAX_TOOL_SETTINGS_ENTRIES = 2000
 MAX_TRUSTED_TOOLS = 500
 _TOOL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -204,6 +204,8 @@ class BotUpdate(BaseModel):
     trusted_tools: Optional[List[str]] = None
     allowed_commands: Optional[List[str]] = None
     procedures: Optional[List[Dict[str, Any]]] = None
+    # Library skills switched off for this bot: {skill id: false}.
+    skill_settings: Optional[Dict[str, bool]] = None
     orchestrator: Optional[bool] = None
     memory: Optional[str] = Field(default=None, max_length=MEMORY_MAX_CHARS)
     todo: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=TODO_MAX_ITEMS)
@@ -316,6 +318,9 @@ async def update_bot(bot_id: str, updates: BotUpdate):
         changes["tool_settings"] = clean_tool_settings(changes["tool_settings"])
     if "trusted_tools" in changes:
         changes["trusted_tools"] = clean_trusted_tools(changes["trusted_tools"])
+    if "skill_settings" in changes:
+        # Only what is switched off is kept; ids look like skill-1a2b3c4d.
+        changes["skill_settings"] = {k: False for k, v in changes["skill_settings"].items() if v is False and re.fullmatch(r"skill-[a-f0-9]{8}", str(k))}
     if "allowed_commands" in changes:
         changes["allowed_commands"] = clean_allowed_commands(changes["allowed_commands"])
     if "suggestions" in changes:

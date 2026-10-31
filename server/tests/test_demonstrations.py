@@ -15,7 +15,7 @@ from app.routers import bots as bots_router
 from app.routers import chat as chat_router
 from app.routers import computers as computers_router
 from app.schemas.contracts import TurnRequest
-from app.services import demonstrations, procedures, retrieval
+from app.services import demonstrations, procedures, retrieval, skills
 from app.services import storage_service as storage_module
 from app.services.action_gateway import ActionGateway, ActionInvocation
 from app.services.computer_provider import FakeComputerProvider
@@ -185,10 +185,11 @@ class ProcedureTests(unittest.TestCase):
         self.assertEqual([p["title"] for p in listed], ["File a PTO request in Workday", "Export the sales report"])
         self.assertEqual(procedures.find_procedure(self.bot["id"], "pto request")["steps"], "1. Open Workday.\n2. Click Absence.\n3. Request.")
         self.assertIsNone(procedures.find_procedure(self.bot["id"], "report the"))  # no such substring
-        block = procedures.prompt_block(next(b for b in self.storage.get_bots() if b["id"] == self.bot["id"]))
-        self.assertIn('"File a PTO request in Workday"; "Export the sales report"', block)
-        self.assertIn("procedure_read", block)
-        self.assertEqual(procedures.prompt_block({"procedures": []}), "")
+        with mock.patch.object(skills, "library", lambda: []):
+            block = skills.prompt_block(next(b for b in self.storage.get_bots() if b["id"] == self.bot["id"]))
+            self.assertIn('"File a PTO request in Workday"; "Export the sales report"', block)
+            self.assertIn("skill_read", block)
+            self.assertEqual(skills.prompt_block({"procedures": []}), "")
         self.assertTrue(procedures.delete_procedure(self.bot["id"], saved["id"]))
         self.assertFalse(procedures.delete_procedure(self.bot["id"], saved["id"]))
         with self.assertRaises(procedures.ProcedureError):
@@ -197,22 +198,25 @@ class ProcedureTests(unittest.TestCase):
             procedures.save_procedure(self.bot["id"], "Too long", "x" * (procedures.STEPS_MAX + 1))
 
     def test_the_tools_and_actions_round_trip(self):
+        """Procedures became the bot's own skills; the former tool names still work."""
         specs = available_tools(computer=True)
         names = [s.name for s in specs]
-        self.assertIn("procedure_save", names)
-        self.assertIn("procedure_read", names)
-        self.assertNotIn("procedure_save", [s.name for s in available_tools(computer=False)])
-        self.assertIn("Procedures: the user can show you", describe_tools(specs))
+        self.assertIn("skill_save", names)
+        self.assertIn("skill_read", names)
+        self.assertIn("skill_save", [s.name for s in available_tools(computer=False)])  # a skill needs no computer
+        self.assertIn("Skills: instructions for kinds of tasks", describe_tools(specs))
         call = build_invocation("procedure_save", {"title": "Export the sales report", "steps": "1. Reports.\n2. Export."}, self.bot["id"])
-        self.assertEqual(call.name, "procedure.save")
-        gateway = ActionGateway(workspace=WorkspaceService(Path(self.temp.name) / "ws"), approvals=None, audit=self.storage)
-        procedures.register_procedure_actions(gateway)
-        result = asyncio.run(gateway.executors["procedure.save"](call)) if hasattr(gateway, "executors") else asyncio.run(procedures.execute_save(call))
-        self.assertEqual((result["saved"], result["title"], result["count"]), (True, "Export the sales report", 1))
-        read = asyncio.run(procedures.execute_read(build_invocation("procedure_read", {"title": "sales"}, self.bot["id"])))
-        self.assertEqual(read["steps"], "1. Reports.\n2. Export.")
-        with self.assertRaisesRegex(procedures.ProcedureError, "No procedure called"):
-            asyncio.run(procedures.execute_read(build_invocation("procedure_read", {"title": "nothing"}, self.bot["id"])))
+        self.assertEqual(call.name, "skill.save")
+        with mock.patch.object(skills, "library", lambda: []):
+            result = asyncio.run(skills.execute_save(call))
+            self.assertEqual((result["saved"], result["name"], result["count"]), (True, "Export the sales report", 1))
+            read = asyncio.run(skills.execute_read(build_invocation("procedure_read", {"title": "sales"}, self.bot["id"])))
+            self.assertEqual((read["instructions"], read["yours"]), ("1. Reports.\n2. Export.", True))
+            saved = asyncio.run(skills.execute_save(build_invocation("skill_save", {"name": "Export the sales report", "description": "Monthly, for finance", "instructions": "1. Reports.\n2. Export CSV."}, self.bot["id"])))
+            self.assertEqual(saved["count"], 1)  # replaced by name
+            self.assertEqual(procedures.find_procedure(self.bot["id"], "sales")["description"], "Monthly, for finance")
+            with self.assertRaisesRegex(skills.SkillError, "No skill called"):
+                asyncio.run(skills.execute_read(build_invocation("skill_read", {"name": "nothing"}, self.bot["id"])))
 
     def test_the_editor_can_replace_the_list_and_the_index_follows(self):
         saved = procedures.save_procedure(self.bot["id"], "Export the sales report", "1. Reports.\n2. Export CSV.")
@@ -335,7 +339,7 @@ class DemonstrationTurnTests(unittest.TestCase):
         self.assertIn('9. Clicked the button "Submit".', sent_messages[0]["content"])
         self.assertIsInstance(sent_messages[1]["content"], list)
         self.assertEqual(sum(1 for p in sent_messages[1]["content"] if p["type"] == "image_url"), 4)
-        self.assertIn("procedure_save", recorder["system_prompt"])
+        self.assertIn("skill_save", recorder["system_prompt"])
 
         # A later turn sees the steps in the history but is not sent the frames again.
         self.storage.add_message({"id": "m-follow", "thread_id": self.bot["id"], "bot_id": self.bot["id"], "sender": "user", "text": "Thanks, now do it for next Friday.", "created_at": "2026-10-21T11:00:00", "item_type": "user_text"})

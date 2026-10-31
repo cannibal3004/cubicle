@@ -54,8 +54,8 @@ its replies' [tool steps](chat.md#a-reply) and the [audit trail](approvals.md#th
 
 **Show the bot** gives you control and records what you do in the computer's browser. Do the task
 once, then press the button again: it hands the desktop back and sends the steps, with a few frames, to
-the bot in the chat. The bot writes them up as a **procedure** (a short how-to in its settings, under
-Notes & procedures). Before a task a procedure covers, the bot reads it and follows it.
+the bot in the chat. The bot writes them up as a [skill](skills.md) of its own (a short how-to in its
+settings, under Notes & skills). Before a task the skill covers, the bot reads it and follows it.
 
 ## One computer, many conversations
 

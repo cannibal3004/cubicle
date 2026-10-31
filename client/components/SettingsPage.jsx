@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { FiX, FiCheck, FiEye, FiEyeOff, FiUser, FiUsers, FiServer, FiShield, FiLink, FiKey, FiCpu } from "react-icons/fi";
+import { FiX, FiCheck, FiEye, FiEyeOff, FiUser, FiUsers, FiServer, FiShield, FiLink, FiKey, FiCpu, FiBookOpen } from "react-icons/fi";
 import {
   fetchSettings,
   saveSettings,
@@ -25,6 +25,7 @@ import {
 import ModelPicker from "./ModelPicker";
 import SecretsSection from "./SecretsSection";
 import McpServersSection from "./McpServersSection";
+import SkillsSection from "./SkillsSection";
 import AccountSection from "./AccountSection";
 import AdminUsersSection from "./AdminUsersSection";
 
@@ -60,6 +61,7 @@ const SECTIONS = [
   { id: "connectors", label: "Connectors", icon: FiLink, blurb: "App connections for your bots." },
   { id: "secrets", label: "Secrets", icon: FiKey, blurb: "API keys and tokens your bots may use in their computers." },
   { id: "mcp", label: "MCP servers", icon: FiServer, blurb: "Tool servers for your bots, and system-wide ones." },
+  { id: "skills", label: "Skills", icon: FiBookOpen, blurb: "Instructions for kinds of tasks, with their scripts and files, that your bots load when a task fits." },
 ];
 
 const AUTO_APPROVAL_OPTIONS = [
@@ -987,6 +989,17 @@ export default function SettingsPage({
             reconnect={reconnectMcpServer}
             loadTools={fetchMcpServerTools}
           />
+        </div>
+
+        {/* Skills */}
+        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm ${show("skills") ? "" : "hidden"}`}>
+          <div>
+            <h3 className="text-sm font-bold text-zinc-100">Skills</h3>
+            <p className="text-[11px] text-zinc-500 mt-1">
+              Your skills are offered to your bots; system skills, which admins manage, to everyone&apos;s. A bot also keeps skills of its own, which it writes itself (see its settings).
+            </p>
+          </div>
+          <SkillsSection admin={admin} />
         </div>
         </div>
         </div>

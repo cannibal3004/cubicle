@@ -44,7 +44,7 @@ WORK_NOTES_TOOLS = {"work_notes_write", "work_notes_edit", "project_join"}
 # Built-in tools that only look; anything else that completed may have changed something.
 READ_ONLY_TOOLS = {
     "shared_folder_list", "shared_folder_read", "computer_start", "computer_screenshot", "computer_files_list",
-    "computer_read_file", "list_files", "read_file", "github_list_issues", "memory_read", "procedure_read", "todo_list", "schedule_list",
+    "computer_read_file", "list_files", "read_file", "github_list_issues", "memory_read", "procedure_read", "skill_read", "todo_list", "schedule_list",
     "ask_user", "bots_list", "bots_status", "bots_reply", "connector_status", "mcp_list_servers", "mcp_test_server",
     "computer_request_takeover", "composio_search_tools", "work_notes_read", "project_log_read", "projects_list",
 }
@@ -120,7 +120,7 @@ def _arguments(record: Dict[str, Any]) -> Dict[str, Any]:
 def _is_read(name: str) -> bool:
     if name in READ_ONLY_TOOLS:
         return True
-    if name.startswith(("computer_", "shared_folder_", "memory_", "todo_", "schedule_", "bots_", "mcp_", "procedure_", "share_", "github_", "connector_", "work_notes_", "project")):
+    if name.startswith(("computer_", "shared_folder_", "memory_", "todo_", "schedule_", "bots_", "mcp_", "procedure_", "skill_", "share_", "github_", "connector_", "work_notes_", "project")):
         return False  # a built-in that is not in the read list changes something
     words = set(_WORD.findall(name.lower()))
     return bool(words & _READ_WORDS)

@@ -18,7 +18,7 @@ import {
 } from 'react-icons/fi';
 import ModelPicker from './ModelPicker';
 import { useThinkingLevels } from './ThinkingPicker';
-import { AUTO_APPROVAL_CHOICES } from './ToolsPopover';
+import { AUTO_APPROVAL_CHOICES, Switch } from './ToolsPopover';
 import BotToolsSection from './BotToolsSection';
 import SecretsSection from './SecretsSection';
 import SchedulesSection from './SchedulesSection';
@@ -27,6 +27,7 @@ import SharingSection from './SharingSection';
 import ConfirmDialog from './ConfirmDialog';
 import {
   draftBotSuggestions,
+  fetchSkills,
   fetchBotSecrets,
   setBotSecret,
   deleteBotSecret,
@@ -53,7 +54,7 @@ const SECTIONS = [
   { id: 'general', label: 'General', icon: FiUser, create: true, fields: ['name', 'role', 'description', 'avatar', 'accent_color', 'orchestrator'], blurb: 'Name, look, and what the bot is for.' },
   { id: 'model', label: 'Model & thinking', icon: FiCpu, create: true, fields: ['model', 'thinking', 'auto_approval', 'gate_threshold'], blurb: 'Which model answers, how hard it thinks, and which actions it may take without asking.' },
   { id: 'instructions', label: 'Instructions', icon: FiFileText, create: true, fields: ['system_prompt', 'suggestions'], blurb: 'The system prompt, and the suggestion cards on an empty conversation.' },
-  { id: 'notes', label: 'Notes & procedures', icon: FiBookOpen, fields: ['memory', 'procedures'], blurb: 'What the bot keeps between conversations, and the procedures you showed it.' },
+  { id: 'notes', label: 'Notes & skills', icon: FiBookOpen, fields: ['memory', 'skill_settings', 'procedures'], blurb: 'What the bot keeps between conversations, the skills it has, and the ones it wrote itself.' },
   { id: 'tools', label: 'Tools', icon: FiTool, create: true, fields: ['tool_settings', 'trusted_tools', 'allowed_commands'], blurb: 'Which tools it may use, which run without asking, and MCP servers on its computer.' },
   { id: 'secrets', label: 'Secrets', icon: FiKey, fields: [], blurb: "API keys and tokens for this bot's computer." },
   { id: 'schedules', label: 'Schedules', icon: FiClock, fields: [], blurb: 'Prompts that run on their own.' },
@@ -86,6 +87,7 @@ function baseValues(bot, defaultModel) {
     suggestions: list(bot?.suggestions),
     memory: bot?.memory || '',
     procedures: list(bot?.procedures),
+    skill_settings: bot?.skill_settings || {},
     tool_settings: bot?.tool_settings || {},
     trusted_tools: list(bot?.trusted_tools),
     allowed_commands: list(bot?.allowed_commands),
@@ -187,6 +189,13 @@ export default function BotSettingsPage({
   const [confirming, setConfirming] = useState(''); // "", "close", "delete", "leave"
   const [drafting, setDrafting] = useState(false);
   const [openProcedure, setOpenProcedure] = useState('');
+  // The skills library, for this bot's on/off switches.
+  const [librarySkills, setLibrarySkills] = useState([]);
+  useEffect(() => {
+    fetchSkills()
+      .then((data) => setLibrarySkills(data?.skills || []))
+      .catch(() => setLibrarySkills([]));
+  }, []);
   const [newRule, setNewRule] = useState('');
 
   const loadBotSecrets = useCallback(() => fetchBotSecrets(botId), [botId]);
@@ -210,7 +219,7 @@ export default function BotSettingsPage({
       setError('Give the bot a name.');
       return;
     }
-    const fields = isEdit ? Object.keys(edits) : Object.keys(base).filter((f) => f !== 'memory' && f !== 'procedures');
+    const fields = isEdit ? Object.keys(edits) : Object.keys(base).filter((f) => !['memory', 'procedures', 'skill_settings'].includes(f));
     const payload = Object.fromEntries(fields.map((f) => [f, forServer(f, values[f])]));
     setSaving(true);
     setError('');
@@ -572,8 +581,39 @@ export default function BotSettingsPage({
             )}
             {show('notes') && isEdit && (
               <Card
-                title={`Procedures${values.procedures.length ? ` · ${values.procedures.length}` : ''}`}
-                help="How-tos the bot wrote from what you showed it on its computer (Show the bot, on the computer page). It reads one before a task it covers."
+                title={`Skills${librarySkills.length ? ` · ${librarySkills.filter((s) => values.skill_settings[s.id] !== false).length} of ${librarySkills.length} on` : ''}`}
+                help="Instructions for kinds of tasks, from the skills library (App Settings → Skills). The bot sees each one's name and description and reads it when a task fits; switch off what this bot should not use."
+              >
+                <div className="space-y-1.5">
+                  {librarySkills.map((skill) => {
+                    const on = values.skill_settings[skill.id] !== false;
+                    return (
+                      <div key={skill.id} className="flex items-start gap-3 rounded-xl border border-[#2e2e34] bg-[#141417] px-3 py-2">
+                        <div className="min-w-0 flex-1">
+                          <div className={`text-xs truncate ${on ? 'text-zinc-100' : 'text-zinc-500'}`}>{skill.name}</div>
+                          <div className="text-[11px] text-zinc-500 leading-snug line-clamp-2" title={skill.description}>{skill.description}</div>
+                        </div>
+                        <Switch
+                          on={on}
+                          onChange={(next) => {
+                            const settings = { ...values.skill_settings };
+                            if (next) delete settings[skill.id];
+                            else settings[skill.id] = false;
+                            set('skill_settings', settings);
+                          }}
+                          label={`Toggle ${skill.name}`}
+                        />
+                      </div>
+                    );
+                  })}
+                  {!librarySkills.length && <span className="text-[11px] text-zinc-600">No skills in the library yet; install some in App Settings → Skills.</span>}
+                </div>
+              </Card>
+            )}
+            {show('notes') && isEdit && (
+              <Card
+                title={`Skills this bot wrote${values.procedures.length ? ` · ${values.procedures.length}` : ''}`}
+                help="How-tos the bot wrote itself, most from what you showed it on its computer (Show the bot, on the computer page). It reads one before a task it covers, and keeps them up to date."
               >
                 <div className="space-y-1.5">
                   {values.procedures.map((procedure) => (
@@ -583,9 +623,10 @@ export default function BotSettingsPage({
                           type="button"
                           onClick={() => setOpenProcedure((open) => (open === procedure.id ? '' : procedure.id))}
                           className="flex-1 min-w-0 text-left text-xs text-zinc-100 truncate hover:text-white"
-                          title={procedure.title}
+                          title={procedure.description || procedure.title}
                         >
                           {procedure.title}
+                          {procedure.description && <span className="text-zinc-500"> · {procedure.description}</span>}
                         </button>
                         <span className="text-[10px] text-zinc-600 font-mono shrink-0">{(procedure.updated_at || procedure.created_at || '').slice(0, 10)}</span>
                         <button

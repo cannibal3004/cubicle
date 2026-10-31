@@ -38,7 +38,7 @@ from app.services.mcp_tools import mcp_tool_specs
 from app.services.secrets_service import names_for, redactor_for
 from app.services import attachments as attachment_service
 from app.services import recall, retrieval
-from app.services import demonstrations, procedures
+from app.services import demonstrations, procedures, skills
 from app.services import rewind as rewind_service
 from app.services import tool_names
 from app.services.repetition import RepetitionGuard, TAIL_CHARS as _LOOP_TAIL
@@ -1024,10 +1024,10 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
     tool_definitions = openai_tool_definitions(listed_specs) if listed_specs else None
     # The names of the user's secrets (set in the bot's computer), never the values.
     tools_prompt = describe_tools(listed_specs, secret_names=names_for(bot_id), selection_note=selection_note)
-    # The titles of what the user has shown this bot; procedure_read brings one back.
-    shown = procedures.prompt_block(current_bot) if tool_specs else ""
-    if shown:
-        tools_prompt = f"{tools_prompt}\n{shown}"
+    # The bot's skills by name and description (the library's and its own); skill_read brings one back.
+    listed_skills = skills.prompt_block(current_bot) if any(spec.name == "skill_read" for spec in tool_specs or []) else ""
+    if listed_skills:
+        tools_prompt = f"{tools_prompt}\n{listed_skills}"
     # The bot's auto-approval mode is fixed for the whole turn, like its tools.
     gate_mode = approval_gate.mode_for(current_bot)
     gate_threshold = approval_gate.threshold_for(current_bot)

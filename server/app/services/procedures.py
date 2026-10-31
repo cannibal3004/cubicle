@@ -1,12 +1,14 @@
-"""Procedures: how-tos a bot keeps, written from what the user showed it.
+"""A bot's own skills: how-tos it wrote itself, most often from what the user showed it.
 
-After a demonstration (services/demonstrations) the bot writes the steps up
-in its own words and saves them here, on the bot record (`procedures`), so
-they survive compactions and conversations. Every turn's tools prompt lists
-the titles, so the bot knows what it has been shown; procedure_read brings
-one back in full, and when the server has the retrieval stack, the
-procedures that match the message are retrieved into the prompt as well.
-The user sees and deletes them in the bot editor.
+These were called procedures, and are still kept under that name on the bot
+record (`procedures`: id, title, description, steps), so they survive
+compactions and conversations. They are skills like the library's (see
+services/skills): every turn's tools prompt lists them, skill_read brings
+one back in full and skill_save writes one; when the server has the
+retrieval stack, the ones that match the message are retrieved into the
+prompt as well. After a demonstration (services/demonstrations) the bot
+writes the steps up in its own words and saves them here. The user sees,
+edits and deletes them in the bot editor.
 """
 
 from __future__ import annotations
@@ -19,7 +21,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.services import retrieval
-from app.services.action_gateway import ActionDefinition, ActionGateway, ActionInvocation, action_gateway
 from app.services.identity import get_current_owner, owner_context
 from app.services.storage_service import StorageService, current_storage
 
@@ -28,9 +29,8 @@ logger = logging.getLogger(__name__)
 KIND = "procedure"
 MAX_PROCEDURES = 60
 TITLE_MAX = 120
+DESCRIPTION_MAX = 300
 STEPS_MAX = 12_000
-SAVE_ACTION = "procedure.save"
-READ_ACTION = "procedure.read"
 _SPACES = re.compile(r"\s+")
 
 
@@ -44,21 +44,26 @@ def _ref(bot_id: str, procedure_id: str) -> str:
 
 def clean_title(value: Any) -> str:
     if not isinstance(value, str):
-        raise ProcedureError("A procedure needs a title.")
+        raise ProcedureError("A skill needs a name.")
     title = _SPACES.sub(" ", value).strip()
     if not title:
-        raise ProcedureError("A procedure needs a title.")
+        raise ProcedureError("A skill needs a name.")
     return title[:TITLE_MAX]
+
+
+def clean_description(value: Any) -> str:
+    """When to use it, in a line (listed beside the title); may be empty."""
+    return _SPACES.sub(" ", str(value or "")).strip()[:DESCRIPTION_MAX]
 
 
 def clean_steps(value: Any) -> str:
     if not isinstance(value, str):
-        raise ProcedureError("The steps must be text.")
+        raise ProcedureError("The instructions must be text.")
     steps = value.replace("\r\n", "\n").strip()
     if not steps:
-        raise ProcedureError("The steps cannot be empty.")
+        raise ProcedureError("The instructions cannot be empty.")
     if len(steps) > STEPS_MAX:
-        raise ProcedureError(f"The steps are limited to {STEPS_MAX} characters; this is {len(steps)}. Keep the procedure to what is needed to repeat the task.")
+        raise ProcedureError(f"A skill you write is limited to {STEPS_MAX} characters; this is {len(steps)}. Keep it to what is needed to repeat the task.")
     return steps
 
 
@@ -74,16 +79,17 @@ def clean_procedures(value: Any) -> List[Dict[str, Any]]:
             "id": str(item.get("id") or "").strip() or f"proc-{uuid.uuid4().hex[:8]}",
             "title": clean_title(item.get("title")),
             "steps": clean_steps(item.get("steps")),
+            "description": clean_description(item.get("description")),
             "created_at": str(item.get("created_at") or datetime.now().isoformat()),
             "updated_at": str(item.get("updated_at") or datetime.now().isoformat()),
         }
         if isinstance(item.get("source"), dict):
             entry["source"] = {k: item["source"][k] for k in ("recording_id", "steps") if k in item["source"]}
         if any(e["id"] == entry["id"] for e in cleaned):
-            raise ProcedureError("Procedure ids must be unique.")
+            raise ProcedureError("Skill ids must be unique.")
         cleaned.append(entry)
     if len(cleaned) > MAX_PROCEDURES:
-        raise ProcedureError(f"A bot keeps at most {MAX_PROCEDURES} procedures.")
+        raise ProcedureError(f"A bot keeps at most {MAX_PROCEDURES} skills of its own.")
     return cleaned
 
 
@@ -114,11 +120,14 @@ def find_procedure(bot_id: str, title: str, storage: Optional[StorageService] = 
     return partial[0] if len(partial) == 1 else None
 
 
-def save_procedure(bot_id: str, title: Any, steps: Any, *, source: Optional[Dict[str, Any]] = None, storage: Optional[StorageService] = None) -> Dict[str, Any]:
-    """Add a procedure, or replace the one with the same title. Returns the stored procedure."""
+def save_procedure(
+    bot_id: str, title: Any, steps: Any, *, description: Any = None, source: Optional[Dict[str, Any]] = None, storage: Optional[StorageService] = None
+) -> Dict[str, Any]:
+    """Add one of the bot's own skills, or replace the one with the same title. Returns it as stored."""
     storage = storage or current_storage()
     title = clean_title(title)
     steps = clean_steps(steps)
+    description = clean_description(description)
     bots = storage.get_bots()
     bot = _bot(bots, bot_id)
     procedures = [p for p in (bot.get("procedures") or []) if isinstance(p, dict)]
@@ -126,13 +135,15 @@ def save_procedure(bot_id: str, title: Any, steps: Any, *, source: Optional[Dict
     existing = next((p for p in procedures if str(p.get("title") or "").lower() == title.lower()), None)
     if existing is not None:
         existing.update({"steps": steps, "updated_at": now})  # the title keeps its first spelling
+        if description:
+            existing["description"] = description
         if source:
             existing["source"] = dict(source)
         saved = existing
     else:
         if len(procedures) >= MAX_PROCEDURES:
-            raise ProcedureError(f"This bot already keeps {MAX_PROCEDURES} procedures; delete one in the bot editor first.")
-        saved = {"id": f"proc-{uuid.uuid4().hex[:8]}", "title": title, "steps": steps, "created_at": now, "updated_at": now}
+            raise ProcedureError(f"This bot already keeps {MAX_PROCEDURES} skills of its own; delete one in the bot editor first.")
+        saved = {"id": f"proc-{uuid.uuid4().hex[:8]}", "title": title, "description": description, "steps": steps, "created_at": now, "updated_at": now}
         if source:
             saved["source"] = dict(source)
         procedures.append(saved)
@@ -226,7 +237,7 @@ async def procedure_context(bot_id: str, query: str, *, limit: int = 2, config: 
     if not hits:
         return ""
     by_id = {str(p.get("id")): p for p in list_procedures(bot_id, storage)}
-    lines = ["Procedures the user showed you earlier that match this message (follow one when the task is the same; the whole procedure is given):"]
+    lines = ["Skills you wrote (most from what the user showed you) that match this message; follow one when the task is the same (the whole skill is given):"]
     seen = set()
     for hit in hits:
         procedure_id = str(hit.meta.get("procedure_id") or hit.ref.split(":", 1)[-1])
@@ -238,56 +249,3 @@ async def procedure_context(bot_id: str, query: str, *, limit: int = 2, config: 
             continue
         lines.append(f"--- {procedure.get('title')} ---\n{str(procedure.get('steps') or '').strip()}")
     return "\n".join(lines) if len(lines) > 1 else ""
-
-
-# ---- prompt and tools -------------------------------------------------------------------------
-
-
-def prompt_block(bot: Optional[Dict[str, Any]]) -> str:
-    """The titles, for the tools prompt; "" when the bot has none."""
-    procedures = [p for p in ((bot or {}).get("procedures") or []) if isinstance(p, dict) and p.get("title")]
-    if not procedures:
-        return ""
-    titles = "; ".join(f'"{p["title"]}"' for p in procedures[:MAX_PROCEDURES])
-    return (
-        f"- Procedures the user has shown you ({len(procedures)}): {titles}. When a task matches one, read it with procedure_read first "
-        "and follow it; when you learn that a step has changed, save the corrected procedure under the same title."
-    )
-
-
-def _bot_id(call: ActionInvocation) -> str:
-    bot_id = call.arguments.get("bot_id")
-    if not isinstance(bot_id, str) or not bot_id.strip():
-        raise ProcedureError("Procedure actions require a bot id.")
-    return bot_id
-
-
-async def execute_save(call: ActionInvocation) -> Dict[str, Any]:
-    bot_id = _bot_id(call)
-    saved = save_procedure(bot_id, call.arguments.get("title"), call.arguments.get("steps"), source=call.arguments.get("source"))
-    return {"saved": True, "id": saved["id"], "title": saved["title"], "chars": len(saved["steps"]), "count": len(list_procedures(bot_id))}
-
-
-async def execute_read(call: ActionInvocation) -> Dict[str, Any]:
-    bot_id = _bot_id(call)
-    title = call.arguments.get("title")
-    procedure = find_procedure(bot_id, str(title or ""))
-    if procedure is None:
-        titles = [p.get("title") for p in list_procedures(bot_id)]
-        raise ProcedureError(f"No procedure called {str(title)!r}. The titles are: {titles}" if titles else "This bot has no procedures yet.")
-    return {"id": procedure["id"], "title": procedure["title"], "steps": procedure["steps"], "updated_at": procedure.get("updated_at")}
-
-
-def register_procedure_actions(gateway: Optional[ActionGateway] = None) -> None:
-    target = gateway or action_gateway
-    target.register_action(
-        ActionDefinition(name=SAVE_ACTION, tool="procedure", action="save", intent="Keep a procedure the bot was shown.", risk="write", requires_approval=False),
-        execute_save,
-    )
-    target.register_action(
-        ActionDefinition(name=READ_ACTION, tool="procedure", action="read", intent="Show the bot one of its procedures.", risk="read", requires_approval=False),
-        execute_read,
-    )
-
-
-register_procedure_actions()
