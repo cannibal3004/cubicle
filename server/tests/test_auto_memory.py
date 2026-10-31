@@ -218,6 +218,31 @@ class AutoMemoryTests(unittest.TestCase):
         self.assertEqual(save(facts=[{"subject": "NAS", "text": "The NAS is  nas.lan (TrueNAS)."}])["already_remembered"], 1)
         self.assertIn("memory_save", [s.name for s in available_tools(computer=False, auto_memory=True)])
 
+    def test_memory_save_takes_out_whole_lines_named_by_a_piece_of_them(self):
+        from app.services import bot_memory
+
+        notes = ("## Hosts\n| Host | Address | Notes |\n|---|---|---|\n| nas | 172.16.1.18 | Server 2016 |\n"
+                 "| nas2 | 172.16.1.19 | Server 2022 |\n| kermit | 172.16.1.3 | DC |\n\n## Rules\n- Never reboot the nas in office hours")
+        bot_memory.set_memory(self.bot, notes)
+
+        def save(facts, pieces):
+            call = build_invocation("memory_save", {"facts": facts, "remove_from_notes": pieces}, self.bot)
+            return asyncio.run(auto_memory.execute_save(call))
+
+        # "nas" is in three lines: refused, nothing saved.
+        with self.assertRaises(auto_memory.MemoryError) as raised:
+            save([{"subject": "nas", "text": "The file server nas is at 172.16.1.18 (Server 2016)."}], ["nas"])
+        self.assertIn("is in 3 lines", str(raised.exception))
+        self.assertEqual(auto_memory.list_memories(self.bot), [])
+        result = save(
+            [{"subject": "nas", "text": "The file server nas is at 172.16.1.18 (Server 2016)."},
+             {"subject": "nas2", "text": "The file server nas2 is at 172.16.1.19 (Server 2022)."},
+             {"subject": "kermit", "text": "kermit (172.16.1.3) is a domain controller."}],
+            ["| nas |", "| nas2 |", "| kermit |", "| Host | Address", "|---|"],
+        )
+        self.assertEqual((len(result["saved"]), result["notes"]["removed"]), (3, 5))
+        self.assertEqual(bot_memory.get_memory(self.bot), "## Hosts\n\n## Rules\n- Never reboot the nas in office hours")
+
     def test_only_the_owner_sees_and_changes_them(self):
         memory = auto_memory.add_memory(self.bot, "backups", "Backups go to B2.")
         listed = asyncio.run(memories_router.list_memories(self.bot, q="", history=False))

@@ -41,7 +41,9 @@ says how many), and it can search them with `memory_search`.
   anyway, and the bot is told which line of its notes is out of date so it fixes it. The card shows the
   line too; **Dismiss** it if the notes are right after all.
 - **Saved on purpose.** The bot can keep a fact itself with `memory_save`, and move single facts out of
-  full notes in the same step: the lines are taken out only once the facts are saved.
+  full notes in the same step: it names each line by a short piece of it (a host name, the start of a
+  table row), and the lines are taken out only once the facts are saved. A long section moves about ten
+  facts at a time.
 - **Yours only.** Only your own conversations with a bot feed and read its memory: a teammate's
   conversations with a bot you shared do neither.
 
