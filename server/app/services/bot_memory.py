@@ -20,8 +20,9 @@ tokens and in context.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.services.action_gateway import ActionDefinition, ActionGateway, ActionInvocation, action_gateway
@@ -56,6 +57,7 @@ def clean_memory(text: Any) -> str:
             "Notes are for durable facts about your job: the systems you look after, access, house rules, how things "
             "are done, lessons learned. Where a piece of work stands belongs in its project's work notes (work_notes_write), "
             "and what happened along the way in its log (project_log); per-run reports belong in files in your workspace. "
+            "When you have memory_save, single facts (an address, an owner, a version) can move to your automatic memory with it. "
             "Move or drop those sections with memory_edit (or rewrite the notes with memory_write) and try again."
         )
     return cleaned
@@ -139,6 +141,33 @@ def edit_memory(bot_id: str, old_text: Any, new_text: Any, storage: Optional[Sto
     return {**saved, "excerpt": _excerpt(updated, at, min(len(updated), at + len(new_text)))}
 
 
+def without_passages(bot_id: str, passages: List[str], storage: Optional[StorageService] = None) -> str:
+    """The notes with each passage taken out (a whole line goes with its line break). Raises, naming the
+    passage, when one is not in the notes exactly once; nothing is saved."""
+    current = get_memory(bot_id, storage)
+    updated = current
+    for passage in passages:
+        passage = passage.replace("\r\n", "\n").strip("\n")
+        if not passage.strip():
+            continue
+        count = updated.count(passage)
+        if count != 1:
+            where = "is not in the notes" if count == 0 else f"appears {count} times in the notes"
+            raise MemoryError(f"This passage {where}; copy it exactly, with enough of it to match once: {passage[:120]!r}")
+        start = updated.index(passage)
+        end = start + len(passage)
+        if (start == 0 or updated[start - 1] == "\n") and updated[end:end + 1] == "\n":
+            end += 1
+        updated = updated[:start] + updated[end:]
+    return re.sub(r"\n{3,}", "\n\n", updated)
+
+
+def remove_passages(bot_id: str, passages: List[str], storage: Optional[StorageService] = None) -> Dict[str, Any]:
+    """Take passages out of the bot's notes in one save. Returns the new size."""
+    storage = storage or current_storage()
+    return _save_memory(bot_id, clean_memory(without_passages(bot_id, passages, storage)), storage)
+
+
 def memory_note_message(thread_id: str, text: str, *, message_id: str, bot_id: Optional[str] = None, by: str = "user") -> Dict[str, Any]:
     """A thread item about the notes: the user edited them ("user"), the state after an undo
     ("rewind"), the notes a new conversation starts with ("start"), or word that another
@@ -167,7 +196,7 @@ def _thread_id(call: ActionInvocation) -> Optional[str]:
     return thread_id if isinstance(thread_id, str) and thread_id else None
 
 
-def _after_change(call: ActionInvocation, bot_id: str) -> None:
+def after_change(call: ActionInvocation, bot_id: str) -> None:
     """The conversation that changed the notes has them; the bot's other conversations are told."""
     from app.services import conversations
 
@@ -189,14 +218,14 @@ async def execute_read(call: ActionInvocation) -> Dict[str, Any]:
 async def execute_write(call: ActionInvocation) -> Dict[str, Any]:
     bot_id = _bot_id(call)
     result = set_memory(bot_id, call.arguments.get("text"))
-    _after_change(call, bot_id)
+    after_change(call, bot_id)
     return {**result, "limit": MEMORY_MAX_CHARS}
 
 
 async def execute_edit(call: ActionInvocation) -> Dict[str, Any]:
     bot_id = _bot_id(call)
     result = edit_memory(bot_id, call.arguments.get("old_text"), call.arguments.get("new_text"))
-    _after_change(call, bot_id)
+    after_change(call, bot_id)
     return {**result, "limit": MEMORY_MAX_CHARS}
 
 

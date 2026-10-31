@@ -9,13 +9,20 @@ is not deleted: it stays in the history, linked to its successor, so what change
 seen. Known secrets are removed before the model reads anything, and a memory that still looks like
 a credential is dropped.
 
+Long notes are not shown whole: the model gets the parts of them that share the most words with the
+exchange. When the exchange changes something the notes say, the new fact is kept anyway with the
+line of the notes it contradicts; until that line is fixed or the user dismisses it, the bot is told
+its notes are out of date (and the bot's settings show it).
+
 Before each turn the bot's current memories that match the message are added to what it is shown
-(services/retrieval when enabled; else a word match), and memory_search lets it look itself. The user
-reads, edits and deletes them in the bot's settings.
+(services/retrieval when enabled; else a word match), and memory_search lets it look itself.
+memory_save lets the bot keep facts on purpose, and move single facts out of its notes in the same
+call. The user reads, edits and deletes them in the bot's settings.
 
 Each memory: id, subject (what it is about: a host, a person, a service), text, created_at, source
-(conversation and message), state (current | replaced | forgotten), replaced_by / replaces, and
-edited when the user changed it. Stored per bot in bot_memories.
+(conversation and message; by "bot" when it saved it itself), state (current | replaced | forgotten),
+replaced_by / replaces, contradicts_notes (the notes line it is newer than), and edited when the
+user changed it. Stored per bot in bot_memories.
 """
 
 from __future__ import annotations
@@ -43,7 +50,12 @@ RELATED_FOR_EXTRACTION = 12
 RECALL_LIMIT = 6
 EXCHANGE_CHARS = 4000
 NOTES_CHARS = 6000
+NOTES_PIECE_CHARS = 1500  # long notes are split into pieces of about this size, each under its heading
+NOTES_LINE_MAX = 400
+STALE_NOTES_LIMIT = 5
+SAVE_FACTS_MAX = 30
 SEARCH_ACTION = "memory.search"
+SAVE_ACTION = "memory.save"
 
 # The settings: an account's default for bots that have not chosen, and the model (app-wide).
 DEFAULT_SETTING = "auto_memory_default"
@@ -67,6 +79,10 @@ schedules, decisions, what was set up or changed and how), and the user's lastin
 working. Leave out small talk, what is only true for the moment (a scan running now, "I'll check"), the
 assistant's own steps that led nowhere, and anything already in the assistant's notes.
 
+When the exchange changes or contradicts something the notes say (a host in the notes moved, a rule in
+them changed), keep the new fact anyway, and copy the line of the notes it contradicts, exactly as it is
+written there, into "notes_line".
+
 Never keep passwords, API keys, tokens, private keys or other credentials, even when they are given. If one
 matters, keep only that it exists and where it is kept, never its value.
 
@@ -78,10 +94,13 @@ Compare with the existing memories (numbered). When a new fact changes or contra
 moved to a new address, a service was replaced, a decision changed), REPLACE that one: give its number and
 the new fact, which says what is true now. When the exchange shows an existing memory is simply wrong or no
 longer applies and nothing replaces it, FORGET it. Do not add what an existing memory already says.
+Judge that from the existing memories and the notes below only: the assistant saying it remembers or has
+noted something does not make it so.
 
 Reply with JSON only, in this shape (an empty list when there is nothing to keep):
 {"memories": [
   {"op": "add", "subject": "...", "text": "..."},
+  {"op": "add", "subject": "...", "text": "...", "notes_line": "..."},
   {"op": "replace", "id": "3", "subject": "...", "text": "..."},
   {"op": "forget", "id": "5"}
 ]}"""
@@ -155,12 +174,13 @@ def looks_like_credential(text: str) -> bool:
 
 
 def add_memory(bot_id: str, subject: Any, text: Any, *, source: Optional[Dict[str, Any]] = None, replaces: Optional[str] = None,
-               storage: Optional[StorageService] = None) -> Dict[str, Any]:
+               contradicts_notes: str = "", storage: Optional[StorageService] = None) -> Dict[str, Any]:
     storage = storage or current_storage()
     subject, text = _clean(subject, text)
     record = {
         "id": f"mem-{uuid.uuid4().hex[:10]}", "bot_id": bot_id, "subject": subject, "text": text, "created_at": _now(),
         "state": "current", "source": source or {}, **({"replaces": replaces} if replaces else {}),
+        **({"contradicts_notes": contradicts_notes} if contradicts_notes else {}),
     }
     _put(record, storage)
     _schedule_index(record)
@@ -171,11 +191,13 @@ def add_memory(bot_id: str, subject: Any, text: Any, *, source: Optional[Dict[st
 
 
 def replace_memory(bot_id: str, memory_id: str, subject: Any, text: Any, *, source: Optional[Dict[str, Any]] = None,
-                   storage: Optional[StorageService] = None) -> Dict[str, Any]:
-    """A new memory that takes the old one's place; the old one stays in the history."""
+                   contradicts_notes: str = "", storage: Optional[StorageService] = None) -> Dict[str, Any]:
+    """A new memory that takes the old one's place; the old one stays in the history (and passes on the
+    notes line it contradicts, which the newer fact contradicts as well)."""
     storage = storage or current_storage()
     old = get_memory(bot_id, memory_id, storage)
-    new = add_memory(bot_id, subject or old.get("subject"), text, source=source, replaces=memory_id, storage=storage)
+    new = add_memory(bot_id, subject or old.get("subject"), text, source=source, replaces=memory_id,
+                     contradicts_notes=contradicts_notes or str(old.get("contradicts_notes") or ""), storage=storage)
     old.update(state="replaced", replaced_by=new["id"], replaced_at=new["created_at"])
     _put(old, storage)
     _schedule_unindex(memory_id)
@@ -200,6 +222,16 @@ def edit_memory(bot_id: str, memory_id: str, *, subject: Any = None, text: Any =
     _put(record, storage)
     if record.get("state") == "current":
         _schedule_index(record)
+    return record
+
+
+def dismiss_notes_conflict(bot_id: str, memory_id: str, storage: Optional[StorageService] = None) -> Dict[str, Any]:
+    """The user says the notes are right as they are: the bot is no longer told they are out of date."""
+    storage = storage or current_storage()
+    record = get_memory(bot_id, memory_id, storage)
+    if record.pop("contradicts_notes", None) is not None:
+        record["notes_conflict_dismissed"] = _now()
+        _put(record, storage)
     return record
 
 
@@ -323,6 +355,92 @@ async def recall_context(bot_id: str, query: str, storage: Optional[StorageServi
     return "Things you remember from earlier conversations that may bear on this message (automatic memory; newer than your notes where they differ):\n" + "\n".join(_line(r) for r in found)
 
 
+# ---- the notes: the parts that matter to an exchange, and lines a newer fact contradicts ---------------------
+
+
+def _squash(text: str) -> str:
+    return " ".join(str(text or "").split()).lower()
+
+
+def in_notes(line: str, notes: str) -> bool:
+    """Whether the notes still say `line` (spacing and case aside)."""
+    line = _squash(line)
+    return bool(line) and line in _squash(notes)
+
+
+def _note_pieces(notes: str) -> List[str]:
+    """The notes in pieces: a section per heading, a long one split at blank lines (or lines) into parts
+    of about NOTES_PIECE_CHARS, each part after the first starting with its section's heading."""
+    sections: List[List[str]] = [[]]
+    for line in notes.splitlines():
+        if line.lstrip().startswith("#") and sections[-1]:
+            sections.append([])
+        sections[-1].append(line)
+    pieces: List[str] = []
+    for lines in sections:
+        heading = lines[0] if lines and lines[0].lstrip().startswith("#") else ""
+        current: List[str] = []
+        size = 0
+        for line in lines:
+            if current and size + len(line) > NOTES_PIECE_CHARS and (not line.strip() or size > NOTES_PIECE_CHARS * 1.3):
+                pieces.append("\n".join(current).strip())
+                current, size = ([heading + " (continued)"] if heading else []), 0
+            current.append(line)
+            size += len(line) + 1
+        if "\n".join(current).strip():
+            pieces.append("\n".join(current).strip())
+    return [p for p in pieces if p]
+
+
+def notes_for(notes: str, exchange: str, budget: int = NOTES_CHARS) -> str:
+    """The notes as the memory model sees them: whole when short, else the pieces that share the most
+    words with the exchange (rarer words count more), in their order, within `budget`."""
+    notes = (notes or "").strip()
+    if len(notes) <= budget:
+        return notes
+    pieces = _note_pieces(notes)
+    words = [_words(p) for p in pieces]
+    counts: Dict[str, int] = {}
+    for found in words:
+        for word in found:
+            counts[word] = counts.get(word, 0) + 1
+    wanted = _words(exchange)
+    scores = [sum(1.0 / counts[w] for w in found & wanted) for found in words]
+    chosen: Set[int] = set()
+    used = 0
+    for index in sorted(range(len(pieces)), key=lambda i: -scores[i]):
+        if scores[index] <= 0:
+            break
+        if used + len(pieces[index]) > budget:
+            continue
+        chosen.add(index)
+        used += len(pieces[index]) + 5
+    if not chosen:
+        return "(none of the notes relate to this exchange)"
+    return "\n…\n".join(pieces[i] for i in sorted(chosen))
+
+
+def stale_notes(bot_id: str, notes: Optional[str] = None, storage: Optional[StorageService] = None) -> List[Dict[str, Any]]:
+    """Current memories newer than a line the notes still say, newest first."""
+    storage = storage or current_storage()
+    if notes is None:
+        bot = _bot(bot_id, storage)
+        notes = str((bot or {}).get("memory") or "")
+    return [r for r in list_memories(bot_id, storage=storage) if r.get("contradicts_notes") and in_notes(r["contradicts_notes"], notes)]
+
+
+def stale_notes_context(bot_id: str, storage: Optional[StorageService] = None) -> str:
+    """For the turn: lines of the bot's notes that a newer fact contradicts; "" when there are none."""
+    found = stale_notes(bot_id, storage=storage)[:STALE_NOTES_LIMIT]
+    if not found:
+        return ""
+    return (
+        "Your notes are out of date here: automatic memory learned something newer. Fix each line with memory_edit "
+        "(or remove it, since the memory now holds the fact):\n"
+        + "\n".join(f"- Your notes say \"{r['contradicts_notes']}\", but on {str(r.get('created_at') or '')[:10]} you learned: {r.get('text')}" for r in found)
+    )
+
+
 # ---- whether a bot has it, and with which model -----------------------------------------------------
 
 
@@ -367,40 +485,47 @@ def _parse(text: str) -> List[Dict[str, Any]]:
 
 def build_prompt(*, notes: str, related: List[Dict[str, Any]], user_text: str, reply_text: str, today: str) -> str:
     numbered = "\n".join(f"{i + 1}. [{r.get('subject')}] {r.get('text')} (learned {str(r.get('created_at') or '')[:10]})" for i, r in enumerate(related)) or "(none)"
-    notes = notes.strip()[:NOTES_CHARS] or "(none)"
+    shown = notes_for(notes, f"{user_text}\n{reply_text}") or "(none)"
+    which = "the parts that relate to this exchange; " if shown != (notes or "").strip() else ""
     return (
-        f"Today: {today}\n\n## The assistant's notes (already known; do not keep any of this again)\n{notes}\n\n"
+        f"Today: {today}\n\n## The assistant's notes ({which}already known; do not keep any of this again)\n{shown}\n\n"
         f"## Existing memories\n{numbered}\n\n## The exchange\nThe user wrote:\n{user_text.strip()[:EXCHANGE_CHARS]}\n\n"
         f"The assistant replied:\n{reply_text.strip()[:EXCHANGE_CHARS]}\n\nReply with the JSON only."
     )
 
 
 def apply_operations(bot_id: str, operations: List[Dict[str, Any]], related: List[Dict[str, Any]], *, source: Dict[str, Any],
-                     storage: Optional[StorageService] = None) -> Dict[str, int]:
-    """Carry out what the model decided; anything malformed, unknown or credential-like is skipped."""
-    done = {"added": 0, "replaced": 0, "forgotten": 0, "skipped": 0}
+                     notes: str = "", storage: Optional[StorageService] = None) -> Dict[str, int]:
+    """Carry out what the model decided; anything malformed, unknown or credential-like is skipped. A notes
+    line the model says a fact contradicts is kept only when the notes really say it."""
+    done = {"added": 0, "replaced": 0, "forgotten": 0, "skipped": 0, "notes_out_of_date": 0}
     by_number = {str(i + 1): r for i, r in enumerate(related)}
     touched: Set[str] = set()
     for op in operations[:20]:
         kind = str(op.get("op") or "add").lower()
         text = str(op.get("text") or "")
         target = by_number.get(str(op.get("id") or "").strip())
+        notes_line = " ".join(str(op.get("notes_line") or "").split())[:NOTES_LINE_MAX]
+        if notes_line and not in_notes(notes_line, notes):
+            notes_line = ""
         try:
             if kind in ("add", "replace") and (not text.strip() or looks_like_credential(text)):
                 done["skipped"] += 1
                 continue
             if kind == "replace" and target is not None and target["id"] not in touched:
-                replace_memory(bot_id, target["id"], op.get("subject"), text, source=source, storage=storage)
+                replace_memory(bot_id, target["id"], op.get("subject"), text, source=source, contradicts_notes=notes_line, storage=storage)
                 touched.add(target["id"])
                 done["replaced"] += 1
+                done["notes_out_of_date"] += bool(notes_line)
             elif kind == "forget" and target is not None and target["id"] not in touched:
                 forget_memory(bot_id, target["id"], reason="the conversation showed it was wrong", storage=storage)
                 touched.add(target["id"])
                 done["forgotten"] += 1
             elif kind in ("add", "replace"):
                 # A replace without a known target is a plain add.
-                add_memory(bot_id, op.get("subject"), text, source=source, storage=storage)
+                add_memory(bot_id, op.get("subject"), text, source=source, contradicts_notes=notes_line, storage=storage)
                 done["added"] += 1
+                done["notes_out_of_date"] += bool(notes_line)
             else:
                 done["skipped"] += 1
         except MemoryError:
@@ -418,11 +543,12 @@ async def capture(thread_id: str, bot_id: str, user_text: str, reply_text: str, 
     if bot is None or not enabled_for(bot_id, storage):
         return None
     if len((user_text or "").strip()) + len((reply_text or "").strip()) < 40:
-        return {"added": 0, "replaced": 0, "forgotten": 0, "skipped": 0}
+        return {"added": 0, "replaced": 0, "forgotten": 0, "skipped": 0, "notes_out_of_date": 0}
     redact = secrets_service.redactor_for(bot_id, storage)
     user_text, reply_text = redact(user_text or ""), redact(reply_text or "")
     related = await nearest(bot_id, f"{user_text}\n{reply_text}"[:3000], limit=RELATED_FOR_EXTRACTION, relevant_only=False, storage=storage)
-    prompt = build_prompt(notes=str(bot.get("memory") or ""), related=related, user_text=user_text, reply_text=reply_text, today=datetime.now().strftime("%Y-%m-%d (%A)"))
+    notes = str(bot.get("memory") or "")
+    prompt = build_prompt(notes=notes, related=related, user_text=user_text, reply_text=reply_text, today=datetime.now().strftime("%Y-%m-%d (%A)"))
     config = dataclasses.replace(llm_service.current_llm_config(), reasoning_effort="none")
     model = memory_model(bot, config, storage)
     pieces: List[str] = []
@@ -434,7 +560,7 @@ async def capture(thread_id: str, bot_id: str, user_text: str, reply_text: str, 
         elif event.get("type") == "turn.completed" and not event.get("ok", True):
             raise MemoryError(event.get("error") or "The memory model failed.")
     operations = _parse("".join(pieces))
-    return apply_operations(bot_id, operations, related, source={"thread_id": thread_id, "message_id": message_id}, storage=storage)
+    return apply_operations(bot_id, operations, related, source={"thread_id": thread_id, "message_id": message_id}, notes=notes, storage=storage)
 
 
 _locks: Dict[Tuple[str, str], asyncio.Lock] = {}
@@ -476,13 +602,77 @@ async def execute_search(call: ActionInvocation) -> Dict[str, Any]:
     found = await nearest(bot_id, query, limit=10, relevant_only=False)
     if not found:
         return {"memories": [], "note": "Nothing in your memory matches that."}
-    return {"memories": [{"subject": r.get("subject"), "text": r.get("text"), "learned": str(r.get("created_at") or "")[:10]} for r in found]}
+    return {"memories": [{"id": r.get("id"), "subject": r.get("subject"), "text": r.get("text"), "learned": str(r.get("created_at") or "")[:10]} for r in found]}
+
+
+def _facts(value: Any, bot_id: str) -> List[Dict[str, Any]]:
+    """The facts of a memory_save call, checked; raises with what to fix before anything is saved."""
+    if not isinstance(value, list) or not value:
+        raise MemoryError("'facts' is a list of {subject, text}, at least one.")
+    if len(value) > SAVE_FACTS_MAX:
+        raise MemoryError(f"At most {SAVE_FACTS_MAX} facts at a time; save the rest in another call.")
+    current = {r["id"] for r in list_memories(bot_id)}
+    facts = []
+    for number, fact in enumerate(value, 1):
+        if not isinstance(fact, dict) or not str(fact.get("text") or "").strip():
+            raise MemoryError(f"Fact {number} needs its text.")
+        text = " ".join(str(fact["text"]).split())
+        if len(text) > TEXT_MAX:
+            raise MemoryError(f"Fact {number} is {len(text)} characters; a memory is one fact of at most {TEXT_MAX}. Split it.")
+        if looks_like_credential(text):
+            raise MemoryError(f"Fact {number} looks like it holds a credential. Keep only that it exists and where it is kept (a secret's name), never its value.")
+        replaces = str(fact.get("replaces") or "").strip()
+        if replaces and replaces not in current:
+            raise MemoryError(f"Fact {number} replaces {replaces!r}, which is not one of your current memories (memory_search shows their ids).")
+        facts.append({"subject": fact.get("subject"), "text": text, "replaces": replaces})
+    return facts
+
+
+async def execute_save(call: ActionInvocation) -> Dict[str, Any]:
+    """Facts the bot keeps on purpose; with remove_from_notes, moved out of its notes in the same step. Everything is
+    checked first, so either all of it happens or none of it."""
+    from app.services import bot_memory
+
+    bot_id = str(call.arguments.get("bot_id") or "")
+    facts = _facts(call.arguments.get("facts"), bot_id)
+    passages = [str(p) for p in call.arguments.get("remove_from_notes") or [] if str(p).strip()]
+    if passages:
+        try:
+            bot_memory.without_passages(bot_id, passages)
+        except bot_memory.MemoryError as exc:
+            raise MemoryError(f"Nothing was saved. {exc}") from exc
+    source = {"thread_id": str(call.arguments.get("thread_id") or ""), "by": "bot"}
+    known = {_squash(r.get("text")): r for r in list_memories(bot_id)}
+    saved, replaced, already = [], 0, 0
+    for fact in facts:
+        if _squash(fact["text"]) in known and not fact["replaces"]:
+            already += 1
+            continue
+        if fact["replaces"]:
+            record = replace_memory(bot_id, fact["replaces"], fact["subject"], fact["text"], source=source)
+            replaced += 1
+        else:
+            record = add_memory(bot_id, fact["subject"], fact["text"], source=source)
+        known[_squash(record["text"])] = record
+        saved.append({"id": record["id"], "subject": record["subject"], "text": record["text"]})
+    result: Dict[str, Any] = {"saved": saved, "replaced": replaced, "already_remembered": already}
+    if passages:
+        notes = bot_memory.remove_passages(bot_id, passages)
+        bot_memory.after_change(call, bot_id)
+        result["notes"] = {"removed": len(passages), "chars": notes["chars"], "limit": bot_memory.MEMORY_MAX_CHARS}
+    return result
 
 
 def register_memory_actions(gateway: Optional[ActionGateway] = None) -> None:
-    (gateway or action_gateway).register_action(
+    target = gateway or action_gateway
+    target.register_action(
         ActionDefinition(name=SEARCH_ACTION, tool="memory", action="search", intent="Search the bot's automatic memory.", risk="read", requires_approval=False),
         execute_search,
+    )
+    target.register_action(
+        ActionDefinition(name=SAVE_ACTION, tool="memory", action="save", intent="Keep facts in the bot's automatic memory, moving them out of its notes.",
+                         risk="write", requires_approval=False),
+        execute_save,
     )
 
 

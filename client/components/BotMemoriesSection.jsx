@@ -42,6 +42,15 @@ export default function BotMemoriesSection({ botId }) {
     }
   };
 
+  const dismiss = async (id) => {
+    try {
+      await updateBotMemory(botId, id, { dismiss_notes_conflict: true });
+      load();
+    } catch (err) {
+      setError(err?.message || 'Could not dismiss it.');
+    }
+  };
+
   const remove = async (id) => {
     try {
       await deleteBotMemory(botId, id);
@@ -70,6 +79,12 @@ export default function BotMemoriesSection({ botId }) {
         </label>
       </div>
       {error && <p className="text-[11px] text-rose-400">{error}</p>}
+      {data?.notes_out_of_date > 0 && (
+        <p className="text-[11px] text-amber-300/90">
+          {data.notes_out_of_date === 1 ? 'A line of the notes is' : `${data.notes_out_of_date} lines of the notes are`} older than what the bot has learned since.
+          The bot is told to fix {data.notes_out_of_date === 1 ? 'it' : 'them'}; dismiss to keep the notes as they are.
+        </p>
+      )}
       {!memories.length && (
         <p className="text-[11px] text-zinc-600">{query ? 'Nothing matches.' : 'Nothing kept yet. Facts appear here as the bot talks with you.'}</p>
       )}
@@ -99,12 +114,21 @@ export default function BotMemoriesSection({ botId }) {
                       <span className="text-[10px] font-mono text-cyan-300/80 bg-cyan-500/10 rounded px-1.5 py-0.5">{memory.subject}</span>
                       <span className="text-[10px] text-zinc-600 font-mono">{day(memory.created_at)}</span>
                       {memory.edited && <span className="text-[10px] text-zinc-500">edited</span>}
+                      {memory.source?.by === 'bot' && <span className="text-[10px] text-zinc-500">saved by the bot</span>}
                       {memory.state === 'replaced' && <span className="text-[10px] text-amber-300/80">replaced {day(memory.replaced_at)}</span>}
                       {memory.state === 'forgotten' && <span className="text-[10px] text-zinc-500">forgotten {day(memory.forgotten_at)}</span>}
                     </div>
                     <p className={`mt-0.5 text-xs leading-snug ${current ? 'text-zinc-200' : 'text-zinc-500 line-through decoration-zinc-600'}`}>{memory.text}</p>
                     {memory.replaces && byId[memory.replaces] && (
                       <p className="mt-0.5 text-[10px] text-zinc-500">Before: {byId[memory.replaces].text}</p>
+                    )}
+                    {memory.notes_say && (
+                      <p className="mt-0.5 text-[10px] text-amber-300/80">
+                        The notes still say: “{memory.notes_say}”{' '}
+                        <button type="button" onClick={() => dismiss(memory.id)} className="text-zinc-400 hover:text-white underline underline-offset-2">
+                          Dismiss
+                        </button>
+                      </p>
                     )}
                     {memory.source?.thread_id && (
                       <a href={`/c/${encodeURIComponent(memory.source.thread_id)}`} className="text-[10px] text-zinc-500 hover:text-cyan-300 underline-offset-2 hover:underline">
