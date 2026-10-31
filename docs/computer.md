@@ -50,6 +50,15 @@ The **Activity** tab shows the computer's state: whether it is running, who has 
 size, the last operation, the page its browser is on, and the packages installed. What the bot did is in
 its replies' [tool steps](chat.md#a-reply) and the [audit trail](approvals.md#the-audit-trail).
 
+## Background jobs
+
+A bot can start a long command (a big copy, a build, a scan) as a **background job**: the command runs
+on in the computer while the bot carries on, and you can keep talking to it. When the job ends, the
+conversation it was started from gets a message with its exit code, how long it ran and the end of its
+output, marked **background job ended**. If the bot is idle that starts a reply at once; if it is in
+the middle of one, the message waits for that reply to end. Several jobs that end together arrive as
+one message. A job that never exits on its own (a server) is started without this.
+
 ## Checking scripts
 
 When a bot saves a shell script (`.sh`, `.bash`, or a file starting with a shell `#!` line) or a Python

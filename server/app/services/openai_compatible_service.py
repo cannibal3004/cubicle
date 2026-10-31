@@ -151,11 +151,15 @@ def _usage_event(usage: Any) -> Optional[Dict[str, Any]]:
     completion = usage.get("completion_tokens")
     if not isinstance(prompt, int) and not isinstance(completion, int):
         return None
+    details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
+    cached = details.get("cached_tokens")
     return {
         "type": "usage",
         "prompt_tokens": prompt if isinstance(prompt, int) else 0,
         "completion_tokens": completion if isinstance(completion, int) else 0,
         "total_tokens": usage.get("total_tokens") if isinstance(usage.get("total_tokens"), int) else None,
+        # Prompt tokens the server had cached (OpenAI's shape; not every server says).
+        **({"cached_tokens": cached} if isinstance(cached, int) else {}),
     }
 
 

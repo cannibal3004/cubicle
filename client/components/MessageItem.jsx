@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { FiX, FiChevronRight, FiTool, FiZap, FiShield, FiEdit2, FiCopy, FiCheck } from 'react-icons/fi';
 import FileCard from './FileCard';
 import { apiUrl } from '../lib/api';
+import { useDisplayPrefs } from '../lib/displayPrefs';
 
 // The steps a user message carries after a demonstration on the bot's computer.
 function DemonstrationChip({ demonstration }) {
@@ -611,6 +612,35 @@ function formatTokenCount(n) {
   return n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`;
 }
 
+function formatSeconds(ms) {
+  return ms < 10000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`;
+}
+
+// How fast the model went for this reply, from the turn's timing (absent on replies made before it
+// was recorded): output tokens per second over the rounds that streamed, and the first round's wait
+// for its first token, which is mostly reading the prompt.
+function generationStats(usage) {
+  if (!usage) return null;
+  const parts = [];
+  const details = [];
+  if (usage.generation_ms > 0 && usage.timed_completion_tokens > 0) {
+    const rate = usage.timed_completion_tokens / (usage.generation_ms / 1000);
+    parts.push(`${rate >= 100 ? Math.round(rate) : rate.toFixed(1)} tok/s`);
+    details.push(`Output: ${usage.timed_completion_tokens.toLocaleString()} tokens in ${formatSeconds(usage.generation_ms)} (${rate.toFixed(1)} tokens/s)`);
+  }
+  if (Number.isFinite(usage.first_token_ms)) {
+    parts.push(`${formatSeconds(usage.first_token_ms)} to first token`);
+    const prompt = usage.first_prompt_tokens || 0;
+    const cached = Number.isFinite(usage.first_cached_tokens) ? usage.first_cached_tokens : null;
+    const read = prompt - (cached || 0);
+    let line = `First token after ${formatSeconds(usage.first_token_ms)}, for a ${prompt.toLocaleString()}-token prompt`;
+    if (cached !== null) line += ` (${cached.toLocaleString()} cached)`;
+    if (read > 0 && usage.first_token_ms > 0) line += `: about ${Math.round(read / (usage.first_token_ms / 1000)).toLocaleString()} prompt tokens/s`;
+    details.push(line);
+  }
+  return parts.length ? { text: parts.join(' · '), title: details.join('\n') } : null;
+}
+
 function MessageItem({ message, botId, onEdit }) {
   const isUser = message.sender === 'user';
   const isError = message.isError || message.text?.toLowerCase().startsWith('error:');
@@ -626,6 +656,8 @@ function MessageItem({ message, botId, onEdit }) {
   const thinkingLevel = message.thinking || message.raw_payload?.thinking;
   const attachments = message.attachments || message.raw_payload?.attachments || [];
   const usage = message.usage || message.raw_payload?.usage || null;
+  const { showGenerationStats } = useDisplayPrefs();
+  const stats = showGenerationStats && !isUser ? generationStats(usage) : null;
 
   if (isUser) {
     return (
@@ -662,6 +694,12 @@ function MessageItem({ message, botId, onEdit }) {
                 <span className="block text-[10px] font-mono text-zinc-300/70 mb-0.5" title={message.raw_payload.scheduled.cadence || ''}>
                   scheduled · {message.raw_payload.scheduled.name}
                   {message.raw_payload.scheduled.check ? ' · the check reported something' : ''}
+                </span>
+              )}
+              {Array.isArray(message.raw_payload?.jobs) && (
+                <span className="block text-[10px] font-mono text-zinc-300/70 mb-0.5" title={message.raw_payload.jobs.map((job) => job.command).join('\n')}>
+                  {message.raw_payload.jobs.length === 1 ? 'background job ended' : `${message.raw_payload.jobs.length} background jobs ended`}
+                  {message.raw_payload.jobs.some((job) => job.exit_code !== 0) ? ' · not all succeeded' : ''}
                 </span>
               )}
               {message.raw_payload?.demonstration && <DemonstrationChip demonstration={message.raw_payload.demonstration} />}
@@ -850,6 +888,11 @@ function MessageItem({ message, botId, onEdit }) {
                 title={`${(usage.prompt_tokens || 0).toLocaleString()} prompt + ${(usage.completion_tokens || 0).toLocaleString()} completion tokens${usage.rounds > 1 ? ` over ${usage.rounds} rounds` : ''}`}
               >
                 {formatTokenCount((usage.prompt_tokens || 0) + (usage.completion_tokens || 0))} tok
+              </span>
+            )}
+            {stats && (
+              <span className="text-zinc-600" title={stats.title}>
+                {stats.text}
               </span>
             )}
             {formattedTime && <span>{formattedTime}</span>}

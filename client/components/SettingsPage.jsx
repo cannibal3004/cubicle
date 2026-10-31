@@ -26,6 +26,7 @@ import ModelPicker from "./ModelPicker";
 import SecretsSection from "./SecretsSection";
 import McpServersSection from "./McpServersSection";
 import SkillsSection from "./SkillsSection";
+import { setDisplayPrefs, useDisplayPrefs } from "../lib/displayPrefs";
 import AccountSection from "./AccountSection";
 import AdminUsersSection from "./AdminUsersSection";
 
@@ -213,6 +214,20 @@ export default function SettingsPage({
   const sections = SECTIONS.filter((s) => admin || !s.admin);
   const current = sections.find((s) => s.id === section) || sections[0];
   const show = (id) => current.id === id;
+  const displayPrefs = useDisplayPrefs();
+
+  // A display preference shows at once and is saved for the account.
+  const setGenerationStats = async (on) => {
+    setDisplayPrefs({ showGenerationStats: on });
+    setSaveError("");
+    try {
+      await saveSettings({ show_generation_stats: on });
+      triggerSavedNotice("display");
+    } catch (err) {
+      setDisplayPrefs({ showGenerationStats: !on });
+      setSaveError(err?.message || "Failed to save the setting.");
+    }
+  };
 
   const triggerSavedNotice = (field) => {
     setSavedField(field);
@@ -945,6 +960,29 @@ export default function SettingsPage({
             </p>
           </div>
           <AccountSection onSignOut={handleSignOut} />
+        </div>
+
+        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-3 shadow-sm ${show("account") ? "" : "hidden"}`}>
+          <div>
+            <h3 className="text-sm font-bold text-zinc-100">Display</h3>
+            <p className="text-[11px] text-zinc-500 mt-1">How the chat looks for you, on every device you sign in on.</p>
+          </div>
+          <label className="flex items-start gap-2.5 text-xs text-zinc-300 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={displayPrefs.showGenerationStats}
+              onChange={(e) => setGenerationStats(e.target.checked)}
+              className="mt-0.5 accent-cyan-400"
+            />
+            <span>
+              Show generation speed under replies
+              <span className="block text-[11px] text-zinc-500">
+                Tokens per second and the time to the first token, next to the token count; hover for the detail. Replies from before this was
+                recorded show only the token count.
+              </span>
+            </span>
+            {savedField === "display" && <FiCheck className="ml-auto text-emerald-400 flex-shrink-0" />}
+          </label>
         </div>
 
         {admin && (

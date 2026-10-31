@@ -52,6 +52,7 @@ Please:
 // Which conversation was open for each bot, remembered in this browser.
 const THREADS_KEY = 'cubicle.conversationByBot';
 import { establishSession, fetchAuthStatus, setAuthFailureHandler, fetchTurnsOverview } from '../lib/api';
+import { setDisplayPrefs } from '../lib/displayPrefs';
 import LoginScreen from './LoginScreen';
 
 export default function Dashboard() {
@@ -284,6 +285,7 @@ export default function Dashboard() {
         if (settingsData?.default_model) {
           setDefaultModel(settingsData.default_model);
         }
+        setDisplayPrefs({ showGenerationStats: Boolean(settingsData?.show_generation_stats) });
         // The page's address (a link to a conversation or a project) wins over the first bot.
         const route = parseAddress(window.location.pathname, window.location.hash);
         const applied = route ? await applyAddress(route, botsData) : false;
