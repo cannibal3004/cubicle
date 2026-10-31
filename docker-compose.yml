@@ -24,7 +24,7 @@ services:
       SITE_ADDRESS: ${SITE_ADDRESS:-https://localhost}
     # Derive the bare hostname/IP for Caddy's default_sni (see deploy/Caddyfile).
     command: >
-      sh -c 'export SITE_HOST="$$(printf %s "$$SITE_ADDRESS" | sed -E "s#^[a-z]+://##; s#[:/].*##")";
+      sh -c 'export SITE_HOST="$$(printf %s "$$SITE_ADDRESS" | sed -E "s#,.*##; s#^ *[a-z]+://##; s#[:/].*##")";
       exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile'
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro

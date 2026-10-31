@@ -88,6 +88,15 @@ def _locate(source: str, candidate: str, bot_id: Optional[str]) -> tuple:
     return root, absolute
 
 
+def private_message(name: str) -> str:
+    """For a file or folder the computer's own user keeps to itself (a .ssh folder, a private key):
+    the API, which runs as another user, cannot read it, and should not."""
+    return (
+        f"{name} is private to the computer's own user (as a .ssh folder or a private key should be), so it cannot be "
+        "opened here; the bot can still use it in its computer."
+    )
+
+
 def resolve_shared_file(source: str, path: str, bot_id: Optional[str]) -> SharedFile:
     """Locate a file inside a shareable root, or raise FileShareError.
 
@@ -110,6 +119,13 @@ def resolve_shared_file(source: str, path: str, bot_id: Optional[str]) -> Shared
         source, candidate = "computer", "."
     elif candidate.startswith("/workspace/"):
         source, candidate = "computer", candidate[len("/workspace/"):]
+    try:
+        return _resolve_located(source, candidate, path, bot_id)
+    except PermissionError:
+        raise FileShareError(private_message(Path(candidate).name or path)) from None
+
+
+def _resolve_located(source: str, candidate: str, path: str, bot_id: Optional[str]) -> SharedFile:
     root, absolute = _locate(source, candidate, bot_id)
     if not absolute.exists():
         other = "computer" if source == "workspace" else "workspace"
@@ -126,6 +142,8 @@ def resolve_shared_file(source: str, path: str, bot_id: Optional[str]) -> Shared
             raise FileShareError(f"No such file: {path} (looked in {looked}).")
     if not absolute.is_file():
         raise FileShareError("Only files can be shared, not directories.")
+    if not os.access(absolute, os.R_OK):
+        raise FileShareError(private_message(absolute.name))
     size = absolute.stat().st_size
     if size > settings.FILE_SHARE_MAX_BYTES:
         raise FileShareError(f"The file is larger than the {settings.FILE_SHARE_MAX_BYTES}-byte sharing limit.")

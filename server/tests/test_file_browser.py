@@ -75,6 +75,40 @@ class FileBrowserTests(unittest.TestCase):
             with self.assertRaisesRegex(FileShareError, "bind"):
                 file_browser.list_directory("computer", "", "bot-1")
 
+    def test_a_folder_the_computer_keeps_private_is_marked_not_a_500(self):
+        """A bot's .ssh (mode 700, owned by the computer's user): the API cannot read it, and says so."""
+        (self.bot_ws / ".ssh").mkdir()
+        (self.bot_ws / ".ssh" / "id_ed25519").write_bytes(b"key")
+        real_access = file_browser.os.access
+        private = {str(self.bot_ws / ".ssh"), str(self.bot_ws / ".ssh" / "id_ed25519")}
+        real_iterdir, real_is_file = Path.iterdir, Path.is_file
+
+        def iterdir(path):
+            if str(path) in private:
+                raise PermissionError(13, "Permission denied", str(path))
+            return real_iterdir(path)
+
+        def is_file(path):
+            if str(path) in private:
+                raise PermissionError(13, "Permission denied", str(path))
+            return real_is_file(path)
+
+        with mock.patch.object(file_browser.os, "access", lambda path, mode: str(path) not in private and real_access(path, mode)), mock.patch.object(Path, "iterdir", iterdir):
+            top = file_browser.list_directory("computer", "", "bot-1")
+            self.assertEqual({e["name"]: e["private"] for e in top["entries"]}, {".ssh": True, "project": False, "notes.txt": False})
+            with self.assertRaisesRegex(FileShareError, "private to the computer's own user"):
+                file_browser.list_directory("computer", ".ssh", "bot-1")
+            # Through the router: a 400 with that message, not a 500.
+            with self.assertRaises(HTTPException) as refused:
+                asyncio.run(files_router.list_files(source="computer", path=".ssh", bot_id="bot-1"))
+            self.assertEqual(refused.exception.status_code, 400)
+        with mock.patch.object(file_share.os, "access", lambda path, mode: str(path) not in private):
+            with self.assertRaisesRegex(FileShareError, "id_ed25519 is private"):
+                file_share.resolve_shared_file("computer", ".ssh/id_ed25519", "bot-1")
+        with mock.patch.object(Path, "is_file", is_file):
+            with self.assertRaisesRegex(FileShareError, "private"):
+                file_share.resolve_shared_file("computer", ".ssh/id_ed25519", "bot-1")
+
     def test_upload_folder_and_delete(self):
         stored = file_browser.store_files("computer", "incoming/data", "bot-1", [("../evil.csv", b"a,b"), ("evil.csv", b"c,d")])
         self.assertEqual([e["path"] for e in stored], ["incoming/data/evil.csv", "incoming/data/evil (2).csv"])

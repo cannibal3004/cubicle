@@ -10,6 +10,7 @@ looks, with no attachment card and no extracted text.
 from __future__ import annotations
 
 import mimetypes
+import os
 import re
 import unicodedata
 from datetime import datetime, timezone
@@ -17,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from app.config import settings
-from app.services.file_share import SOURCES, FileShareError, normalize_source, source_root
+from app.services.file_share import SOURCES, FileShareError, normalize_source, private_message, source_root
 
 MAX_ENTRIES = 2000
 MAX_NAME_LENGTH = 180
@@ -65,6 +66,8 @@ def _entry(root: Path, child: Path) -> Optional[Dict[str, Any]]:
         "size": None if is_dir else stat.st_size,
         "modified": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
         "mime": None if is_dir else (mimetypes.guess_type(child.name)[0] or "application/octet-stream"),
+        # Kept to itself by the computer's own user (a .ssh folder, a private key): not readable from here.
+        "private": not os.access(child, os.R_OK | os.X_OK if is_dir else os.R_OK),
     }
 
 
@@ -75,11 +78,14 @@ def list_directory(source: str, path: str, bot_id: Optional[str]) -> Dict[str, A
     relative = _relative(root, folder)
     parent = None if not relative else (relative.rsplit("/", 1)[0] if "/" in relative else "")
     result: Dict[str, Any] = {"source": source, "path": relative, "parent": parent, "entries": [], "exists": folder.exists()}
-    if not folder.exists():
-        return result
-    if not folder.is_dir():
-        raise FileShareError("That is a file, not a folder.")
-    children = sorted(folder.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+    try:
+        if not folder.exists():
+            return result
+        if not folder.is_dir():
+            raise FileShareError("That is a file, not a folder.")
+        children = sorted(folder.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+    except PermissionError:
+        raise FileShareError(private_message(folder.name or "This folder")) from None
     for child in children[:MAX_ENTRIES]:
         entry = _entry(root, child)
         if entry is not None:
