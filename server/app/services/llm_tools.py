@@ -786,6 +786,21 @@ MCP_TOOLS: List[ToolSpec] = [
 ]
 
 
+# Offered to a bot with automatic memory (services/auto_memory): the facts it kept, searched.
+AUTO_MEMORY_TOOLS: List[ToolSpec] = [
+    ToolSpec(
+        name="memory_search",
+        description=(
+            "Search your automatic memory: the facts you kept from earlier conversations, newest first. The ones that match a message "
+            "are shown to you with it; search when you need something you may have learned before that was not shown."
+        ),
+        parameters=_obj({"query": {"type": "string", "description": "What you are looking for, in a few words"}}, ["query"]),
+        group="memory",
+        needs_approval=False,
+    ),
+]
+
+
 def available_tools(
     *,
     computer: bool,
@@ -793,6 +808,7 @@ def available_tools(
     connectors: Optional[List[ToolSpec]] = None,
     connector_management: bool = False,
     orchestrator: bool = False,
+    auto_memory: bool = False,
 ) -> List[ToolSpec]:
     """The built-in tools plus any discovered for connected apps.
 
@@ -804,6 +820,8 @@ def available_tools(
         specs.extend(COMPUTER_TOOLS)
     specs.extend(SHARE_TOOLS)
     specs.extend(MEMORY_TOOLS)
+    if auto_memory:
+        specs.extend(AUTO_MEMORY_TOOLS)
     specs.extend(SKILL_TOOLS)
     specs.extend(PROJECT_TOOLS)
     specs.extend(TODO_TOOLS)
@@ -958,6 +976,12 @@ def describe_tools(
             "the whole document. A new conversation starts with them, the user's edits appear as notes, and after a compaction the current "
             "notes come with the summary, so you do not need to read them at the start of every turn. Keep out of them anything about one "
             "piece of work, one person or one day: those belong in work notes or the project log."
+        )
+    if any(spec.name == "memory_search" for spec in specs):
+        lines.append(
+            "- Automatic memory: besides your notes, the lasting facts of your conversations are kept for you by themselves, and the "
+            "ones that match a message are shown with it (newer than your notes where they differ). memory_search looks for more. You "
+            "need not write such facts down; keep your notes for what you must always have in mind."
         )
     if "projects" in groups:
         lines.append(
@@ -1559,6 +1583,9 @@ def _build_invocation(
             payload["name"] = ""
         what = payload.get("name") or payload.get("project") or ""
         return ActionInvocation(name=action, arguments=payload, target={"bot_id": bot_id}, preview=f"{name.replace('_', ' ')}{f' ({what})' if what else ''}")
+    if name == "memory_search":
+        query = _string(arguments, "query", required=True, max_len=500)
+        return ActionInvocation(name="memory.search", arguments={"bot_id": bot_id, "query": query}, target={"bot_id": bot_id}, preview=f"Search the memory of {bot_id}: {query[:80]}")
     if name == "memory_read":
         return ActionInvocation(
             name="memory.read", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Read the notes of {bot_id}"

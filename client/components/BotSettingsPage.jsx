@@ -24,6 +24,7 @@ import SecretsSection from './SecretsSection';
 import SchedulesSection from './SchedulesSection';
 import BotMcpSection from './BotMcpSection';
 import SharingSection from './SharingSection';
+import BotMemoriesSection from './BotMemoriesSection';
 import ConfirmDialog from './ConfirmDialog';
 import {
   draftBotSuggestions,
@@ -55,7 +56,7 @@ const SECTIONS = [
   { id: 'general', label: 'General', icon: FiUser, create: true, fields: ['name', 'role', 'description', 'avatar', 'accent_color', 'orchestrator'], blurb: 'Name, look, and what the bot is for.' },
   { id: 'model', label: 'Model & thinking', icon: FiCpu, create: true, fields: ['model', 'thinking', 'auto_approval', 'gate_threshold'], blurb: 'Which model answers, how hard it thinks, and which actions it may take without asking.' },
   { id: 'instructions', label: 'Instructions', icon: FiFileText, create: true, fields: ['system_prompt', 'suggestions'], blurb: 'The system prompt, and the suggestion cards on an empty conversation.' },
-  { id: 'notes', label: 'Notes & skills', icon: FiBookOpen, fields: ['memory', 'skill_settings', 'procedures'], blurb: 'What the bot keeps between conversations, the skills it has, and the ones it wrote itself.' },
+  { id: 'notes', label: 'Notes & skills', icon: FiBookOpen, fields: ['memory', 'auto_memory', 'skill_settings', 'procedures'], blurb: 'What the bot keeps between conversations, the skills it has, and the ones it wrote itself.' },
   { id: 'tools', label: 'Tools', icon: FiTool, create: true, fields: ['tool_settings', 'trusted_tools', 'allowed_commands'], blurb: 'Which tools it may use, which run without asking, and MCP servers on its computer.' },
   { id: 'secrets', label: 'Secrets', icon: FiKey, fields: [], blurb: "API keys and tokens for this bot's computer." },
   { id: 'schedules', label: 'Schedules', icon: FiClock, fields: [], blurb: 'Prompts that run on their own.' },
@@ -89,6 +90,7 @@ function baseValues(bot, defaultModel) {
     memory: bot?.memory || '',
     procedures: list(bot?.procedures),
     skill_settings: bot?.skill_settings || {},
+    auto_memory: typeof bot?.auto_memory === 'boolean' ? bot.auto_memory : null,
     tool_settings: bot?.tool_settings || {},
     trusted_tools: list(bot?.trusted_tools),
     allowed_commands: list(bot?.allowed_commands),
@@ -108,6 +110,8 @@ function forServer(field, value) {
       return String(value || '').trim() || '🤖';
     case 'suggestions':
       return value.map((s) => s.trim()).filter(Boolean);
+    case 'auto_memory':
+      return value === null ? 'default' : value;
     case 'gate_threshold':
       return value === null ? 'inherit' : value;
     default:
@@ -241,7 +245,7 @@ export default function BotSettingsPage({
       setError('Give the bot a name.');
       return;
     }
-    const fields = isEdit ? Object.keys(edits) : Object.keys(base).filter((f) => !['memory', 'procedures', 'skill_settings'].includes(f));
+    const fields = isEdit ? Object.keys(edits) : Object.keys(base).filter((f) => !['memory', 'procedures', 'skill_settings', 'auto_memory'].includes(f));
     const payload = Object.fromEntries(fields.map((f) => [f, forServer(f, values[f])]));
     setSaving(true);
     setError('');
@@ -598,6 +602,30 @@ export default function BotSettingsPage({
                   >
                     Have the bot sort these into notes and projects…
                   </button>
+                )}
+              </Card>
+            )}
+            {show('notes') && isEdit && (
+              <Card
+                title="Automatic memory"
+                help="Besides its notes, the bot can keep the lasting facts of its conversations by itself and be reminded of the ones that bear on each message. A newer fact about the same thing replaces the old one, which stays in the history. Only your own conversations with it count."
+                right={
+                  <select
+                    value={values.auto_memory === true ? 'on' : values.auto_memory === false ? 'off' : 'default'}
+                    onChange={(e) => set('auto_memory', e.target.value === 'on' ? true : e.target.value === 'off' ? false : null)}
+                    disabled={!!sharedWithMe}
+                    className="bg-[#222226] border border-[#2e2e34] rounded-lg px-2 py-1 text-[11px] text-zinc-200 focus:outline-none"
+                  >
+                    <option value="default">Follow my default</option>
+                    <option value="on">On</option>
+                    <option value="off">Off</option>
+                  </select>
+                }
+              >
+                {sharedWithMe ? (
+                  <p className="text-[11px] text-zinc-500">What a shared bot remembers is its owner&apos;s.</p>
+                ) : (
+                  <BotMemoriesSection botId={botId} />
                 )}
               </Card>
             )}

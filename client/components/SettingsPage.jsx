@@ -144,6 +144,9 @@ export default function SettingsPage({
   const [defaultModel, setDefaultModel] = useState("");
   // The model that names conversations after their first exchange; "" = each bot's own.
   const [titleModel, setTitleModel] = useState("");
+  // Automatic memory: the model that keeps it (app-wide) and this account's default for its bots.
+  const [memoryModel, setMemoryModel] = useState("");
+  const [autoMemoryDefault, setAutoMemoryDefault] = useState(false);
   const [savedField, setSavedField] = useState(null);
   const [saveError, setSaveError] = useState("");
 
@@ -189,6 +192,8 @@ export default function SettingsPage({
             setComposioConfigured(Boolean(data.composio_api_key_configured));
             setDefaultModel(data.default_model || "");
             setTitleModel(data.title_model || "");
+            setMemoryModel(data.memory_model || "");
+            setAutoMemoryDefault(Boolean(data.auto_memory_default));
             setAutoApproval(data.auto_approval || "off");
             setDeciderUrl(data.decider_url || "");
             setDeciderThreshold(typeof data.decider_threshold === "number" ? data.decider_threshold : 0.2);
@@ -215,6 +220,18 @@ export default function SettingsPage({
   const current = sections.find((s) => s.id === section) || sections[0];
   const show = (id) => current.id === id;
   const displayPrefs = useDisplayPrefs();
+
+  const saveAutoMemoryDefault = async (on) => {
+    setAutoMemoryDefault(on);
+    setSaveError("");
+    try {
+      await saveSettings({ auto_memory_default: on });
+      triggerSavedNotice("auto_memory");
+    } catch (err) {
+      setAutoMemoryDefault(!on);
+      setSaveError(err?.message || "Failed to save the setting.");
+    }
+  };
 
   // A display preference shows at once and is saved for the account.
   const setGenerationStats = async (on) => {
@@ -253,6 +270,7 @@ export default function SettingsPage({
               composio_api_key: composioApiKey,
               default_model: defaultModel,
               title_model: titleModel.trim(),
+              memory_model: memoryModel.trim(),
               theme: "dark",
             }
           : { theme: "dark" }
@@ -631,6 +649,39 @@ export default function SettingsPage({
             </p>
           </div>
 
+          {/* Automatic memory */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+              <span className="text-emerald-400">•</span> Automatic memory
+            </label>
+            {!admin && <div className={`${inputClass} font-mono text-cyan-300`}>{memoryModel || "the default model"}</div>}
+            <div className={`flex items-center gap-2 ${admin ? "" : "hidden"}`}>
+              <div className="flex-1 min-w-0">
+                <ModelPicker
+                  currentModel={memoryModel}
+                  models={models}
+                  catalogError={catalogError}
+                  onRefresh={onRefreshModels}
+                  onSelectModel={setMemoryModel}
+                  align="left"
+                  direction="up"
+                  emptyLabel="The default model"
+                  triggerClassName="w-full flex items-center gap-2 bg-[#222226] border border-[#2e2e34] rounded-xl px-3.5 py-2.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-400 transition cursor-pointer font-sans"
+                />
+              </div>
+              {memoryModel && (
+                <button type="button" onClick={() => setMemoryModel("")} className="px-2.5 py-2.5 rounded-xl text-[11px] text-zinc-400 hover:text-white" title="Use the default model">
+                  Clear
+                </button>
+              )}
+              <SaveButton field="memory" onClick={() => persist("memory")} />
+            </div>
+            <p className="text-[11px] text-zinc-500">
+              For bots with automatic memory on, this model reads each finished reply and keeps the lasting facts, with thinking off. It runs in the
+              background and never slows a reply. Empty uses the default model.
+            </p>
+          </div>
+
           {/* Reasoning effort */}
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
@@ -982,6 +1033,24 @@ export default function SettingsPage({
               </span>
             </span>
             {savedField === "display" && <FiCheck className="ml-auto text-emerald-400 flex-shrink-0" />}
+          </label>
+        </div>
+
+        <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-3 shadow-sm ${show("account") ? "" : "hidden"}`}>
+          <div>
+            <h3 className="text-sm font-bold text-zinc-100">Automatic memory</h3>
+            <p className="text-[11px] text-zinc-500 mt-1">
+              A bot with it on keeps the lasting facts of its conversations by itself and is reminded of the ones that bear on each message. Each bot
+              can choose for itself in its settings, under Notes &amp; skills.
+            </p>
+          </div>
+          <label className="flex items-start gap-2.5 text-xs text-zinc-300 cursor-pointer">
+            <input type="checkbox" checked={autoMemoryDefault} onChange={(e) => saveAutoMemoryDefault(e.target.checked)} className="mt-0.5 accent-cyan-400" />
+            <span>
+              On for bots that have not chosen
+              <span className="block text-[11px] text-zinc-500">Off: only the bots you switch it on for keep memories.</span>
+            </span>
+            {savedField === "auto_memory" && <FiCheck className="ml-auto text-emerald-400 flex-shrink-0" />}
           </label>
         </div>
 

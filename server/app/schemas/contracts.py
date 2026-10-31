@@ -45,6 +45,8 @@ class Bot(BaseModel):
     procedures: List[Dict[str, Any]] = Field(default_factory=list)
     # Library skills switched off for this bot ({skill id: false}); the rest it has (services/skills).
     skill_settings: Dict[str, bool] = Field(default_factory=dict)
+    # Automatic memory (services/auto_memory): on, off, or None to follow the account's default.
+    auto_memory: Optional[bool] = None
     # The bot's own notes, kept across conversations and compactions. The
     # bot writes them with memory_write; the user can edit them too.
     memory: str = ""
@@ -175,6 +177,9 @@ class AppSettingsSchema(BaseModel):
     theme: str = "dark"
     # Under each reply: tokens per second and time to the first token (per account).
     show_generation_stats: bool = False
+    # Automatic memory for bots that have not chosen (per account), and the model that keeps it (app-wide).
+    auto_memory_default: bool = False
+    memory_model: str = Field(default="", max_length=200)
     # Connected apps whose tools are withheld from every bot (still connected).
     disabled_toolkits: List[str] = Field(default_factory=list)
     # Auto-approval of actions that need approval, scored by a decision model.

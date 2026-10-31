@@ -1036,6 +1036,15 @@ export const createSkill = (skill) =>
 export const updateSkill = (id, changes) =>
   secretsCall(`/skills/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
 export const deleteSkill = (id) => secretsCall(`/skills/${encodeURIComponent(id)}`, { method: 'DELETE' });
+// A bot's automatic memory: { memories, enabled, current }; `history` adds the replaced and forgotten ones.
+export function fetchBotMemories(botId, { q = '', history = false } = {}) {
+  const params = new URLSearchParams({ q, history: history ? 'true' : 'false' });
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/memories?${params.toString()}`);
+}
+export const updateBotMemory = (botId, id, changes) =>
+  secretsCall(`/bots/${encodeURIComponent(botId)}/memories/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+export const deleteBotMemory = (botId, id) => secretsCall(`/bots/${encodeURIComponent(botId)}/memories/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
 // One of a bot's own skills moved into your library (every bot gets it); returns { skill, bot }.
 export const moveSkillToLibrary = (botId, skillId) =>
   secretsCall('/skills/from-bot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot_id: botId, skill_id: skillId }) });

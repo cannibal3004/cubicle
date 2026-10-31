@@ -38,6 +38,8 @@ SETTING_KEYS = {
     "skills",
     "user_skills",
     "show_generation_stats",
+    "auto_memory_default",
+    "memory_model",
     "auto_approval",
     "decider_url",
     "decider_threshold",
@@ -72,6 +74,7 @@ APP_SETTING_KEYS = {
     "title_model",
     "mcp_servers",
     "skills",
+    "memory_model",
 }
 
 
