@@ -34,7 +34,7 @@ SSE first when the path has `/sse` in it, and a server reached over SSE says so 
 | --- | --- | --- |
 | Yours | All your bots | App Settings → MCP servers |
 | System-wide (admins) | Every account's bots | App Settings → MCP servers |
-| A bot's own | That bot only; it runs inside the bot's computer | Bot settings → Tools → MCP servers on this computer |
+| A bot's own | That bot only: a command runs inside the bot's computer, a URL is reached from the server | Bot settings → Tools → This bot's MCP servers |
 
 ![App Settings: MCP servers](images/app-settings-mcp.png)
 

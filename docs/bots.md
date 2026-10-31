@@ -52,8 +52,8 @@ conversation shows; **Draft some for me** writes a few from the bot's instructio
 - **Always-allowed commands**: terminal commands that run without asking, as prefixes (`git status`,
   `df -h`). A script runs unasked only when every command in it matches one. You can also add one from
   an approval card.
-- **MCP servers on this computer**: tool servers that run inside this bot's computer, for this bot
-  alone. See [Connected apps and MCP servers](apps-and-mcp.md).
+- **This bot's MCP servers**: tool servers for this bot alone: a command run inside its computer, or a
+  URL. See [Connected apps and MCP servers](apps-and-mcp.md).
 
 The tools button in the chat header is a quicker way to switch whole groups and apps, and to change
 auto-approval.
