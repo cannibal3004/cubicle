@@ -168,7 +168,7 @@ COMPUTER_TOOLS: List[ToolSpec] = [
     ),
     ToolSpec(
         name="write_file",
-        description=f"Create or replace a UTF-8 text file in your computer (under {_FILE_ROOTS}). Missing parent directories are created. Give the complete file contents; for a change to an existing file use edit_file.",
+        description=f"Create or replace a UTF-8 text file in your computer (under {_FILE_ROOTS}). Missing parent directories are created. Give the complete file contents; for a change to an existing file use edit_file. A shell or Python script is checked as it is saved (ShellCheck, or Ruff for errors): fix what the result's check reports before running it.",
         parameters=_obj(
             {
                 "path": {"type": "string", "description": _PATH_HINT},
@@ -909,6 +909,9 @@ def describe_tools(
             +
             "Software: Ubuntu with Node and Python, and git, curl, jq, file, strings, xxd, less, nano, tree, rsync, zip/7z/xz/zstd, rg, fd, sqlite3, "
             "ImageMagick, ffmpeg, tesseract (OCR), qpdf, exiftool, pdftotext and markitdown, dig, ping and nc are already installed. "
+            "So are shellcheck and ruff: a shell or Python script saved with write_file or edit_file is checked on the spot, and the "
+            "result's check lists any problems; fix them before running it. For a script made another way, run `shellcheck script.sh` or "
+            "`ruff check script.py` yourself before running it. "
             "computer_install_packages installs other apt packages (the shell has no sudo), e.g. build-essential for a C compiler, or pandoc; "
             "pip in a venv, npm, cargo and the like work from the shell. "
             "/workspace and the home directory persist between starts, so installed tools and venvs stay; /tmp is wiped. "

@@ -187,6 +187,55 @@ async function readTextFile(requestedPath) {
   return { path: target, content, ...textStats(content) };
 }
 
+// Scripts are checked as they are saved: shell with ShellCheck, Python with
+// Ruff's error rules (syntax errors, undefined names, comparisons that are
+// always wrong). What they find comes back with the save, so the bot fixes a
+// script before running it; style notes are left out and nothing is refused.
+const CHECK_TIMEOUT_MS = 10000;
+const CHECK_MAX_PROBLEMS = 30;
+
+function checkerFor(target, content) {
+  const shebang = content.startsWith('#!') ? content.split('\n', 1)[0] : '';
+  if (/\.(sh|bash)$/i.test(target) || /^#!.*\b(ba|da|k)?sh\b/.test(shebang)) {
+    return ['shellcheck', ['--severity=warning', '--format=gcc', '--color=never', target]];
+  }
+  if (/\.pyw?$/i.test(target) || /^#!.*\bpython/.test(shebang)) {
+    return ['ruff', ['check', '--no-cache', '--quiet', '--select', 'E9,F63,F7,F82', '--output-format', 'concise', target]];
+  }
+  return null;
+}
+
+async function checkScript(target, content) {
+  const checker = checkerFor(target, content);
+  if (!checker) return {};
+  const [tool, args] = checker;
+  try {
+    await execFileAsync(tool, args, { cwd: workspace, timeout: CHECK_TIMEOUT_MS, maxBuffer: 1024 * 1024 });
+    return { check: { tool, ok: true } };
+  } catch (error) {
+    // Not installed (an older image) or too slow: say nothing rather than something wrong.
+    if (error.code === 'ENOENT' || error.killed || typeof error.code !== 'number') return {};
+    const problems = String(error.stdout || '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => /:\d+:\d+:/.test(line))
+      .map((line) => line.replace(/^.*?:(\d+:\d+:)/, 'line $1'));
+    if (!problems.length) return { check: { tool, ok: false, output: String(error.stderr || error.stdout || '').trim().slice(0, 1000) } };
+    return {
+      check: {
+        tool,
+        ok: false,
+        problems: problems.slice(0, CHECK_MAX_PROBLEMS),
+        ...(problems.length > CHECK_MAX_PROBLEMS ? { more: problems.length - CHECK_MAX_PROBLEMS } : {}),
+        note:
+          tool === 'shellcheck'
+            ? 'Fix these before running the script. If one is a false alarm, put "# shellcheck disable=SCnnnn" on the line before it.'
+            : 'Fix these before running the script: Python would fail on them.',
+      },
+    };
+  }
+}
+
 async function writeTextFile(requestedPath, content) {
   const target = workspacePath(requestedPath);
   if (typeof content !== 'string') throw new Error('File content must be text.');
@@ -195,7 +244,7 @@ async function writeTextFile(requestedPath, content) {
   if (existing && !existing.isFile()) throw new Error(`${target} exists and is not a file.`);
   await mkdir(path.dirname(target), { recursive: true });
   await writeFile(target, content, 'utf8');
-  return { path: target, created: !existing, ...textStats(content) };
+  return { path: target, created: !existing, ...textStats(content), ...(await checkScript(target, content)) };
 }
 
 async function editTextFile(requestedPath, oldText, newText) {
@@ -211,7 +260,7 @@ async function editTextFile(requestedPath, oldText, newText) {
   if (updated.length > MAX_WRITE_CHARS) throw new Error(`The edited file would exceed ${MAX_WRITE_CHARS} characters.`);
   await writeFile(current.path, updated, 'utf8');
   const line = current.content.slice(0, at).split('\n').length;
-  return { path: current.path, line, replaced: oldText.length, inserted: newText.length, ...textStats(updated) };
+  return { path: current.path, line, replaced: oldText.length, inserted: newText.length, ...textStats(updated), ...(await checkScript(current.path, updated)) };
 }
 
 async function listFiles(requestedPath) {

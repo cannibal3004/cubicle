@@ -107,7 +107,7 @@ variable once it is saved there.
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `COMPUTER_PROVIDER` | `fake` | `docker` turns bots' computers on (with `COMPOSE_PROFILES=computer`) |
-| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.13.0` | The runtime image |
+| `COMPUTER_DOCKER_IMAGE` | `cubicle-computer:2.14.0` | The runtime image |
 | `COMPUTER_DOCKER_WORKSPACE_MODE` | `volume` in compose | `bind` keeps workspaces in a host directory, `volume` in a Docker volume per computer |
 | `COMPUTER_DOCKER_HOST_WORKSPACE_ROOT` | empty | In bind mode from compose: the host path of the API's `/data/computers` |
 | `COMPUTER_DOCKER_HOST_SHARED_DIR` | `WORKSPACE_DIR` when absolute | Host path of the shared folder mounted at `/shared` |

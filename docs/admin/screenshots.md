@@ -28,7 +28,7 @@ thinking-as-it-streams pictures are taken.
 - `--keep`: leave the stack running afterwards to look around in (sign in as `alex` /
   `demo-password-1234`); remove it with `docker compose -p cubicle-docs down -v`.
 - `--computer`: include the bot's real computer, for the desktop and file viewer pictures. This needs
-  the runtime image (`docker build -t cubicle-computer:2.13.0 ./runtime`, done for you if it is
+  the runtime image (`docker build -t cubicle-computer:2.14.0 ./runtime`, done for you if it is
   missing); the bot that used a computer is deleted at the end, which removes its container.
 - `--no-build`: reuse the images from the last run.
 
