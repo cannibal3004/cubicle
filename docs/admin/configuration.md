@@ -8,7 +8,7 @@ variable once it is saved there.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `SITE_ADDRESS` | `https://localhost` | The address people open (compose): Caddy serves it and issues its certificate |
+| `SITE_ADDRESS` | `https://localhost` | The address people open (compose): Caddy serves it and issues its certificate. Several, comma-separated, serve the site under each (a LAN IP and a tunnel's hostname); put the LAN IP first |
 | `HTTP_PORT`, `HTTPS_PORT` | `80`, `443` | The ports Caddy listens on (compose) |
 | `AUTH_COOKIE_SECURE` | `1` in compose, else `0` | `1` when served over HTTPS |
 | `AUTH_SESSION_MAX_AGE` | 30 days | Lifetime of a browser session, in seconds |
