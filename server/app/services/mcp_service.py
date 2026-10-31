@@ -227,7 +227,7 @@ def resolve_values(values: Dict[str, str], secrets: Dict[str, str]) -> Dict[str,
         text = str(value)
         for name in _refs_in(text):
             if name not in secrets:
-                raise McpError(f"The app secret {name} is not set; add it in App Settings -> Secrets.")
+                raise McpError(f"The secret {name} is not set; add it under Secrets in App Settings (or, for a bot's own server, in the bot's settings).")
 
         def _sub(match: "re.Match[str]") -> str:
             return secrets[match.group(1) or match.group(2)]
@@ -328,11 +328,23 @@ class McpStore:
 
 
 class BotMcpStore:
-    """A bot's own servers, kept on its record (`mcp_servers`): they run inside
-    the bot's computer and are offered to that bot only."""
+    """A bot's own servers, kept on its record (`mcp_servers`), offered to that
+    bot only: a command run inside the bot's computer (transport computer), or
+    a URL the API connects to (http or sse) with the bot's secrets."""
 
     scope = "bot"
     MAX = 8
+    TRANSPORTS = ("computer", "http", "sse")
+
+    @classmethod
+    def _transport(cls, data: Any, existing: Optional[Dict[str, Any]] = None) -> str:
+        """A URL server stays one; anything else is a command in the computer."""
+        asked = str((data or {}).get("transport") or (existing or {}).get("transport") or "").strip().lower()
+        if asked in ("http", "sse"):
+            return asked
+        if not asked and (data or {}).get("url") and not (data or {}).get("command"):
+            return "http"
+        return "computer"
 
     def __init__(self, bot_id: str, storage: Optional[StorageService] = None):
         self.bot_id = bot_id
@@ -359,7 +371,8 @@ class BotMcpStore:
         servers = []
         for item in raw if isinstance(raw, list) else []:
             if isinstance(item, dict) and _ID.fullmatch(str(item.get("id") or "")):
-                servers.append({**item, "scope": "bot", "bot_id": self.bot_id, "transport": "computer"})
+                transport = item.get("transport") if item.get("transport") in self.TRANSPORTS else "computer"
+                servers.append({**item, "scope": "bot", "bot_id": self.bot_id, "transport": transport})
         return servers
 
     def get(self, server_id: str) -> Dict[str, Any]:
@@ -378,7 +391,8 @@ class BotMcpStore:
         servers = self.list()
         if len(servers) >= self.MAX:
             raise McpError(f"At most {self.MAX} MCP servers per bot.")
-        record = clean_server({**(data if isinstance(data, dict) else {}), "transport": "computer", "created_by": created_by})
+        data = data if isinstance(data, dict) else {}
+        record = clean_server({**data, "transport": self._transport(data), "created_by": created_by})
         if any(s["name"].lower() == record["name"].lower() for s in servers):
             raise McpError(f"A server named {record['name']} already exists on this bot.")
         servers.append(record)
@@ -389,7 +403,8 @@ class BotMcpStore:
         servers = self.list()
         for index, item in enumerate(servers):
             if item["id"] == server_id:
-                record = clean_server({**(changes if isinstance(changes, dict) else {}), "transport": "computer"}, existing={k: v for k, v in item.items() if k not in ("scope", "bot_id")})
+                changes = changes if isinstance(changes, dict) else {}
+                record = clean_server({**changes, "transport": self._transport(changes, item)}, existing={k: v for k, v in item.items() if k not in ("scope", "bot_id")})
                 servers[index] = record
                 self._save(servers)
                 return {**record, "scope": "bot", "bot_id": self.bot_id}
@@ -770,10 +785,14 @@ class McpManager:
 
     def _secrets_for(self, record: Dict[str, Any]) -> Dict[str, str]:
         """$NAME references: a system server reads the first account's app
-        secrets, a user server the secrets of the account that owns it."""
+        secrets, a user server the secrets of the account that owns it, a bot's
+        URL server those with the bot's own on top (a command in the bot's
+        computer resolves them there instead)."""
         if self._secrets is not None:
             return dict(self._secrets())
         try:
+            if record.get("scope") == "bot":
+                return dict(current_storage().secret_values(str(record.get("bot_id") or "")))
             if record.get("scope") == "user":
                 return dict(current_storage().secret_values(""))
             return dict(storage_service.for_owner(LOCAL_USER_ID).secret_values(""))

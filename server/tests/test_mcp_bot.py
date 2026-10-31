@@ -131,6 +131,50 @@ class BotScopeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException):
             await mcp_router.bot_mcp_test(self.bot, created["id"])
 
+    async def test_a_bot_can_have_a_url_server_of_its_own(self):
+        """Reached from the API like the account's URL servers, with the bot's secrets, offered to that bot alone."""
+        import socket
+        import subprocess
+        import sys
+        import urllib.error
+        import urllib.request
+
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        process = subprocess.Popen([sys.executable, str(Path(__file__).parent / "fixtures" / "mcp_sse_server.py"), str(port), "/sse"])
+        self.addCleanup(lambda: (process.kill(), process.wait(10)))
+        for _ in range(200):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/nothing", timeout=1)
+            except urllib.error.HTTPError:
+                break
+            except OSError:
+                await asyncio.sleep(0.05)
+
+        created = (await mcp_router.bot_mcp_add(self.bot, mcp_router.ServerInput(name="Memory", url=f"http://127.0.0.1:{port}/sse", headers={"X-Client": "cubicle"})))["server"]
+        self.assertEqual((created["scope"], created["transport"], created["url"]), ("bot", "http", f"http://127.0.0.1:{port}/sse"))
+        changed = (await mcp_router.bot_mcp_update(self.bot, created["id"], mcp_router.ServerUpdate(trust_read_only=True)))["server"]
+        self.assertEqual(changed["transport"], "http")  # an edit keeps it a URL server
+        connection = self.manager.connection(created["id"], self.bot)
+        await connection.wait_ready(timeout=30)
+        self.addAsyncCleanup(connection.stop)
+        self.assertEqual((connection.status, connection.via), ("connected", "sse"))
+        self.assertEqual([s.name for s in mcp_tools.mcp_tool_specs(self.manager, self.bot)], ["memory_remember"])
+        self.assertEqual(mcp_tools.mcp_tool_specs(self.manager, "bot-other"), [])
+        # Its $NAME values are the bot's secrets over the account's.
+        resolving = McpManager(McpStore(self.storage))
+        with mock.patch.object(self.storage, "secret_values", lambda bot_id="": {"MEM_TOKEN": f"for {bot_id or 'app'}"}):
+            self.assertEqual(resolving._secrets_for(changed), {"MEM_TOKEN": f"for {self.bot}"})
+        # The bot's own add tool takes scope bot for a URL.
+        call = build_invocation("mcp_add_server", {"name": "Docs", "scope": "bot", "url": "https://mcp.example.com/sse"}, self.bot)
+        self.assertEqual((call.arguments["scope"], call.arguments["server"]["transport"]), ("bot", "http"))
+        self.assertIn("for you", call.preview)
+        with self.assertRaises(ToolCallError):
+            build_invocation("mcp_add_server", {"name": "Docs", "scope": "bot", "command": "npx"}, self.bot)
+        removed = await mcp_router.bot_mcp_remove(self.bot, created["id"])
+        self.assertEqual(removed["removed"]["transport"], "http")
+
 
 if __name__ == "__main__":
     unittest.main()

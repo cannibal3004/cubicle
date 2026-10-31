@@ -191,6 +191,8 @@ async def bot_mcp_remove(bot_id: str, server_id: str):
     _owned_bot(bot_id)
     record = _guard(lambda: mcp_manager.bot_store(bot_id).remove(server_id))
     await mcp_manager.forget(server_id)
+    if record.get("transport") != "computer":
+        return {"status": "ok", "removed": public(record)}
     try:
         from app.services.computer_provider import computer_provider
 

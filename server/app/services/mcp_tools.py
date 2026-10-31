@@ -128,8 +128,8 @@ async def list_servers(call: ActionInvocation) -> Dict[str, Any]:
 async def add_server(call: ActionInvocation) -> Dict[str, Any]:
     arguments = call.arguments if isinstance(call.arguments, dict) else {}
     bot_id = _bot_of(call)
-    # scope "computer": the server runs inside this bot's computer and only this bot gets it.
-    store = mcp_manager.bot_store(bot_id) if arguments.get("scope") == "computer" and bot_id else mcp_manager.user_store
+    # scope "computer": a command inside this bot's computer; "bot": a URL; either way only this bot gets it.
+    store = mcp_manager.bot_store(bot_id) if arguments.get("scope") in ("computer", "bot") and bot_id else mcp_manager.user_store
     record = store.add(arguments.get("server"), created_by="bot")
     test = await mcp_manager.test(record)
     if not test.get("ok"):

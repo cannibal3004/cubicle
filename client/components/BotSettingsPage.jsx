@@ -702,7 +702,7 @@ export default function BotSettingsPage({
               </Card>
             )}
             {show('tools') && isEdit && (
-              <Card title="MCP servers on this computer" help="Tool servers only this bot gets, run inside its computer. Saved as you go.">
+              <Card title="This bot's MCP servers" help="Tool servers only this bot gets: a command run inside its computer, or a URL. Saved as you go.">
                 <BotMcpSection load={loadMcp} create={addMcp} update={changeMcp} remove={removeMcp} test={testMcp} loadTools={loadMcpTools} />
               </Card>
             )}
