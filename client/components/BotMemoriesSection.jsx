@@ -82,7 +82,7 @@ export default function BotMemoriesSection({ botId }) {
       {data?.notes_out_of_date > 0 && (
         <p className="text-[11px] text-amber-300/90">
           {data.notes_out_of_date === 1 ? 'A line of the notes is' : `${data.notes_out_of_date} lines of the notes are`} older than what the bot has learned since.
-          The bot is told to fix them; dismiss one to keep the notes as they are.
+          The bot is told to fix {data.notes_out_of_date === 1 ? 'it' : 'them'}; dismiss to keep the notes as they are.
         </p>
       )}
       {!memories.length && (
