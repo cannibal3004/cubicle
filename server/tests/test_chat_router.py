@@ -759,6 +759,35 @@ class ChatStreamRouteTests(unittest.TestCase):
         self.assertEqual(replay[-2]["tool_call_id"], "call_1")
         self.assertIn("did not complete", replay[-2]["content"])
 
+    def test_the_reply_records_how_fast_the_model_went(self):
+        """Tokens per second over the streamed rounds, and the first round's wait for its first token."""
+        bot = self.storage.get_bots()[0]
+        self.storage.add_message({"id": "m1", "thread_id": bot["id"], "bot_id": bot["id"], "sender": "user", "text": "hi"})
+        recorder = {}
+
+        async def stream(model, messages, system_prompt="", config=None, tools=None, one_shot=False):
+            recorder.setdefault("rounds", []).append(model)
+            await asyncio.sleep(0.15)  # reading the prompt
+            yield {"type": "reasoning.delta", "delta": "Thinking."}
+            await asyncio.sleep(0.2)  # generating
+            yield {"type": "content.delta", "delta": "Hello."}
+            yield {"type": "usage", "prompt_tokens": 1200, "completion_tokens": 40, "cached_tokens": 1000}
+            yield {"type": "turn.completed", "ok": True}
+
+        patches = self._patches(recorder, stream=stream)
+        for p in patches:
+            p.start()
+        try:
+            asyncio.run(_start_and_stream(bot["id"]))
+            usage = [m for m in self.storage.get_messages(bot["id"]) if m["sender"] == "bot"][-1]["raw_payload"]["usage"]
+            self.assertEqual((usage["timed_completion_tokens"], usage["first_prompt_tokens"], usage["first_cached_tokens"]), (40, 1200, 1000))
+            self.assertGreaterEqual(usage["first_token_ms"], 120)
+            self.assertLess(usage["first_token_ms"], 2000)
+            self.assertGreaterEqual(usage["generation_ms"], 170)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
     def test_tool_results_persist_and_replay_on_the_next_turn(self):
         bot = self.storage.get_bots()[0]
         self.storage.add_message({"id": "m1", "thread_id": bot["id"], "bot_id": bot["id"], "sender": "user", "text": "what is in the workspace?"})
@@ -788,7 +817,11 @@ class ChatStreamRouteTests(unittest.TestCase):
             _, events = asyncio.run(_start_and_stream(bot["id"]))
             usage_events = [e["usage"] for e in events if e["type"] == "turn.usage"]
             self.assertEqual([u["rounds"] for u in usage_events], [1, 2])
-            self.assertEqual(usage_events[-1], {"prompt_tokens": 420, "completion_tokens": 29, "last_completion_tokens": 9, "rounds": 2, "context_window": 32000})
+            last = usage_events[-1]
+            self.assertEqual({k: last[k] for k in ("prompt_tokens", "completion_tokens", "last_completion_tokens", "rounds", "context_window")},
+                             {"prompt_tokens": 420, "completion_tokens": 29, "last_completion_tokens": 9, "rounds": 2, "context_window": 32000})
+            # The tool-call round streamed nothing, so it is not timed: the first timed round is the second.
+            self.assertEqual(last["first_prompt_tokens"], 420)
 
             saved = [m for m in self.storage.get_messages(bot["id"]) if m["sender"] == "bot"][-1]
             record = saved["raw_payload"]["tool_calls"][0]

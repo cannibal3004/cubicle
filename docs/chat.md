@@ -35,7 +35,9 @@ A reply shows what the bot did, in the order it did it:
 A step's details show what it was given (a terminal call shows the full command, ready to copy), what
 came back (a command's exit code, its output and its errors), how it was allowed, and how long it ran.
 
-The footer of a reply shows its token count and time.
+The footer of a reply shows its token count and time. Switch on **Show generation speed under
+replies** (App Settings → Account → Display) to add how fast the model went: tokens per second, and
+the time to the first token (mostly the model reading the prompt). Hover it for the detail.
 
 ## Questions from the bot
 

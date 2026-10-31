@@ -13,6 +13,7 @@ from app.routers import help as help_router
 from app.routers import skills as skills_router
 from app.services.mcp_service import mcp_manager
 from app.services.scheduler import scheduler
+from app.services.job_watch import job_watcher
 from app.services.computer_provider import computer_provider
 from app.services.auth_service import auth_service
 from app.services import sharing
@@ -34,12 +35,15 @@ async def lifespan(_app: FastAPI):
     # through the chat router, exactly as a user message would.
     if settings.SCHEDULER_ENABLED:
         scheduler.start(chat.start_scheduled_turn)
+    # Background jobs the bots wait on: an ended one starts a turn in its conversation the same way.
+    job_watcher.start(chat.start_scheduled_turn)
     # MCP servers connect in the background; the first turn that needs
     # them finds their tools listed.
     mcp_manager.start_all()
     yield
     await mcp_manager.stop_all()
     await scheduler.stop()
+    await job_watcher.stop()
 
 
 app = FastAPI(

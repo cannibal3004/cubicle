@@ -37,6 +37,7 @@ SETTING_KEYS = {
     "user_mcp_servers",
     "skills",
     "user_skills",
+    "show_generation_stats",
     "auto_approval",
     "decider_url",
     "decider_threshold",

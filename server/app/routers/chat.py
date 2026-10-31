@@ -465,6 +465,18 @@ async def _perform_action(
 
     if action_result.status == "completed":
         result = redact.apply(action_result.result or {})
+        arguments = getattr(action_request, "arguments", None) or {}
+        if action_name == "computer.terminal_execute" and result.get("job_id") and arguments.get("notify") is not False:
+            # A background job: the conversation is told when it ends (services/job_watch).
+            from app.services.job_watch import job_watcher
+
+            try:
+                result.update(job_watcher.watch(
+                    owner_id=get_current_owner(), bot_id=bot_id, thread_id=thread_id, computer_id=str(result.get("computer_id") or ""),
+                    result=result, command=str(arguments.get("command") or ""),
+                ))
+            except Exception as exc:
+                logger.warning("Could not watch job %s: %s", result.get("job_id"), exc)
         turn.emit({"type": "tool.completed", **base, "result": _compact_result(result), "ranMs": ran_ms})
         return {"status": "completed", "result": result, "request": action_request, "gate": verdict, "ran_ms": ran_ms,
                 **({"trusted_by": rechecked_by} if rechecked_by in ("trusted", "allowed_command") else {})}
@@ -1111,6 +1123,15 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         # (earlier rounds' output is already inside that prompt; their thinking is not kept).
         usage_last_completion = 0
         usage_rounds = 0
+        # Generation speed (shown under a reply when the user asks for it): the time from a
+        # round's first streamed token to its end, over the tokens those rounds made; and how
+        # long the first round took to its first token, with its prompt. A round that streams
+        # nothing (a bare tool call) cannot be timed and is left out.
+        usage_generation_ms = 0
+        usage_timed_completion = 0
+        usage_first_token_ms: Optional[int] = None
+        usage_first_prompt: Optional[int] = None
+        usage_first_cached: Optional[int] = None
 
         def usage_payload() -> Dict[str, Any]:
             return {
@@ -1119,6 +1140,9 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                 "last_completion_tokens": usage_last_completion,
                 "rounds": usage_rounds,
                 "context_window": context_window,
+                **({"generation_ms": usage_generation_ms, "timed_completion_tokens": usage_timed_completion} if usage_generation_ms else {}),
+                **({"first_token_ms": usage_first_token_ms, "first_prompt_tokens": usage_first_prompt} if usage_first_token_ms is not None else {}),
+                **({"first_cached_tokens": usage_first_cached} if usage_first_cached is not None else {}),
             }
         tool_context = ""
 
@@ -1297,7 +1321,10 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                 reasoning_at_start = len(accumulated_reasoning)
                 reasoning_marks.append((len(_reply_text(text_pieces)), len(tool_records), reasoning_at_start))
                 stray_cut = False
+                round_started, round_first = time.monotonic(), None
                 async for event in round_stream:
+                    if round_first is None and event["type"] in ("content.delta", "reasoning.delta"):
+                        round_first = time.monotonic()
                     if event["type"] == "content.delta":
                         round_text += event["delta"]
                         turn.emit({"type": "content.delta", "botMsgId": bot_msg_id, "delta": event["delta"]})
@@ -1324,6 +1351,13 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         # the tool it means, so the transcript names the real tool.
                         pending_calls = _resolve_calls(event.get("calls") or [], tool_specs, callable_specs)
                     elif event["type"] == "usage":
+                        if round_first is not None:
+                            usage_generation_ms += int((time.monotonic() - round_first) * 1000)
+                            usage_timed_completion += int(event.get("completion_tokens") or 0)
+                            if usage_first_token_ms is None:
+                                usage_first_token_ms = int((round_first - round_started) * 1000)
+                                usage_first_prompt = int(event.get("prompt_tokens") or 0)
+                                usage_first_cached = event.get("cached_tokens") if isinstance(event.get("cached_tokens"), int) else None
                         usage_rounds += 1
                         usage_prompt = int(event.get("prompt_tokens") or 0)
                         usage_completion += int(event.get("completion_tokens") or 0)
@@ -1333,6 +1367,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         # Waiting for a slot at the model server; the chat shows the place in line.
                         turn.emit({"type": "model.queued", "botMsgId": bot_msg_id, "ahead": int(event.get("ahead") or 0), "limit": int(event.get("limit") or 0)})
                     elif event["type"] == "model.started":
+                        round_started = time.monotonic()  # the wait for a slot is not the model's time
                         turn.emit({"type": "model.started", "botMsgId": bot_msg_id, "waitedMs": int(event.get("waited_ms") or 0)})
                     elif event["type"] == "truncated":
                         round_cut = True

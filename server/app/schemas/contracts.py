@@ -173,6 +173,8 @@ class AppSettingsSchema(BaseModel):
     # The model that names conversations after their first exchange; empty = the bot's own.
     title_model: str = Field(default="", max_length=200)
     theme: str = "dark"
+    # Under each reply: tokens per second and time to the first token (per account).
+    show_generation_stats: bool = False
     # Connected apps whose tools are withheld from every bot (still connected).
     disabled_toolkits: List[str] = Field(default_factory=list)
     # Auto-approval of actions that need approval, scored by a decision model.
