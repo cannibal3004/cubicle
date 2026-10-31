@@ -247,6 +247,18 @@ SCHEMA_MIGRATIONS = {
         CREATE INDEX IF NOT EXISTS thinking_picks_owner ON thinking_picks(owner_id, created_at);
         CREATE INDEX IF NOT EXISTS thinking_picks_message ON thinking_picks(owner_id, message_id);
     """,
+    # Automatic memory (services/auto_memory.py): the facts a bot keeps from its conversations,
+    # each current, replaced by a newer one, or forgotten.
+    15: """
+        CREATE TABLE IF NOT EXISTS bot_memories (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            bot_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS bot_memories_owner_bot ON bot_memories(owner_id, bot_id);
+    """,
 }
 
 OWNER_TABLES = (

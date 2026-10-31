@@ -38,7 +38,7 @@ from app.services.mcp_tools import mcp_tool_specs
 from app.services.secrets_service import names_for, redactor_for
 from app.services import attachments as attachment_service
 from app.services import recall, retrieval
-from app.services import demonstrations, procedures, skills
+from app.services import auto_memory, demonstrations, procedures, skills
 from app.services import rewind as rewind_service
 from app.services import tool_names
 from app.services.repetition import RepetitionGuard, TAIL_CHARS as _LOOP_TAIL
@@ -824,6 +824,12 @@ async def attach_turn_context(
         counts["procedures"] = known.count("\n--- ")
         turn.emit({"type": "procedure.used", "botMsgId": bot_msg_id, "count": counts["procedures"]})
         blocks.append(known)
+    # What the bot's automatic memory kept that matches this message.
+    remembered = _fresh_entries(await memory_context(bot_id, query), "- ", seen) if acting_for_owner() else ""
+    if remembered:
+        counts["memories"] = remembered.count("\n- ")
+        turn.emit({"type": "memory.used", "botMsgId": bot_msg_id, "count": counts["memories"]})
+        blocks.append(remembered)
     # Entries of the conversation's project log that match this message.
     conversation = conversations.get(thread_id) or {}
     if conversation.get("project_id"):
@@ -846,6 +852,15 @@ async def attach_turn_context(
     except Exception as exc:  # the turn still gets the context, just not the stable replay
         logger.warning("Could not store the context of %s: %s", latest.get("id"), exc)
     return bool(blocks)
+
+
+async def memory_context(bot_id: str, query: str) -> str:
+    """The bot's automatic memories that match the message; "" when none."""
+    try:
+        return await auto_memory.recall_context(bot_id, query)
+    except Exception as exc:  # never let it fail a turn
+        logger.warning("Memory recall failed for %s: %s", bot_id, exc)
+        return ""
 
 
 async def procedure_context(bot_id: str, query: str) -> str:
@@ -980,6 +995,8 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
             connectors=connector_specs,
             connector_management=(owners_apps or connects_own) and bool(composio_service.get_api_key()),
             orchestrator=bool(current_bot.get("orchestrator")),
+            # Only in the owner's own conversations: a teammate's neither feed nor read it.
+            auto_memory=acting_for_owner() and (auto_memory.enabled_for(bot_id) or bool(auto_memory.list_memories(bot_id))),
         )
         # The bot's own tool choices, over the apps that are off by default.
         tool_specs = filter_tools(
@@ -1657,6 +1674,10 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
         if not stopped:
             # After the first exchange a model names the conversation, in the background.
             conversation_titles.schedule(thread_id)
+            # The lasting facts of this exchange, kept by the bot's automatic memory (when it has it on).
+            asked = next((m for m in reversed(current_storage().get_messages(thread_id=thread_id)) if m.get("sender") == "user"), None)
+            if asked is not None and bot_msg["text"] and acting_for_owner():
+                auto_memory.schedule_capture(thread_id, bot_id, str(asked.get("text") or ""), bot_msg["text"], message_id=bot_msg_id)
         if stopped:
             turn.emit({"type": "turn.cancelled", "botMsgId": bot_msg_id})
             raise asyncio.CancelledError()

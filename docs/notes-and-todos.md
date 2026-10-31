@@ -1,10 +1,11 @@
 # Notes, work notes and to-dos
 
-A bot keeps three kinds of written memory, each for a different job.
+A bot keeps three kinds of written memory, each for a different job, and can also keep an
+[automatic memory](#automatic-memory) of the facts of its conversations.
 
 | | What it is for | Where it lives | Where you see it |
 | --- | --- | --- | --- |
-| **Notes** | Durable facts about the bot's job: the systems it looks after, how to reach them, house rules, lessons learned | The bot, shared by all its conversations | [Bot settings](bots.md) → Notes & procedures |
+| **Notes** | Durable facts about the bot's job: the systems it looks after, how to reach them, house rules, lessons learned | The bot, shared by all its conversations | [Bot settings](bots.md) → Notes & skills |
 | **Work notes** | Where one piece of work stands: status, decisions, next steps | The conversation, or its [project](projects.md) | The to-do panel; the project page |
 | **To-do list** | What is left to do on the job at hand | The conversation | The to-do panel |
 
@@ -20,6 +21,29 @@ by default, which keeps them to what matters.
 If a bot's notes have grown into a mix of facts and project status, **Have the bot sort these into notes
 and projects…** under the notes starts a conversation in which the bot moves each piece of work into a
 project of its own and keeps only the durable facts in its notes.
+
+## Automatic memory
+
+Notes are the small set a bot always has in mind. Automatic memory keeps the long tail by itself: after
+each reply, the memory model (App Settings → Model server) reads the exchange and keeps the lasting facts,
+one sentence each with what it is about: a host's address, who handles what, a schedule, a decision, a
+preference of yours. Before each message, the memories that bear on it are shown to the bot (the chat
+says how many), and it can search them with `memory_search`.
+
+- **Facts that change.** When a newer fact contradicts an older one (mini.lan moved to a new address,
+  proxy01 was replaced by gw02), the new memory replaces the old one, which stays in the history, so you
+  can see what changed and when. One the conversation shows was simply wrong is forgotten.
+- **No secrets.** Known [secrets](secrets.md) are removed before the model reads anything, the model is
+  told never to keep credentials, and a memory that still looks like one is dropped.
+- **Nothing twice.** The model is shown the bot's notes, and leaves out what they already say.
+- **Yours only.** Only your own conversations with a bot feed and read its memory: a teammate's
+  conversations with a bot you shared do neither.
+
+It is off until you switch it on: per bot under **Notes & skills → Automatic memory** (On, Off, or
+follow your default), and for all your bots that have not chosen in **App Settings → Account →
+Automatic memory**. The same card lists what the bot kept: search it, correct a memory, delete one, and
+tick **Replaced and forgotten too** for the history. It runs in the background after the reply, with
+thinking off, so it costs about a second of model time per reply and never slows one down.
 
 ## Work notes
 

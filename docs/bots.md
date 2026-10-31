@@ -38,6 +38,8 @@ conversation shows; **Draft some for me** writes a few from the bot's instructio
 
 - **Notes**: what the bot keeps between conversations. See
   [Notes, work notes and to-dos](notes-and-todos.md).
+- **Automatic memory**: whether the bot keeps the lasting facts of its conversations by itself, and
+  what it kept. See [Automatic memory](notes-and-todos.md#automatic-memory).
 - **Skills**: the skills library, with a switch per skill for this bot. See [Skills](skills.md).
 - **Skills this bot wrote**: how-tos the bot wrote itself, most from what you showed it on its
   computer. It reads one before a task it covers. See [Showing the bot how](computer.md#showing-the-bot-how).

@@ -11,6 +11,7 @@ from app.routers import admin, questions, attachments, auth, bots, models, chat,
 from app.routers import sharing as sharing_router
 from app.routers import help as help_router
 from app.routers import skills as skills_router
+from app.routers import memories as memories_router
 from app.services.mcp_service import mcp_manager
 from app.services.scheduler import scheduler
 from app.services.job_watch import job_watcher
@@ -130,6 +131,7 @@ app.include_router(secrets.router)
 app.include_router(schedules.router)
 app.include_router(mcp.router)
 app.include_router(skills_router.router)
+app.include_router(memories_router.router)
 
 
 @app.get("/api/v1/health")
