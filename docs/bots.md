@@ -32,14 +32,15 @@ The system prompt: who the bot is and how it works. Keep it to the job and the h
 bot learns as it goes belong in its notes. **Suggestion cards** are the starter prompts an empty
 conversation shows; **Draft some for me** writes a few from the bot's instructions.
 
-## Notes & procedures
+## Notes & skills
 
-![Notes & procedures](images/bot-settings-notes.png)
+![Notes & skills](images/bot-settings-notes.png)
 
 - **Notes**: what the bot keeps between conversations. See
   [Notes, work notes and to-dos](notes-and-todos.md).
-- **Procedures**: how-tos the bot wrote from what you showed it on its computer. It reads one before a
-  task it covers. See [Showing the bot how](computer.md#showing-the-bot-how).
+- **Skills**: the skills library, with a switch per skill for this bot. See [Skills](skills.md).
+- **Skills this bot wrote**: how-tos the bot wrote itself, most from what you showed it on its
+  computer. It reads one before a task it covers. See [Showing the bot how](computer.md#showing-the-bot-how).
 
 ## Tools
 

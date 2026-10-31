@@ -23,7 +23,7 @@ buffering for the API so replies stream. The API holds all the state; the client
    as it was sent before, word for word, tool calls and results included. Nothing that changes from one
    message to the next goes near the top, so a model server with a prompt cache resumes from the end
    of the last reply: a reply costs only what it adds. What Cubicle looks up for a message (matching
-   attachment passages, the bot's procedures, project log entries) rides with that message.
+   attachment passages, the bot's own skills, project log entries) rides with that message.
 3. The model streams back thinking, text and tool calls. Each tool call becomes an action request that
    the action gateway checks against its registry (deny by default), pauses for approval when the action
    needs it (the approval card, or the decision model), runs, records in the audit trail, and returns to

@@ -243,7 +243,7 @@ export async function updateBot(botId, updates) {
   return res.json();
 }
 
-// Starter prompts drafted by the model from the bot's prompt, notes and procedures (not saved).
+// Starter prompts drafted by the model from the bot's prompt, notes and own skills (not saved).
 export async function draftBotSuggestions(botId) {
   const res = await apiFetch(`${API_BASE_URL}/bots/${botId}/suggestions/draft`, { method: 'POST' });
   if (!res.ok) {
@@ -1019,6 +1019,23 @@ export async function reconnectMcpServer(serverId) {
 export async function testMcpDefinition(server) {
   return secretsCall('/mcp/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(server) });
 }
+
+// The skills library: SKILL.md folders, system-wide (admins) and the account's own.
+export const fetchSkills = () => secretsCall('/skills');
+export const fetchSkill = (id) => secretsCall(`/skills/${encodeURIComponent(id)}`);
+export const installSkill = (url, scope = 'user') =>
+  secretsCall('/skills/install', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url, scope }) });
+export function uploadSkill(file, scope = 'user') {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('scope', scope);
+  return secretsCall('/skills/upload', { method: 'POST', body: form });
+}
+export const createSkill = (skill) =>
+  secretsCall('/skills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(skill) });
+export const updateSkill = (id, changes) =>
+  secretsCall(`/skills/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+export const deleteSkill = (id) => secretsCall(`/skills/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 export async function fetchBotSecrets(botId) {
   return secretsCall(`/bots/${encodeURIComponent(botId)}/secrets`);

@@ -480,7 +480,7 @@ export default function ComputerPanel({ bot, onBackToChat, onHandBack, onDemonst
               <FiVideo className="text-red-300" /> Tell {bot.name || 'the bot'} what you showed
             </div>
             <p className="text-xs text-zinc-400">
-              {finished.steps} step{finished.steps === 1 ? '' : 's'} and {finished.keyframes} screen{finished.keyframes === 1 ? '' : 's'} were recorded. They go to the bot with your message, and it writes the procedure up so it can do it next time.
+              {finished.steps} step{finished.steps === 1 ? '' : 's'} and {finished.keyframes} screen{finished.keyframes === 1 ? '' : 's'} were recorded. They go to the bot with your message, and it writes them up as a skill of its own so it can do it next time.
             </p>
             <textarea
               value={note}

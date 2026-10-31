@@ -40,8 +40,11 @@ class Bot(BaseModel):
     allowed_commands: List[str] = Field(default_factory=list)
     # An orchestrator sees the user's other bots, creates new ones and hands them work.
     orchestrator: bool = False
-    # How-tos the bot wrote from what the user showed it (services/procedures).
+    # The bot's own skills: how-tos it wrote, most from what the user showed it
+    # (services/procedures; they were called procedures).
     procedures: List[Dict[str, Any]] = Field(default_factory=list)
+    # Library skills switched off for this bot ({skill id: false}); the rest it has (services/skills).
+    skill_settings: Dict[str, bool] = Field(default_factory=dict)
     # The bot's own notes, kept across conversations and compactions. The
     # bot writes them with memory_write; the user can edit them too.
     memory: str = ""

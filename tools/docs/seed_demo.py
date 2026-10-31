@@ -137,8 +137,8 @@ atlas = bot(
         "- Prefer `systemctl status` before restarting a service."
     ),
     procedures=[
-        {"id": "proc-media", "title": "Restart the media server cleanly", "steps": "1. docker compose -f /opt/stacks/media/compose.yml stop jellyfin\n2. Wait for transcodes to stop (docker logs --tail 20 jellyfin)\n3. docker compose -f /opt/stacks/media/compose.yml up -d jellyfin\n4. Check http://mini.lan:8096 answers.", "created_at": at(60 * 24 * 6), "updated_at": at(60 * 24 * 6)},
-        {"id": "proc-snap", "title": "Check the NAS snapshot schedule", "steps": "1. Open https://nas.lan > Data Protection > Periodic Snapshot Tasks\n2. tank/backups should keep 14 daily snapshots.", "created_at": at(60 * 24 * 3), "updated_at": at(60 * 24 * 3)},
+        {"id": "proc-media", "title": "Restart the media server cleanly", "description": "Without cutting off a film someone is watching", "steps": "1. docker compose -f /opt/stacks/media/compose.yml stop jellyfin\n2. Wait for transcodes to stop (docker logs --tail 20 jellyfin)\n3. docker compose -f /opt/stacks/media/compose.yml up -d jellyfin\n4. Check http://mini.lan:8096 answers.", "created_at": at(60 * 24 * 6), "updated_at": at(60 * 24 * 6)},
+        {"id": "proc-snap", "title": "Check the NAS snapshot schedule", "description": "In the TrueNAS web UI", "steps": "1. Open https://nas.lan > Data Protection > Periodic Snapshot Tasks\n2. tank/backups should keep 14 daily snapshots.", "created_at": at(60 * 24 * 3), "updated_at": at(60 * 24 * 3)},
     ],
     suggestions=["Is everything on the NAS healthy?", "How much disk space is left?", "Did last night's backup run?"],
 )
@@ -159,6 +159,35 @@ fern = bot(
     created_at=at(88),
 )
 storage.save_bots([cubie, atlas, iris, quill, fern])
+
+# ---- the skills library: one written in the app, one installed with a script, one for everyone ----
+
+from app.services.skills import SkillStore  # noqa: E402
+
+library = SkillStore(storage, scope="user")
+library.create(
+    "weekly-report",
+    "Write Alex's Monday status report from the projects' work notes. Use when asked for the weekly report or a status update.",
+    "1. List the active projects (projects_list) and read each one's work notes.\n2. One short paragraph per project: where it stands, "
+    "what changed this week, what is next.\n3. End with anything that needs Alex's decision.\n4. Plain words, no more than a page.",
+)
+library.install(
+    {
+        "SKILL.md": (
+            "---\nname: restic-check\ndescription: Check that the restic backups are healthy: last snapshot age, locks, repository "
+            "errors. Use when asked whether the backups ran or before changing the backup setup.\n---\n\n# Checking restic\n\n"
+            "Run `scripts/check.sh` on mini.lan; it prints the newest snapshot's age, any stale locks and `restic check` errors. "
+            "A snapshot older than 26 hours means last night's run failed: read `journalctl -u restic-backup` next.\n"
+        ).encode(),
+        "scripts/check.sh": b"#!/bin/sh\nrestic snapshots --latest 1 --compact\nrestic list locks --no-lock\nrestic check --read-data-subset=1%\n",
+    },
+    source={"kind": "link", "url": "https://github.com/example/homelab-skills/tree/main/restic-check"},
+)
+SkillStore(storage, scope="system").create(
+    "house-style",
+    "How replies and documents are written here. Use for anything longer than a few lines that someone else will read.",
+    "- Short sentences, plain words, no filler.\n- Lead with the answer.\n- Dates as 30 Oct 2026; times in Central.",
+)
 
 # ---- Atlas: the backups project and the conversation the hero shot shows --------------------
 

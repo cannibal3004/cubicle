@@ -35,6 +35,8 @@ SETTING_KEYS = {
     "no_auth_toolkits_off",
     "mcp_servers",
     "user_mcp_servers",
+    "skills",
+    "user_skills",
     "auto_approval",
     "decider_url",
     "decider_threshold",
@@ -68,6 +70,7 @@ APP_SETTING_KEYS = {
     "tool_selection_max",
     "title_model",
     "mcp_servers",
+    "skills",
 }
 
 
