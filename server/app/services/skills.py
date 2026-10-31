@@ -610,8 +610,98 @@ async def execute_save(call: ActionInvocation) -> Dict[str, Any]:
     return {"saved": True, "name": saved["title"], "chars": len(saved["steps"]), "count": len(procedures.list_procedures(bot_id))}
 
 
+# ---- into the library: a bot's skill for every bot --------------------------------------------
+
+# Left out when a folder of the bot's computer becomes a skill: caches and the like, not the skill.
+_SKIPPED_PARTS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".mypy_cache", ".pytest_cache", _MARKER}
+
+
+def files_from_computer(bot_id: str, folder: str) -> Dict[str, bytes]:
+    """The files under `folder` in the bot's computer (its /workspace), by path within it."""
+    from app.services.file_share import FileShareError, source_root
+
+    try:
+        root = source_root("computer", bot_id).resolve()
+    except FileShareError as exc:
+        raise SkillError(f"The computer's files cannot be read from here ({exc}); put what the skill needs in its instructions.") from exc
+    relative = str(folder or "").strip().replace("\\", "/")
+    for prefix in ("/workspace/", "/workspace"):
+        if relative.startswith(prefix):
+            relative = relative[len(prefix):]
+    base = (root / relative.lstrip("/")).resolve()
+    if base != root and root not in base.parents:
+        raise SkillError("The folder must be under /workspace in your computer.")
+    if not base.is_dir():
+        raise SkillError(f"There is no folder {folder} in your computer.")
+    files: Dict[str, bytes] = {}
+    total = 0
+    for path in sorted(base.rglob("*")):
+        parts = path.relative_to(base).parts
+        if path.is_symlink() or not path.is_file() or any(part in _SKIPPED_PARTS for part in parts):
+            continue
+        size = path.stat().st_size
+        if size > MAX_FILE_BYTES:
+            raise SkillError(f"{'/'.join(parts)} is larger than {MAX_FILE_BYTES // (1024 * 1024)} MB.")
+        total += size
+        if total > MAX_SKILL_BYTES or len(files) >= MAX_FILES:
+            raise SkillError(f"The folder is too big for a skill (at most {MAX_FILES} files and {MAX_SKILL_BYTES // (1024 * 1024)} MB).")
+        files["/".join(parts)] = path.read_bytes()
+    return files
+
+
+def publish(bot: Dict[str, Any], *, name: Any, description: Any = None, instructions: Any = None, folder: Any = None) -> Dict[str, Any]:
+    """A bot's skill made a library skill of the current account: instructions, with the files of a
+    folder of its computer if given (a SKILL.md there serves when no instructions are). The bot's own
+    skill of the same name, if any, gives way to it."""
+    from app.services import procedures
+
+    files = files_from_computer(bot["id"], str(folder)) if folder else {}
+    skill_md = next((path for path in files if path.lower() == "skill.md"), None)
+    meta, folder_body = parse_skill_md(files.pop(skill_md).decode("utf-8", errors="replace")) if skill_md else ({}, "")
+    body = str(instructions or "").strip() or folder_body.strip()
+    if not body:
+        raise SkillError("Give the instructions, or a folder with a SKILL.md in it.")
+    meta = {**meta, "name": clean_name(name or meta.get("name")), "description": clean_description(description or meta.get("description"))}
+    files[SKILL_FILE] = compose_skill_md(meta, body).encode("utf-8")
+    replaced = any(s["name"].lower() == meta["name"].lower() for s in user_skill_store.list())
+    record = user_skill_store.install(files, source={"kind": "bot", "bot_id": bot["id"], "name": bot.get("name") or bot["id"]})
+    own = next((p for p in procedures.list_procedures(bot["id"]) if str(p.get("title") or "").lower() == meta["name"].lower()), None)
+    if own is not None:
+        procedures.delete_procedure(bot["id"], own["id"])
+    return {"skill": record, "replaced": replaced, "removed_own": own is not None}
+
+
+def move_from_bot(bot_id: str, procedure_id: str) -> Dict[str, Any]:
+    """One of a bot's own skills moved into the current account's library (the editor's button)."""
+    from app.services import procedures
+
+    bot = _bot(bot_id)
+    own = next((p for p in procedures.list_procedures(bot_id) if p.get("id") == procedure_id), None)
+    if own is None:
+        raise SkillError("That bot has no such skill of its own.")
+    if any(s["name"].lower() == str(own["title"]).lower() for s in user_skill_store.list()):
+        raise SkillError(f"Your library already has a skill named {own['title']}; rename or delete one of them first.")
+    return publish(bot, name=own["title"], description=own.get("description") or own["title"], instructions=own["steps"])
+
+
+async def execute_publish(call: ActionInvocation) -> Dict[str, Any]:
+    from app.services.identity import acting_for_owner
+
+    if not acting_for_owner():
+        raise SkillError("Only the bot's owner's conversations can add to the owner's skills library.")
+    bot = _bot(str(call.arguments.get("bot_id") or ""))
+    outcome = publish(bot, name=call.arguments.get("name"), description=call.arguments.get("description"),
+                      instructions=call.arguments.get("instructions"), folder=call.arguments.get("folder"))
+    record = outcome["skill"]
+    note = "It is in the user's skills library now: every bot of theirs gets it from its next turn, you included (read it with skill_read)."
+    if outcome["removed_own"]:
+        note += " Your own skill of the same name was removed, as the library's takes its place."
+    return {"published": record["name"], "files": [f["path"] for f in record.get("files") or []], "replaced": outcome["replaced"], "note": note}
+
+
 READ_ACTION = "skill.read"
 SAVE_ACTION = "skill.save"
+PUBLISH_ACTION = "skill.publish"
 
 
 def register_skill_actions(gateway: Optional[ActionGateway] = None) -> None:
@@ -623,6 +713,10 @@ def register_skill_actions(gateway: Optional[ActionGateway] = None) -> None:
     target.register_action(
         ActionDefinition(name=SAVE_ACTION, tool="skill", action="save", intent="Keep a skill the bot wrote.", risk="write", requires_approval=False),
         execute_save,
+    )
+    target.register_action(
+        ActionDefinition(name=PUBLISH_ACTION, tool="skill", action="publish", intent="Add a skill to the user's skills library.", risk="write", requires_approval=True),
+        execute_publish,
     )
 
 

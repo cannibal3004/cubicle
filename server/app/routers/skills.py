@@ -91,6 +91,20 @@ async def create(body: SkillInput, request: Request):
     return {"skill": _guard(lambda: store.create(body.name, body.description, body.instructions))}
 
 
+class FromBotInput(BaseModel):
+    bot_id: str = Field(max_length=100)
+    skill_id: str = Field(max_length=100)
+
+
+@router.post("/from-bot")
+async def move_from_bot(body: FromBotInput):
+    """One of a bot's own skills moved into the caller's library: every bot gets it; the bot's copy goes."""
+    from app.routers.bots import get_bot
+
+    outcome = _guard(lambda: skills.move_from_bot(body.bot_id, body.skill_id))
+    return {"skill": outcome["skill"], "bot": await get_bot(body.bot_id)}
+
+
 @router.get("/{skill_id}")
 async def read(skill_id: str):
     """One skill with its instructions (SKILL.md without its front matter)."""

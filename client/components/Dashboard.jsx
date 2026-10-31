@@ -888,6 +888,7 @@ export default function Dashboard() {
               onLeave={(bot) => setBotToLeave(bot)}
               onSortNotes={(bot) => handleSortNotes(bot).catch((err) => window.alert(err.message || 'Could not start the conversation.'))}
               onDirtyChange={setBotPageDirty}
+              onBotChanged={(fresh) => fresh && setBots((prev) => prev.map((b) => (b.id === fresh.id ? { ...b, ...fresh } : b)))}
             />
           </div>
         )}

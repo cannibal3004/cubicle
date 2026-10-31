@@ -28,6 +28,7 @@ import ConfirmDialog from './ConfirmDialog';
 import {
   draftBotSuggestions,
   fetchSkills,
+  moveSkillToLibrary,
   fetchBotSecrets,
   setBotSecret,
   deleteBotSecret,
@@ -149,6 +150,7 @@ export default function BotSettingsPage({
   onLeave,
   onSortNotes,
   onDirtyChange,
+  onBotChanged,
 }) {
   const isEdit = Boolean(bot);
   const botId = bot?.id;
@@ -191,11 +193,31 @@ export default function BotSettingsPage({
   const [openProcedure, setOpenProcedure] = useState('');
   // The skills library, for this bot's on/off switches.
   const [librarySkills, setLibrarySkills] = useState([]);
-  useEffect(() => {
+  const loadLibrary = useCallback(() => {
     fetchSkills()
       .then((data) => setLibrarySkills(data?.skills || []))
       .catch(() => setLibrarySkills([]));
   }, []);
+  useEffect(loadLibrary, [loadLibrary]);
+  // One of the bot's own skills being moved to the library: its id while asking, then the outcome.
+  const [moving, setMoving] = useState('');
+  const [moveNote, setMoveNote] = useState('');
+
+  const moveToLibrary = async (procedure) => {
+    setMoveNote('');
+    try {
+      const result = await moveSkillToLibrary(botId, procedure.id);
+      onBotChanged?.(result.bot);
+      // An unsaved edit of the list must not bring the moved one back.
+      setEdits((current) => (current.procedures ? { ...current, procedures: current.procedures.filter((p) => p.id !== procedure.id) } : current));
+      loadLibrary();
+      setMoveNote(`${procedure.title} is in your skills library now: every bot gets it.`);
+    } catch (err) {
+      setMoveNote(err?.message || 'Could not move the skill.');
+    } finally {
+      setMoving('');
+    }
+  };
   const [newRule, setNewRule] = useState('');
 
   const loadBotSecrets = useCallback(() => fetchBotSecrets(botId), [botId]);
@@ -629,6 +651,27 @@ export default function BotSettingsPage({
                           {procedure.description && <span className="text-zinc-500"> · {procedure.description}</span>}
                         </button>
                         <span className="text-[10px] text-zinc-600 font-mono shrink-0">{(procedure.updated_at || procedure.created_at || '').slice(0, 10)}</span>
+                        {moving === procedure.id ? (
+                          <span className="flex items-center gap-1 shrink-0 text-[10px]">
+                            <span className="text-zinc-400">Move to your library?</span>
+                            <button type="button" onClick={() => moveToLibrary(procedure)} className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-200 hover:bg-amber-500/40">
+                              Yes
+                            </button>
+                            <button type="button" onClick={() => setMoving('')} className="px-1.5 py-0.5 rounded text-zinc-400 hover:text-white">
+                              No
+                            </button>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setMoving(procedure.id)}
+                            disabled={!!sharedWithMe}
+                            className="text-[10px] text-zinc-500 hover:text-amber-200 shrink-0 disabled:opacity-40"
+                            title="Move it into your skills library, so every bot gets it (it leaves this bot's own list)"
+                          >
+                            To library
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => set('procedures', values.procedures.filter((p) => p.id !== procedure.id))}
@@ -644,6 +687,7 @@ export default function BotSettingsPage({
                     </div>
                   ))}
                   {!values.procedures.length && <span className="text-[11px] text-zinc-600">None yet.</span>}
+                  {moveNote && <p className="text-[11px] text-amber-200/90">{moveNote}</p>}
                 </div>
               </Card>
             )}

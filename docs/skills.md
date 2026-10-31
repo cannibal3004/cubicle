@@ -61,3 +61,14 @@ listed under **Skills this bot wrote** in its settings, where you can read and r
 corrects one when it learns that a step has changed. (These used to be called procedures.)
 
 Ask a bot to "keep that as a skill" after it worked something out, and it writes one for next time.
+
+## From a bot to every bot
+
+A skill one bot wrote can serve all of them:
+
+- **To library**, next to a skill under **Skills this bot wrote**, moves it into your library: every bot
+  gets it, and it leaves that bot's own list.
+- A bot can add a skill to your library itself with `skill_publish` (it asks first): ask it to "make
+  that a skill for all the bots". Unlike its own skills, such a skill can carry files: the bot names a
+  folder in its computer, and the scripts, references and templates in it become part of the skill.
+  The library shows who wrote it.

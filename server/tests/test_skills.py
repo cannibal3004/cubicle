@@ -209,6 +209,50 @@ class SkillLibraryTests(unittest.TestCase):
         settings = updated["skill_settings"] if isinstance(updated, dict) else updated.skill_settings
         self.assertEqual(settings, {"skill-1a2b3c4d": False})
 
+    def test_a_bot_publishes_a_skill_with_the_files_of_a_folder(self):
+        """skill_publish: into the account's library, scripts included; the bot's own of that name gives way."""
+        computer = Path(self.temp.name) / "computer"
+        (computer / "work" / "renew" / "scripts").mkdir(parents=True)
+        (computer / "work" / "renew" / "scripts" / "renew.sh").write_text("#!/bin/sh\ncertbot renew\n")
+        (computer / "work" / "renew" / "__pycache__").mkdir()
+        (computer / "work" / "renew" / "__pycache__" / "x.pyc").write_bytes(b"junk")
+        procedures.save_procedure(self.bot["id"], "renew-certificates", "1. Run certbot.")
+        call = build_invocation("skill_publish", {"name": "renew-certificates", "description": "Renew the TLS certificates. Use when one is near expiry.",
+                                                  "instructions": "Run scripts/renew.sh, then reload nginx.", "folder": "/workspace/work/renew"}, self.bot["id"])
+        self.assertEqual(call.name, "skill.publish")
+        self.assertIn("for every bot, with the files in /workspace/work/renew", call.preview)
+        with mock.patch("app.services.file_share.source_root", lambda source, bot_id: computer):
+            result = asyncio.run(skills.execute_publish(call))
+        self.assertEqual((result["published"], result["files"]), ("renew-certificates", ["scripts/renew.sh"]))
+        record = skills.library()[0]
+        self.assertEqual((record["scope"], record["source"]["kind"], record["source"]["bot_id"]), ("user", "bot", self.bot["id"]))
+        self.assertEqual(skills.user_skill_store.instructions(record), "Run scripts/renew.sh, then reload nginx.")
+        self.assertEqual(procedures.list_procedures(self.bot["id"]), [])  # its own copy gave way
+        self.assertIn("removed", result["note"])
+        # A folder with its own SKILL.md and no instructions: that SKILL.md is the skill.
+        (computer / "work" / "lint").mkdir()
+        (computer / "work" / "lint" / "SKILL.md").write_text("---\nname: lint-all\ndescription: Lint the repo.\n---\nRun ruff and shellcheck.\n")
+        with mock.patch("app.services.file_share.source_root", lambda source, bot_id: computer):
+            asyncio.run(skills.execute_publish(build_invocation("skill_publish", {"name": "lint-all", "description": "Lint the repo.", "folder": "work/lint"}, self.bot["id"])))
+            with self.assertRaisesRegex(skills.SkillError, "under /workspace"):
+                skills.files_from_computer(self.bot["id"], "../../etc")
+        self.assertEqual(skills.user_skill_store.instructions(next(s for s in skills.library() if s["name"] == "lint-all")), "Run ruff and shellcheck.")
+        # A teammate's conversation with a shared bot cannot write the owner's library.
+        with mock.patch("app.services.identity.acting_for_owner", lambda: False):
+            with self.assertRaisesRegex(skills.SkillError, "owner"):
+                asyncio.run(skills.execute_publish(call))
+
+    def test_a_bots_own_skill_moves_into_the_library(self):
+        own = procedures.save_procedure(self.bot["id"], "Weekly report", "1. Gather.\n2. Write.", description="Monday status")
+        moved = asyncio.run(skills_router.move_from_bot(skills_router.FromBotInput(bot_id=self.bot["id"], skill_id=own["id"])))
+        self.assertEqual((moved["skill"]["name"], moved["skill"]["description"]), ("Weekly report", "Monday status"))
+        bot = moved["bot"] if isinstance(moved["bot"], dict) else moved["bot"].model_dump()
+        self.assertEqual(bot["procedures"], [])
+        again = procedures.save_procedure(self.bot["id"], "weekly report", "other")
+        with self.assertRaises(HTTPException) as clash:
+            asyncio.run(skills_router.move_from_bot(skills_router.FromBotInput(bot_id=self.bot["id"], skill_id=again["id"])))
+        self.assertIn("already has a skill named", clash.exception.detail)
+
     def test_only_an_admin_changes_system_skills(self):
         member = SimpleNamespace(state=SimpleNamespace(user={"id": "u2", "username": "bob", "role": "member"}))
         admin = SimpleNamespace(state=SimpleNamespace(user={"id": "local-user", "username": "jamie", "role": "owner"}))
