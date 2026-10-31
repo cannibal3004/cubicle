@@ -8,6 +8,7 @@ function sourceLabel(skill) {
   const source = skill.source || {};
   if (source.kind === 'link') return source.url ? `from ${source.url.replace(/^https?:\/\/(www\.)?/, '')}` : 'from a link';
   if (source.kind === 'upload') return source.name ? `uploaded ${source.name}` : 'uploaded';
+  if (source.kind === 'bot') return source.name ? `written by ${source.name}` : 'written by a bot';
   return 'written here';
 }
 

@@ -456,6 +456,26 @@ SKILL_TOOLS: List[ToolSpec] = [
         group="skills",
         needs_approval=False,
     ),
+    ToolSpec(
+        name="skill_publish",
+        description=(
+            "Add a skill to the user's skills library, so every bot of theirs gets it (the user approves). Use it for a way of working "
+            "the user wants shared, or one that needs scripts or files: give 'folder', a folder in your computer, and its files become "
+            "part of the skill, with paths in the instructions relative to it (a SKILL.md there is used when you give no instructions). "
+            "A library skill of the same name is replaced; your own of the same name gives way to it. For a skill only you need, use skill_save."
+        ),
+        parameters=_obj(
+            {
+                "name": {"type": "string", "description": "Short, lower-case words joined by hyphens, e.g. renew-certificates"},
+                "description": {"type": "string", "description": "What it does and when to use it: the bots decide from this"},
+                "instructions": {"type": "string", "description": "The instructions, in Markdown"},
+                "folder": {"type": "string", "description": "A folder in your computer whose files (scripts, references, templates) belong to the skill"},
+            },
+            ["name", "description"],
+        ),
+        group="skills",
+        needs_approval=True,
+    ),
 ]
 
 
@@ -952,7 +972,8 @@ def describe_tools(
             "- Skills: instructions for kinds of tasks, listed below by name and description. Before a task one fits, skill_read it and "
             "follow it; a skill's scripts are in its folder in your computer. Keep what you learn as a skill of your own with skill_save: "
             "the user can show you how to do something in your computer's browser (their clicks and typing arrive as a recorded list of "
-            "steps with screens), and you write it up so you can do it again, adapting when a page has changed."
+            "steps with screens), and you write it up so you can do it again, adapting when a page has changed. skill_publish puts a skill "
+            "in the user's library instead, for all their bots, with scripts from a folder of your computer (the user approves)."
         )
     if "todo" in groups:
         lines.append(
@@ -1572,6 +1593,19 @@ def _build_invocation(
             arguments={"bot_id": bot_id, "name": title, "description": description, "instructions": steps},
             target={"bot_id": bot_id},
             preview=f"Save the skill {title!r} for {bot_id} ({len(steps)} characters)",
+        )
+    if name == "skill_publish":
+        title = _string(arguments, "name", required=True, max_len=64)
+        description = _string(arguments, "description", required=True, max_len=1024)
+        instructions = _string(arguments, "instructions", max_len=200_000) or ""
+        folder = _string(arguments, "folder", max_len=500) or ""
+        if not instructions and not folder:
+            raise ToolCallError("Give the instructions, or a folder with a SKILL.md in it.")
+        return ActionInvocation(
+            name="skill.publish",
+            arguments={"bot_id": bot_id, "name": title, "description": description, "instructions": instructions, **({"folder": folder} if folder else {})},
+            target={"bot_id": bot_id},
+            preview=f"Add the skill {title!r} to your skills library, for every bot" + (f", with the files in {folder}" if folder else ""),
         )
     if name in ("skill_read", "procedure_read"):
         title = _string({**arguments, "name": arguments.get("name") or arguments.get("title")}, "name", required=True, max_len=200)
