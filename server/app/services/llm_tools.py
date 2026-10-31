@@ -980,8 +980,9 @@ def describe_tools(
     if any(spec.name == "memory_search" for spec in specs):
         lines.append(
             "- Automatic memory: besides your notes, the lasting facts of your conversations are kept for you by themselves, and the "
-            "ones that match a message are shown with it (newer than your notes where they differ). memory_search looks for more. You "
-            "need not write such facts down; keep your notes for what you must always have in mind."
+            "ones that match a message are shown with it (newer than your notes where they differ). memory_search looks for more. So "
+            "do not copy single facts (an address, an owner, a version, a date) into your notes: they are remembered for you, and "
+            "your notes are for what you must always have in mind (house rules, how you work, the systems you look after)."
         )
     if "projects" in groups:
         lines.append(
