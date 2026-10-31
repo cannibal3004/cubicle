@@ -10,6 +10,7 @@ import {
   FiFileText,
   FiFolder,
   FiFolderPlus,
+  FiLock,
   FiHardDrive,
   FiImage,
   FiArchive,
@@ -319,13 +320,20 @@ export default function ComputerFiles({ bot, initialPath }) {
         {entries.map((entry) => {
           const isDir = entry.kind === 'dir';
           const kind = isDir ? 'dir' : kindOf(entry.mime || '', entry.name);
-          const Icon = isDir ? FiFolder : ICONS[kind] || FiFile;
+          const Icon = entry.private ? FiLock : isDir ? FiFolder : ICONS[kind] || FiFile;
           const canPreview = !isDir && (kind === 'image' || kind === 'pdf' || (kind === 'text' && entry.size <= 512 * 1024));
           const confirmingThis = confirming === entry.path;
           return (
             <div key={entry.path} className="group flex items-center gap-3 px-3 py-1.5 border-b border-zinc-800/40 hover:bg-zinc-900/60 text-xs">
               <Icon className={`flex-shrink-0 ${isDir ? 'text-amber-400/80' : 'text-zinc-400'}`} />
-              {isDir ? (
+              {entry.private ? (
+                <span
+                  className="min-w-0 flex-1 text-zinc-500 truncate cursor-default"
+                  title="Private to the computer's own user (as a .ssh folder or a private key should be): it cannot be opened here, but the bot can use it."
+                >
+                  {entry.name} <span className="text-[10px] text-zinc-600">private</span>
+                </span>
+              ) : isDir ? (
                 <button type="button" onClick={() => open(entry.path)} className="min-w-0 flex-1 text-left text-zinc-100 truncate hover:text-white font-medium">
                   {entry.name}
                 </button>
@@ -348,7 +356,7 @@ export default function ComputerFiles({ bot, initialPath }) {
                     <button type="button" onClick={() => remove(entry)} className="px-1.5 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-200 hover:bg-rose-500/40">Yes</button>
                     <button type="button" onClick={() => setConfirming(null)} className="px-1.5 py-0.5 rounded text-[10px] text-zinc-400 hover:text-white">No</button>
                   </>
-                ) : (
+                ) : entry.private ? null : (
                   <>
                     {canPreview && (
                       <button type="button" onClick={() => openPreview(entry)} className="p-1 rounded text-zinc-500 hover:text-white opacity-0 group-hover:opacity-100 transition" title="Preview">
