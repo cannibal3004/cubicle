@@ -52,7 +52,10 @@ class SkillFilesTests(unittest.TestCase):
         self.assertTrue(body.startswith("# PDF"))
         self.assertEqual(skills.parse_skill_md("Just instructions."), ({}, "Just instructions."))
         with self.assertRaisesRegex(skills.SkillError, "not valid YAML"):
-            skills.parse_skill_md("---\nname: [unclosed\n---\nbody")
+            skills.parse_skill_md("---\n[unclosed\n---\nbody")
+        # A colon in an unquoted description is not YAML, but is what was meant.
+        loose = skills.parse_skill_md("---\nname: restic-check\ndescription: Check the backups: snapshot age, locks.\n---\nRun it.")
+        self.assertEqual(loose, ({"name": "restic-check", "description": "Check the backups: snapshot age, locks."}, "Run it."))
         again = skills.parse_skill_md(skills.compose_skill_md({"name": "x", "description": "y: z"}, "Do it."))
         self.assertEqual(again, ({"name": "x", "description": "y: z"}, "Do it.\n"))
 

@@ -182,7 +182,7 @@ class ChatStreamRouteTests(unittest.TestCase):
         self.assertEqual(recorder["model"], bot["model"])
         self.assertIn(bot["system_prompt"], recorder["system_prompt"])
         self.assertIn("## Tools", recorder["system_prompt"])
-        self.assertEqual([t["function"]["name"] for t in recorder["tools"]], ["shared_folder_list", "shared_folder_read", "shared_folder_write", "shared_folder_delete", "share_file", "memory_read", "memory_write", "memory_edit", "work_notes_read", "work_notes_write", "work_notes_edit", "project_log", "project_log_read", "projects_list", "project_create", "project_join", "todo_list", "todo_add", "todo_update", "schedule_list", "schedule_create", "schedule_update", "schedule_delete", "ask_user", "cubicle_help", "bots_list", "bots_status", "bots_create", "bots_send", "bots_reply", "mcp_list_servers", "mcp_add_server", "mcp_test_server", "mcp_remove_server"])
+        self.assertEqual([t["function"]["name"] for t in recorder["tools"]], ["shared_folder_list", "shared_folder_read", "shared_folder_write", "shared_folder_delete", "share_file", "memory_read", "memory_write", "memory_edit", "skill_read", "skill_save", "work_notes_read", "work_notes_write", "work_notes_edit", "project_log", "project_log_read", "projects_list", "project_create", "project_join", "todo_list", "todo_add", "todo_update", "schedule_list", "schedule_create", "schedule_update", "schedule_delete", "ask_user", "cubicle_help", "bots_list", "bots_status", "bots_create", "bots_send", "bots_reply", "mcp_list_servers", "mcp_add_server", "mcp_test_server", "mcp_remove_server"])
         self.assertEqual(recorder["messages"][-1], {"role": "user", "content": "hi", "image_url": None})
 
         saved = self.storage.get_messages(bot["id"])

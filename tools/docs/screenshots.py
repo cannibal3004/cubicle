@@ -85,7 +85,12 @@ def main():
     run(COMPOSE + ["up", "-d"] + ([] if args.no_build else ["--build"]))
     try:
         wait_for_api()
-        seeded = run(COMPOSE + ["exec", "-T", "api", "python", "-"], input=(HERE / "seed_demo.py").read_bytes(), capture_output=True)
+        try:
+            seeded = run(COMPOSE + ["exec", "-T", "api", "python", "-"], input=(HERE / "seed_demo.py").read_bytes(), capture_output=True)
+        except subprocess.CalledProcessError as exc:
+            # The seed's own error, not just the exit status.
+            sys.stderr.write(exc.stderr.decode("utf-8", errors="replace"))
+            raise
         line = seeded.stdout.decode("utf-8").strip().splitlines()[-1]
         json.loads(line)
         SEED_FILE.write_text(line, encoding="utf-8")

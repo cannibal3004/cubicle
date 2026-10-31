@@ -80,12 +80,26 @@ def parse_skill_md(text: str) -> Tuple[Dict[str, Any], str]:
             try:
                 meta = yaml.safe_load(text[4:end]) or {}
             except yaml.YAMLError as exc:
-                raise SkillError(f"SKILL.md's front matter is not valid YAML: {exc}") from exc
+                # Hand-written front matter often breaks YAML with a colon in a description
+                # ("Checks the backups: snapshot age, locks"); read it as key: value lines.
+                meta = _plain_front_matter(text[4:end])
+                if not meta:
+                    raise SkillError(f"SKILL.md's front matter is not valid YAML: {exc}") from exc
             if not isinstance(meta, dict):
                 raise SkillError("SKILL.md's front matter must be a mapping (name: ..., description: ...).")
             body = text[end + 4:]
             return meta, body.split("\n", 1)[1].lstrip("\n") if "\n" in body else ""
     return {}, text
+
+
+def _plain_front_matter(text: str) -> Dict[str, Any]:
+    """Top-level `key: value` lines, the value being the rest of the line (quotes dropped)."""
+    meta: Dict[str, Any] = {}
+    for line in text.splitlines():
+        match = re.match(r"^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$", line)
+        if match:
+            meta[match.group(1)] = match.group(2).strip().strip("'\"")
+    return meta if meta.get("name") or meta.get("description") else {}
 
 
 def compose_skill_md(meta: Dict[str, Any], instructions: str) -> str:
@@ -502,14 +516,13 @@ def _match(items: List[Dict[str, Any]], wanted: str, key: str) -> Optional[Dict[
 def copy_to_computer(record: Dict[str, Any], bot_id: str) -> Optional[str]:
     """The skill's files in the bot's computer (copied when missing or out of date); the folder's
     path there, or None when the computer's files cannot be reached from here."""
-    from app.services import file_browser
     from app.services.file_share import FileShareError, source_root
 
     try:
         root = source_root("computer", bot_id)
     except FileShareError:
         return None
-    if not root.exists():
+    if not root.is_dir():
         return None
     relative = f"{COMPUTER_FOLDER}/{folder_name(record['name'])}"
     target = root / relative
@@ -517,18 +530,33 @@ def copy_to_computer(record: Dict[str, Any], bot_id: str) -> Optional[str]:
     try:
         if (target / _MARKER).is_file() and (target / _MARKER).read_text(encoding="utf-8").strip() == stamp:
             return f"/workspace/{relative}"
-        file_browser.ensure_directory("computer", relative, bot_id)
+        # A new version replaces the folder whole, so nothing of the old one lingers.
+        if target.exists():
+            shutil.rmtree(target)
         for path, data in store_for(record).files_of(record).items():
             destination = target / path
-            if not destination.parent.exists():
-                file_browser.ensure_directory("computer", str(PurePosixPath(relative) / PurePosixPath(path).parent), bot_id)
+            _make_open_folders(root, destination.parent)
             destination.write_bytes(data)
+            # The computer runs as another user than the API: what goes there must be open to it.
             destination.chmod(0o777 if path.startswith("scripts/") or path.endswith((".sh", ".py")) else 0o666)
+        _make_open_folders(root, target)
         (target / _MARKER).write_text(stamp, encoding="utf-8")
-    except (OSError, FileShareError) as exc:
+    except OSError as exc:
         logger.info("Skill %s not copied to %s's computer: %s", record["name"], bot_id, exc)
         return None
     return f"/workspace/{relative}"
+
+
+def _make_open_folders(root: Path, folder: Path) -> None:
+    """`folder` and the ones above it up to `root`, each open to the computer's user."""
+    missing = []
+    current = folder
+    while current != root and not current.exists():
+        missing.append(current)
+        current = current.parent
+    for path in reversed(missing):
+        path.mkdir()
+        path.chmod(0o777)
 
 
 def _bot(bot_id: str) -> Dict[str, Any]:
