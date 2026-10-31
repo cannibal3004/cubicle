@@ -1,6 +1,6 @@
 # Adds the real computer runtime to the docs stack, for the pictures of a bot's desktop
 # and files (screenshots.py --computer). Needs the runtime image (docker build -t
-# cubicle-computer:2.13.0 ./runtime). Workspaces are bind mounts of the stack's own
+# cubicle-computer:2.14.0 ./runtime). Workspaces are bind mounts of the stack's own
 # volumes, at the paths Docker keeps volumes under; that is /var/lib/docker/volumes
 # on Linux and inside Docker Desktop's VM. DOCS_DOCKER_VOLUMES overrides it.
 services:

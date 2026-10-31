@@ -50,7 +50,7 @@ def wait_for_api(timeout=240):
     raise SystemExit("The docs stack did not come up; see `docker compose -p cubicle-docs logs api`.")
 
 
-RUNTIME_IMAGE = "cubicle-computer:2.13.0"
+RUNTIME_IMAGE = "cubicle-computer:2.14.0"
 
 
 def remove_computers():

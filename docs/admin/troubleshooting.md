@@ -41,7 +41,7 @@ server). It starts when one finishes; the chat shows its place in line.
 ## The computer won't start
 
 - Check that `COMPUTER_PROVIDER=docker` and `COMPOSE_PROFILES=computer` are set, and that the runtime
-  image exists: `docker image inspect cubicle-computer:2.13.0`.
+  image exists: `docker image inspect cubicle-computer:2.14.0`.
 - The API reports a failed start instead of quietly carrying on without a computer; its log says why:
   `docker compose logs api`.
 - If the image was built on Windows from a checkout with CRLF line endings, its scripts can't run (the

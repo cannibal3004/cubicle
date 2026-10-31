@@ -50,6 +50,15 @@ The **Activity** tab shows the computer's state: whether it is running, who has 
 size, the last operation, the page its browser is on, and the packages installed. What the bot did is in
 its replies' [tool steps](chat.md#a-reply) and the [audit trail](approvals.md#the-audit-trail).
 
+## Checking scripts
+
+When a bot saves a shell script (`.sh`, `.bash`, or a file starting with a shell `#!` line) or a Python
+file with its file tools, the computer checks it on the spot: shell with
+[ShellCheck](https://www.shellcheck.net), Python with [Ruff](https://docs.astral.sh/ruff/) for real
+errors (syntax errors, undefined names). Problems come back with the save, so the bot fixes the
+script before running it; style notes are left out, and nothing is ever refused. Both tools are
+installed in the computer for the bot to run itself too.
+
 ## Showing the bot how
 
 **Show the bot** gives you control and records what you do in the computer's browser. Do the task
