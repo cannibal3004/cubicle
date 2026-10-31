@@ -53,7 +53,7 @@ NOTES_CHARS = 6000
 NOTES_PIECE_CHARS = 1500  # long notes are split into pieces of about this size, each under its heading
 NOTES_LINE_MAX = 400
 STALE_NOTES_LIMIT = 5
-SAVE_FACTS_MAX = 30
+SAVE_FACTS_MAX = 15
 SEARCH_ACTION = "memory.search"
 SAVE_ACTION = "memory.save"
 

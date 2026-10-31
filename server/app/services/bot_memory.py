@@ -142,13 +142,23 @@ def edit_memory(bot_id: str, old_text: Any, new_text: Any, storage: Optional[Sto
 
 
 def without_passages(bot_id: str, passages: List[str], storage: Optional[StorageService] = None) -> str:
-    """The notes with each passage taken out (a whole line goes with its line break). Raises, naming the
-    passage, when one is not in the notes exactly once; nothing is saved."""
-    current = get_memory(bot_id, storage)
-    updated = current
+    """The notes without the given lines. A piece of one line (a host name, the start of a table row) takes
+    out the whole line it is in; a passage over several lines is taken out exactly. Raises, naming it, when
+    a piece is in no line or in several (or a passage not there exactly once); nothing is saved."""
+    updated = get_memory(bot_id, storage)
     for passage in passages:
         passage = passage.replace("\r\n", "\n").strip("\n")
         if not passage.strip():
+            continue
+        if "\n" not in passage.strip():
+            piece = passage.strip()
+            lines = updated.split("\n")
+            hits = [i for i, line in enumerate(lines) if piece in line]
+            if len(hits) != 1:
+                where = "is in no line of the notes" if not hits else f"is in {len(hits)} lines of the notes"
+                raise MemoryError(f"{piece[:120]!r} {where}; give a piece of the line that is in that line only.")
+            del lines[hits[0]]
+            updated = "\n".join(lines)
             continue
         count = updated.count(passage)
         if count != 1:

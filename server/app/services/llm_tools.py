@@ -802,10 +802,12 @@ AUTO_MEMORY_TOOLS: List[ToolSpec] = [
         name="memory_save",
         description=(
             "Keep facts in your automatic memory yourself: one fact each (an address, an owner, a version, who to ask), in a sentence "
-            "that stands on its own, at most 600 characters, never a credential. To move single facts out of your notes, list the "
-            "exact passages in remove_from_notes: they are taken out once the facts are saved, and nothing happens if a passage does "
-            "not match once. Only single facts belong here; house rules, how you work and lessons stay in your notes, or become skills. "
-            "A fact that updates a memory gives that memory's id (from memory_search) in replaces."
+            "that stands on its own, at most 600 characters, never a credential. To move facts out of your notes, name their lines in "
+            "remove_from_notes, each by a short piece of the line found in no other line (a host name, the start of a table row such "
+            "as '| nas |'): the whole line is taken out once the facts are saved, and nothing happens if a piece matches no line or "
+            "several. Move about 10 facts per call: for a long section, make one call after another, each with the lines it saved, "
+            "rather than planning them all first. Only single facts belong here; house rules, how you work and lessons stay in your "
+            "notes, or become skills. A fact that updates a memory gives that memory's id (from memory_search) in replaces."
         ),
         parameters=_obj(
             {
@@ -823,7 +825,7 @@ AUTO_MEMORY_TOOLS: List[ToolSpec] = [
                 },
                 "remove_from_notes": {
                     "type": "array",
-                    "description": "Passages of your notes, copied exactly, to take out once the facts are saved (optional)",
+                    "description": "Lines of your notes to take out once the facts are saved, each named by a short piece of it that no other line has (optional)",
                     "items": {"type": "string"},
                 },
             },
