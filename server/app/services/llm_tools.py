@@ -1017,8 +1017,10 @@ def describe_tools(
             "ones that match a message are shown with it (newer than your notes where they differ). memory_search looks for more, and "
             "memory_save keeps a fact on purpose. So do not copy single facts (an address, an owner, a version, a date) into your notes: "
             "they are remembered for you, and your notes are for what you must always have in mind (house rules, how you work, the "
-            "systems you look after). When your notes are getting full, move their single facts to memory with memory_save and "
-            "remove_from_notes. When you are told a line of your notes is out of date, fix it with memory_edit."
+            "systems you look after). Memory is kept after your reply, so what you learn in this conversation is not in it yet: "
+            "never drop a fact from your notes assuming memory has it; to move one, use memory_save with remove_from_notes, which "
+            "keeps it first. When your notes are getting full, move their single facts that way. When a fact in your notes changes, "
+            "correct the line with memory_edit, as when you are told a line of your notes is out of date."
         )
     if "projects" in groups:
         lines.append(

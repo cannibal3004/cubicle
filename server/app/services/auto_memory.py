@@ -94,6 +94,8 @@ Compare with the existing memories (numbered). When a new fact changes or contra
 moved to a new address, a service was replaced, a decision changed), REPLACE that one: give its number and
 the new fact, which says what is true now. When the exchange shows an existing memory is simply wrong or no
 longer applies and nothing replaces it, FORGET it. Do not add what an existing memory already says.
+Judge that from the existing memories and the notes below only: the assistant saying it remembers or has
+noted something does not make it so.
 
 Reply with JSON only, in this shape (an empty list when there is nothing to keep):
 {"memories": [
