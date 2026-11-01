@@ -518,6 +518,49 @@ class ChatStreamRouteTests(unittest.TestCase):
             watched = job_watch.job_watcher.pending()
         self.assertEqual([(w["job_id"], w["thread_id"], w["command"], w["computer_id"]) for w in watched], [("job-abc", bot["id"], "rsync -a /a /b", "computer-x")])
 
+    def test_after_a_failed_call_the_rest_of_the_round_that_changes_things_is_not_run(self):
+        from app.services.action_gateway import ActionDefinition
+
+        bot = self.storage.get_bots()[0]
+        self.storage.add_message({"id": "m1", "thread_id": bot["id"], "bot_id": bot["id"], "sender": "user", "text": "deploy it"})
+        gateway, _ = self._gateway("allow")
+        ran = []
+
+        async def terminal(call):
+            command = call.arguments.get("command")
+            ran.append(command)
+            return {"computer_id": "computer-x", "exit_code": 1 if command.startswith("scp") else 0, "stdout": "", "stderr": "no such file"}
+
+        gateway.register_action(ActionDefinition(name="computer.terminal_execute", tool="computer", action="terminal_execute", intent="run", risk="external", requires_approval=True), terminal)
+        recorder = {}
+        stream = _scripted_stream(recorder, [
+            # The script's write fails (its arguments are bad): the run and the check after it are not run; a read still is.
+            [{"type": "tool_calls", "calls": [
+                {"id": "c1", "name": "write_file", "arguments": '{"content": "echo hi"}'},
+                {"id": "c2", "name": "computer_terminal_execute", "arguments": '{"command": "sleep 300; sh /workspace/run.sh"}'},
+                {"id": "c3", "name": "shared_folder_list", "arguments": "{}"},
+                {"id": "c4", "name": "computer_terminal_execute", "arguments": '{"command": "cat /workspace/out.log"}'},
+            ]}, {"type": "turn.completed", "ok": True}],
+            # A command that exits non-zero stops the ones after it too.
+            [{"type": "tool_calls", "calls": [
+                {"id": "c5", "name": "computer_terminal_execute", "arguments": '{"command": "scp run.sh host:"}'},
+                {"id": "c6", "name": "computer_terminal_execute", "arguments": '{"command": "ssh host sh run.sh"}'},
+            ]}, {"type": "turn.completed", "ok": True}],
+            [{"type": "content.delta", "delta": "The write failed; fixing it."}, {"type": "turn.completed", "ok": True}],
+        ])
+
+        _, events = self._run_turn(bot["id"], stream=stream, gateway=gateway)
+
+        self.assertEqual(ran, ["scp run.sh host:"])
+        skipped = [e["error"] for e in events if e["type"] == "tool.failed" and "Not run:" in e.get("error", "")]
+        self.assertEqual(len(skipped), 3)
+        self.assertIn("write_file earlier in this round failed", skipped[0])
+        self.assertIn("computer_terminal_execute earlier in this round failed", skipped[2])
+        records = {r["id"]: r for r in self.storage.get_messages(bot["id"])[-1]["raw_payload"]["tool_calls"]}
+        self.assertEqual([records[c]["status"] for c in ("c2", "c4", "c6")], ["skipped"] * 3)
+        self.assertNotEqual(records["c3"]["status"], "skipped")  # a read still runs
+        self.assertIn("Not run", recorder["rounds"][1]["messages"][-1]["content"])
+
     def test_a_text_reply_cut_at_the_output_limit_says_so(self):
         bot = self.storage.get_bots()[0]
         self.storage.add_message(
