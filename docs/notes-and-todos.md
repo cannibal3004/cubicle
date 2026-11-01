@@ -69,6 +69,12 @@ The to-do list is the bot's plan for the job at hand. It adds steps with `todo_a
 through open, doing and done with `todo_update`. You can tick items, reword them, add and remove them in
 the panel; your changes are shown to the bot.
 
+Finished items do not pile up. When the bot marks the last item done it is reminded to keep anything
+worth keeping (in its notes, the work notes, the project log or memory) and clear the list with
+`todo_clear`. Starting a new list when everything is done replaces the old one, and a full list makes
+room by dropping its oldest done items; open items are never removed by themselves. **clear done** in
+the panel does the same for you.
+
 If a reply has to stop before the list is done (the context is full, or the bot stopped making
 progress), the bot is asked to name what is left, so the next reply picks it up.
 

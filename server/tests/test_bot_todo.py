@@ -91,13 +91,42 @@ class BotTodoTests(unittest.TestCase):
             update_todo(self.bot, "t2", storage=self.storage)
         with self.assertRaisesRegex(TodoError, "one or more item texts"):
             add_todo(self.bot, [], self.storage)
-        with self.assertRaisesRegex(TodoError, "remove finished ones"):
+        with self.assertRaisesRegex(TodoError, "none of the rest is done"):
             add_todo(self.bot, ["x"] * (TODO_MAX_ITEMS - 1), self.storage)
         with self.assertRaisesRegex(TodoError, "does not exist"):
             add_todo("nobody", ["x"], self.storage)
 
         replaced = set_todo(self.bot, [{"text": "only this", "state": "doing"}], self.storage)
         self.assertEqual(replaced["items"], [{"id": "t1", "text": "only this", "state": "doing"}])
+
+    def test_finished_items_do_not_pile_up(self):
+        add_todo(self.bot, ["back up", "upgrade", "check"], self.storage)
+        update_todo(self.bot, "t1", state="done", storage=self.storage)
+        partly = update_todo(self.bot, "t2", state="done", storage=self.storage)
+        self.assertNotIn("all_done", partly)
+        done = update_todo(self.bot, "t3", state="done", storage=self.storage)
+        self.assertTrue(done["all_done"])
+        self.assertIn("todo_clear", done["note"])
+        # A new plan on a finished list replaces it; ids go on counting, so an old id never names a new item.
+        fresh = add_todo(self.bot, ["next job"], self.storage)
+        self.assertEqual(([i["id"] for i in fresh["items"]], fresh["cleared_done"]), (["t4"], 3))
+        with self.assertRaisesRegex(TodoError, "no to-do item 't1'"):
+            update_todo(self.bot, "t1", state="done", storage=self.storage)
+        # todo_clear: the done ones go, the rest stay.
+        add_todo(self.bot, ["a", "b"], self.storage)
+        update_todo(self.bot, "t5", state="done", storage=self.storage)
+        update_todo(self.bot, "t6", state="doing", storage=self.storage)
+        cleared = bot_todo.clear_done(self.bot, self.storage)
+        self.assertEqual(([i["id"] for i in cleared["items"]], cleared["cleared"]), (["t4", "t6"], 1))
+        self.assertEqual(add_todo(self.bot, ["c"], self.storage)["added"], ["t7"])
+        # Full: the oldest done items make room; open ones never go.
+        set_todo(self.bot, [{"text": f"step {n}", "state": "done" if n < 3 else "open"} for n in range(TODO_MAX_ITEMS)], self.storage)
+        roomy = add_todo(self.bot, ["one more", "and another"], self.storage)
+        self.assertEqual(roomy["cleared_done"], 2)
+        self.assertEqual(len(roomy["items"]), TODO_MAX_ITEMS)
+        self.assertEqual(roomy["items"][0]["text"], "step 2")
+        call = build_invocation("todo_clear", {}, self.bot)
+        self.assertEqual((call.name, call.arguments), ("todo.clear", {"bot_id": self.bot, "thread_id": self.bot}))
 
     def test_gateway_actions_run_without_approval_and_return_the_whole_list(self):
         gateway = ActionGateway(workspace=WorkspaceService(Path(self.temp_dir.name)), approvals=_Broker(), audit=_Audit())
