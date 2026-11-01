@@ -53,22 +53,33 @@ When a bot reads a skill, its files are copied into the bot's computer under `/w
 and paths in the instructions are relative to that folder, so a skill's scripts run there. The copy is
 replaced when the skill changes. A bot without a computer can still read a skill and its text files.
 
-## Skills a bot writes itself
+## A bot's own skills
 
-A bot also keeps **skills of its own**: how-tos it wrote with `skill_save`, most often after you
-[showed it how](computer.md#showing-the-bot-how) to do something in its computer's browser. They are
-listed under **Skills this bot wrote** in its settings, where you can read and remove them, and the bot
-corrects one when it learns that a step has changed. (These used to be called procedures.)
+A bot also keeps **skills of its own**, listed under **This bot's own skills** in its settings. They
+belong to that bot alone, and they go with it: a teammate you [share](sharing.md) the bot with has
+them too, and no other bot does. Like library skills, they can carry files (scripts, references,
+templates) besides the instructions. A bot's own skill comes from:
 
-Ask a bot to "keep that as a skill" after it worked something out, and it writes one for next time.
+- **The bot itself**, with `skill_save`, most often after you
+  [showed it how](computer.md#showing-the-bot-how) to do something in its computer's browser. Ask a
+  bot to "keep that as a skill" after it worked something out, and it writes one for next time; to
+  keep scripts with it, it names a folder in its computer and the files there become part of the
+  skill. It corrects one when it learns that a step has changed. (These used to be called procedures.)
+- **Installing it for that bot**: paste a link (a GitHub folder or repository, a `.zip`, or a
+  `SKILL.md`) or upload a zip at the bottom of **This bot's own skills**.
+- **Copying a library skill**: **Copy to bot**, next to a skill under **Skills**, makes a copy that is
+  the bot's to change for itself alone.
+
+When a bot's own skill has the same name as a library skill, the bot uses its own, and the library one
+is marked as replaced in that bot's list. Open a skill in the list to read its instructions and files,
+and × removes it (when you save).
 
 ## From a bot to every bot
 
-A skill one bot wrote can serve all of them:
+A skill of one bot's can serve all of them:
 
-- **To library**, next to a skill under **Skills this bot wrote**, moves it into your library: every bot
-  gets it, and it leaves that bot's own list.
+- **To library**, next to a skill under **This bot's own skills**, moves it, files and all, into your
+  library: every bot gets it, and it leaves that bot's own list.
 - A bot can add a skill to your library itself with `skill_publish` (it asks first): ask it to "make
-  that a skill for all the bots". Unlike its own skills, such a skill can carry files: the bot names a
-  folder in its computer, and the scripts, references and templates in it become part of the skill.
-  The library shows who wrote it.
+  that a skill for all the bots". It names a folder in its computer, and the scripts, references and
+  templates in it become part of the skill. The library shows who wrote it.

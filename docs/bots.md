@@ -41,8 +41,9 @@ conversation shows; **Draft some for me** writes a few from the bot's instructio
 - **Automatic memory**: whether the bot keeps the lasting facts of its conversations by itself, and
   what it kept. See [Automatic memory](notes-and-todos.md#automatic-memory).
 - **Skills**: the skills library, with a switch per skill for this bot. See [Skills](skills.md).
-- **Skills this bot wrote**: how-tos the bot wrote itself, most from what you showed it on its
-  computer. It reads one before a task it covers. See [Showing the bot how](computer.md#showing-the-bot-how).
+- **This bot's own skills**: skills for this bot alone, with any files they need: ones it wrote
+  itself (most from what you showed it on its computer), installed here, or copied from the library.
+  They go with the bot when you share it. See [A bot's own skills](skills.md#a-bots-own-skills).
 
 ## Tools
 

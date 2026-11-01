@@ -1048,6 +1048,18 @@ export const deleteBotMemory = (botId, id) => secretsCall(`/bots/${encodeURIComp
 // One of a bot's own skills moved into your library (every bot gets it); returns { skill, bot }.
 export const moveSkillToLibrary = (botId, skillId) =>
   secretsCall('/skills/from-bot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot_id: botId, skill_id: skillId }) });
+// Skills for one bot alone, files and all; each returns { installed, bot }.
+export const installBotSkill = (botId, url) =>
+  secretsCall(`/bots/${encodeURIComponent(botId)}/skills/install`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
+export function uploadBotSkill(botId, file) {
+  const form = new FormData();
+  form.append('file', file);
+  return secretsCall(`/bots/${encodeURIComponent(botId)}/skills/upload`, { method: 'POST', body: form });
+}
+export const copySkillToBot = (botId, skillId) =>
+  secretsCall(`/bots/${encodeURIComponent(botId)}/skills/from-library`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ skill_id: skillId }) });
+export const fetchBotSkillFile = (botId, skillId, path) =>
+  secretsCall(`/bots/${encodeURIComponent(botId)}/skills/${encodeURIComponent(skillId)}/files/${path.split('/').map(encodeURIComponent).join('/')}`);
 
 export async function fetchBotSecrets(botId) {
   return secretsCall(`/bots/${encodeURIComponent(botId)}/secrets`);

@@ -472,15 +472,20 @@ SKILL_TOOLS: List[ToolSpec] = [
         description=(
             "Keep a skill of your own: how to do a kind of task, written from what the user showed you or what you worked out, so you "
             "can do it again. Numbered steps in your own words; for work in the computer's browser, each naming the page or URL and the "
-            "exact label of the control, with what to type or choose. Leave out passwords. Saving under an existing name replaces it."
+            "exact label of the control, with what to type or choose. Leave out passwords. Saving under an existing name replaces it. "
+            "A skill can carry scripts, templates or references: give 'folder', a folder in your computer, and its files become part of "
+            "the skill, with paths in the instructions relative to it (a SKILL.md there is used when you give no instructions); without "
+            "a folder, the files it already has stay. Your own skills are yours alone (and go with you when you are shared); "
+            "skill_publish is for the user's library, which every bot of theirs gets."
         ),
         parameters=_obj(
             {
                 "name": {"type": "string", "description": "Short, says what it achieves (e.g. 'File a PTO request in Workday')"},
                 "description": {"type": "string", "description": "When to use it, in a line"},
-                "instructions": {"type": "string", "description": "The numbered steps"},
+                "instructions": {"type": "string", "description": "The numbered steps (optional with a folder that has a SKILL.md)"},
+                "folder": {"type": "string", "description": "A folder in your computer, e.g. /workspace/skills/report-tools, whose files become the skill's (optional)"},
             },
-            ["name", "instructions"],
+            ["name"],
         ),
         group="skills",
         needs_approval=False,
@@ -1726,13 +1731,18 @@ def _build_invocation(
     # procedure_save/read: the former names, as a call from an older conversation or habit uses them.
     if name in ("skill_save", "procedure_save"):
         title = _string({**arguments, "name": arguments.get("name") or arguments.get("title")}, "name", required=True, max_len=200)
-        steps = _string({**arguments, "instructions": arguments.get("instructions") or arguments.get("steps")}, "instructions", required=True, max_len=20_000)
+        folder = _string(arguments, "folder", max_len=500) or ""
+        steps = _string({**arguments, "instructions": arguments.get("instructions") or arguments.get("steps")}, "instructions",
+                        required=not folder, max_len=20_000) or ""
         description = _string(arguments, "description", max_len=1000) or ""
+        payload = {"bot_id": bot_id, "name": title, "description": description, "instructions": steps}
+        if folder:
+            payload["folder"] = folder
         return ActionInvocation(
             name="skill.save",
-            arguments={"bot_id": bot_id, "name": title, "description": description, "instructions": steps},
+            arguments=payload,
             target={"bot_id": bot_id},
-            preview=f"Save the skill {title!r} for {bot_id} ({len(steps)} characters)",
+            preview=f"Save the skill {title!r} for {bot_id}" + (f" with the files of {folder}" if folder else f" ({len(steps)} characters)"),
         )
     if name == "skill_publish":
         title = _string(arguments, "name", required=True, max_len=64)

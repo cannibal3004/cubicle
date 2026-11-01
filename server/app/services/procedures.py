@@ -2,7 +2,12 @@
 
 These were called procedures, and are still kept under that name on the bot
 record (`procedures`: id, title, description, steps), so they survive
-compactions and conversations. They are skills like the library's (see
+compactions and conversations. A skill can have files besides its
+instructions (scripts, templates, references), like a library skill: they
+are kept on disk under DATA_DIR/skills/<owner>/bots/<bot id>/<skill id>/,
+listed on the record as `files`, and `version` changes with every save so
+the copy in the bot's computer is refreshed. They go wherever the bot goes:
+a teammate using a shared bot gets them too, and no one else does. They are skills like the library's (see
 services/skills): every turn's tools prompt lists them, skill_read brings
 one back in full and skill_save writes one; when the server has the
 retrieval stack, the ones that match the message are retrieved into the
@@ -16,8 +21,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import shutil
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.services import retrieval
@@ -30,7 +37,9 @@ KIND = "procedure"
 MAX_PROCEDURES = 60
 TITLE_MAX = 120
 DESCRIPTION_MAX = 300
-STEPS_MAX = 12_000
+STEPS_MAX = 12_000  # what a bot writes itself
+IMPORTED_STEPS_MAX = 60_000  # a skill installed into the bot or copied from the library
+SOURCE_KEYS = ("recording_id", "steps", "kind", "url", "name", "path", "skill_id")
 _SPACES = re.compile(r"\s+")
 
 
@@ -56,21 +65,26 @@ def clean_description(value: Any) -> str:
     return _SPACES.sub(" ", str(value or "")).strip()[:DESCRIPTION_MAX]
 
 
-def clean_steps(value: Any) -> str:
+def clean_steps(value: Any, limit: int = STEPS_MAX) -> str:
     if not isinstance(value, str):
         raise ProcedureError("The instructions must be text.")
     steps = value.replace("\r\n", "\n").strip()
     if not steps:
         raise ProcedureError("The instructions cannot be empty.")
-    if len(steps) > STEPS_MAX:
-        raise ProcedureError(f"A skill you write is limited to {STEPS_MAX} characters; this is {len(steps)}. Keep it to what is needed to repeat the task.")
+    if len(steps) > limit:
+        if limit == STEPS_MAX:
+            raise ProcedureError(f"A skill you write is limited to {STEPS_MAX} characters; this is {len(steps)}. Keep it to what is needed to repeat "
+                                 "the task, and put long reference material in files of the skill (skill_save with a folder).")
+        raise ProcedureError(f"A bot's own skill is limited to {limit} characters of instructions; this one has {len(steps)}. Install it in the skills library instead.")
     return steps
 
 
-def clean_procedures(value: Any) -> List[Dict[str, Any]]:
-    """The editor's list, kept to the stored shape and limits."""
+def clean_procedures(value: Any, existing: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """The editor's list, kept to the stored shape and limits. A skill's files are the server's
+    to know: they are carried over from the stored skill of the same id, never taken from the list."""
     if not isinstance(value, list):
         raise ProcedureError("procedures must be a list.")
+    stored = {str(p.get("id")): p for p in existing or [] if isinstance(p, dict)}
     cleaned: List[Dict[str, Any]] = []
     for item in value:
         if not isinstance(item, dict):
@@ -78,13 +92,19 @@ def clean_procedures(value: Any) -> List[Dict[str, Any]]:
         entry = {
             "id": str(item.get("id") or "").strip() or f"proc-{uuid.uuid4().hex[:8]}",
             "title": clean_title(item.get("title")),
-            "steps": clean_steps(item.get("steps")),
+            "steps": clean_steps(item.get("steps"), IMPORTED_STEPS_MAX),
             "description": clean_description(item.get("description")),
             "created_at": str(item.get("created_at") or datetime.now().isoformat()),
             "updated_at": str(item.get("updated_at") or datetime.now().isoformat()),
         }
         if isinstance(item.get("source"), dict):
-            entry["source"] = {k: item["source"][k] for k in ("recording_id", "steps") if k in item["source"]}
+            entry["source"] = {k: item["source"][k] for k in SOURCE_KEYS if k in item["source"]}
+        before = stored.get(entry["id"]) or {}
+        for key in ("files", "version"):
+            if before.get(key):
+                entry[key] = before[key]
+        if before and any(before.get(k) != entry[k] for k in ("steps", "title", "description")):
+            entry["version"] = uuid.uuid4().hex[:8]  # the copy in the bot's computer is refreshed
         if any(e["id"] == entry["id"] for e in cleaned):
             raise ProcedureError("Skill ids must be unique.")
         cleaned.append(entry)
@@ -121,12 +141,16 @@ def find_procedure(bot_id: str, title: str, storage: Optional[StorageService] = 
 
 
 def save_procedure(
-    bot_id: str, title: Any, steps: Any, *, description: Any = None, source: Optional[Dict[str, Any]] = None, storage: Optional[StorageService] = None
+    bot_id: str, title: Any, steps: Any, *, description: Any = None, source: Optional[Dict[str, Any]] = None,
+    files: Optional[Dict[str, bytes]] = None, limit: int = STEPS_MAX, storage: Optional[StorageService] = None
 ) -> Dict[str, Any]:
-    """Add one of the bot's own skills, or replace the one with the same title. Returns it as stored."""
+    """Add one of the bot's own skills, or replace the one with the same title. Returns it as stored.
+
+    `files` (by path; a SKILL.md among them is left out) replaces the skill's other files; None keeps
+    the ones it has."""
     storage = storage or current_storage()
     title = clean_title(title)
-    steps = clean_steps(steps)
+    steps = clean_steps(steps, limit)
     description = clean_description(description)
     bots = storage.get_bots()
     bot = _bot(bots, bot_id)
@@ -138,15 +162,22 @@ def save_procedure(
         if description:
             existing["description"] = description
         if source:
-            existing["source"] = dict(source)
+            existing["source"] = {k: source[k] for k in SOURCE_KEYS if k in source}
         saved = existing
     else:
         if len(procedures) >= MAX_PROCEDURES:
             raise ProcedureError(f"This bot already keeps {MAX_PROCEDURES} skills of its own; delete one in the bot editor first.")
         saved = {"id": f"proc-{uuid.uuid4().hex[:8]}", "title": title, "description": description, "steps": steps, "created_at": now, "updated_at": now}
         if source:
-            saved["source"] = dict(source)
+            saved["source"] = {k: source[k] for k in SOURCE_KEYS if k in source}
         procedures.append(saved)
+    if files is not None:
+        listing = write_files(bot_id, saved["id"], files, storage)
+        if listing:
+            saved["files"] = listing
+        else:
+            saved.pop("files", None)
+    saved["version"] = uuid.uuid4().hex[:8]
     bot["procedures"] = procedures
     storage.save_bots(bots)
     schedule_index(bot_id, saved)
@@ -164,7 +195,79 @@ def delete_procedure(bot_id: str, procedure_id: str, storage: Optional[StorageSe
     bot["procedures"] = after
     storage.save_bots(bots)
     schedule_unindex(bot_id, procedure_id)
+    remove_files(bot_id, procedure_id, storage)
     return True
+
+
+# ---- a skill's files ---------------------------------------------------------------------------
+
+MAX_FILES = 300
+MAX_FILE_BYTES = 10 * 1024 * 1024
+MAX_SKILL_BYTES = 25 * 1024 * 1024
+_UNSAFE = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def bot_folder(bot_id: str, storage: Optional[StorageService] = None) -> Path:
+    storage = storage or current_storage()
+    return Path(storage.data_dir) / "skills" / _UNSAFE.sub("-", storage.owner_id) / "bots" / _UNSAFE.sub("-", bot_id)
+
+
+def folder(bot_id: str, procedure_id: str, storage: Optional[StorageService] = None) -> Path:
+    return bot_folder(bot_id, storage) / _UNSAFE.sub("-", procedure_id)
+
+
+def write_files(bot_id: str, procedure_id: str, files: Dict[str, bytes], storage: Optional[StorageService] = None) -> List[Dict[str, Any]]:
+    """The skill's files (SKILL.md left out), swapped in whole; their listing ([] when none)."""
+    files = {path: data for path, data in files.items() if path.lower() != "skill.md"}
+    if len(files) > MAX_FILES:
+        raise ProcedureError(f"A skill has at most {MAX_FILES} files.")
+    if any(len(data) > MAX_FILE_BYTES for data in files.values()) or sum(len(d) for d in files.values()) > MAX_SKILL_BYTES:
+        raise ProcedureError(f"A skill's files are limited to {MAX_FILE_BYTES // (1024 * 1024)} MB each and {MAX_SKILL_BYTES // (1024 * 1024)} MB in all.")
+    target = folder(bot_id, procedure_id, storage)
+    if not files:
+        shutil.rmtree(target, ignore_errors=True)
+        return []
+    staging = target.with_name(f"{target.name}.new-{uuid.uuid4().hex[:6]}")
+    try:
+        for path, data in files.items():
+            destination = (staging / path).resolve()
+            if staging.resolve() not in destination.parents:
+                raise ProcedureError(f"{path} is not a path inside the skill.")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(data)
+        if target.exists():
+            shutil.rmtree(target)
+        staging.rename(target)
+    except (OSError, ProcedureError) as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        if isinstance(exc, ProcedureError):
+            raise
+        raise ProcedureError(f"Could not store the skill's files: {exc}") from exc
+    return [{"path": path, "size": len(data)} for path, data in sorted(files.items())]
+
+
+def files_of(bot_id: str, procedure: Dict[str, Any], storage: Optional[StorageService] = None) -> Dict[str, bytes]:
+    """The skill's files besides its instructions, by path."""
+    base = folder(bot_id, str(procedure.get("id") or ""), storage)
+    if not procedure.get("files") or not base.is_dir():
+        return {}
+    return {path.relative_to(base).as_posix(): path.read_bytes() for path in base.rglob("*") if path.is_file()}
+
+
+def remove_files(bot_id: str, procedure_id: str, storage: Optional[StorageService] = None) -> None:
+    shutil.rmtree(folder(bot_id, procedure_id, storage), ignore_errors=True)
+
+
+def remove_all_files(bot_id: str, storage: Optional[StorageService] = None) -> None:
+    shutil.rmtree(bot_folder(bot_id, storage), ignore_errors=True)
+
+
+def sync_files(bot_id: str, before: List[Dict[str, Any]], after: List[Dict[str, Any]]) -> None:
+    """After the editor replaced the list: the files of skills that went go too."""
+    kept = {str(p.get("id")) for p in after if isinstance(p, dict)}
+    for procedure in before:
+        if isinstance(procedure, dict) and str(procedure.get("id")) not in kept:
+            remove_files(bot_id, str(procedure.get("id")))
 
 
 def sync_index(bot_id: str, before: List[Dict[str, Any]], after: List[Dict[str, Any]]) -> None:

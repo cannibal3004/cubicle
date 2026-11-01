@@ -30,6 +30,10 @@ import {
   draftBotSuggestions,
   fetchSkills,
   moveSkillToLibrary,
+  installBotSkill,
+  uploadBotSkill,
+  copySkillToBot,
+  fetchBotSkillFile,
   fetchBotSecrets,
   setBotSecret,
   deleteBotSecret,
@@ -220,6 +224,43 @@ export default function BotSettingsPage({
       setMoveNote(err?.message || 'Could not move the skill.');
     } finally {
       setMoving('');
+    }
+  };
+  // Skills for this bot alone: installed from a link or a zip, or copied from the library. They are
+  // saved at once (files and all); an unsaved edit of the list keeps them too.
+  const [skillLink, setSkillLink] = useState('');
+  const [skillBusy, setSkillBusy] = useState('');
+  const [skillNote, setSkillNote] = useState('');
+  const [openFile, setOpenFile] = useState(null); // { skill, path, text }
+  const skillUploadRef = useRef(null);
+  const addOwnSkills = async (label, request) => {
+    setSkillBusy(label);
+    setSkillNote('');
+    try {
+      const result = await request();
+      onBotChanged?.(result.bot);
+      const added = result.installed || [];
+      const ids = new Set(added.map((p) => p.id));
+      setEdits((current) => (current.procedures ? { ...current, procedures: [...current.procedures.filter((p) => !ids.has(p.id)), ...added] } : current));
+      setSkillNote(added.length ? `Added to this bot: ${added.map((p) => p.title).join(', ')}.` : 'Nothing was added.');
+      return true;
+    } catch (err) {
+      setSkillNote(err?.message || 'Could not add the skill.');
+      return false;
+    } finally {
+      setSkillBusy('');
+    }
+  };
+  const showSkillFile = async (procedure, path) => {
+    if (openFile?.skill === procedure.id && openFile?.path === path) {
+      setOpenFile(null);
+      return;
+    }
+    try {
+      const data = await fetchBotSkillFile(botId, procedure.id, path);
+      setOpenFile({ skill: procedure.id, path, text: data.text });
+    } catch (err) {
+      setOpenFile({ skill: procedure.id, path, text: err?.message || 'Could not read the file.' });
     }
   };
   const [newRule, setNewRule] = useState('');
@@ -632,17 +673,32 @@ export default function BotSettingsPage({
             {show('notes') && isEdit && (
               <Card
                 title={`Skills${librarySkills.length ? ` · ${librarySkills.filter((s) => values.skill_settings[s.id] !== false).length} of ${librarySkills.length} on` : ''}`}
-                help="Instructions for kinds of tasks, from the skills library (App Settings → Skills). The bot sees each one's name and description and reads it when a task fits; switch off what this bot should not use."
+                help="Instructions for kinds of tasks, from the skills library (App Settings → Skills). The bot sees each one's name and description and reads it when a task fits; switch off what this bot should not use. Copy one to make it this bot's own, to change for this bot alone."
               >
                 <div className="space-y-1.5">
                   {librarySkills.map((skill) => {
                     const on = values.skill_settings[skill.id] !== false;
+                    const replaced = values.procedures.some((p) => String(p.title || '').toLowerCase() === skill.name.toLowerCase());
                     return (
                       <div key={skill.id} className="flex items-start gap-3 rounded-xl border border-[#2e2e34] bg-[#141417] px-3 py-2">
                         <div className="min-w-0 flex-1">
-                          <div className={`text-xs truncate ${on ? 'text-zinc-100' : 'text-zinc-500'}`}>{skill.name}</div>
+                          <div className={`text-xs truncate ${on && !replaced ? 'text-zinc-100' : 'text-zinc-500'}`}>
+                            {skill.name}
+                            {replaced && <span className="text-[10px] text-amber-200/80"> · this bot&apos;s own skill of that name is used instead</span>}
+                          </div>
                           <div className="text-[11px] text-zinc-500 leading-snug line-clamp-2" title={skill.description}>{skill.description}</div>
                         </div>
+                        {!replaced && !sharedWithMe && (
+                          <button
+                            type="button"
+                            onClick={() => addOwnSkills(`copy:${skill.id}`, () => copySkillToBot(botId, skill.id))}
+                            disabled={!!skillBusy}
+                            className="text-[10px] text-zinc-500 hover:text-cyan-200 shrink-0 self-center disabled:opacity-40"
+                            title="Copy it, files and all, into this bot's own skills: change it there for this bot alone"
+                          >
+                            {skillBusy === `copy:${skill.id}` ? 'Copying…' : 'Copy to bot'}
+                          </button>
+                        )}
                         <Switch
                           on={on}
                           onChange={(next) => {
@@ -662,8 +718,8 @@ export default function BotSettingsPage({
             )}
             {show('notes') && isEdit && (
               <Card
-                title={`Skills this bot wrote${values.procedures.length ? ` · ${values.procedures.length}` : ''}`}
-                help="How-tos the bot wrote itself, most from what you showed it on its computer (Show the bot, on the computer page). It reads one before a task it covers, and keeps them up to date."
+                title={`This bot's own skills${values.procedures.length ? ` · ${values.procedures.length}` : ''}`}
+                help="Skills that belong to this bot alone: ones it wrote itself (most from what you showed it on its computer), installed here, or copied from the library, with any scripts and files they need. They go with the bot when you share it, and one named like a library skill is used instead of it."
               >
                 <div className="space-y-1.5">
                   {values.procedures.map((procedure) => (
@@ -678,6 +734,11 @@ export default function BotSettingsPage({
                           {procedure.title}
                           {procedure.description && <span className="text-zinc-500"> · {procedure.description}</span>}
                         </button>
+                        {procedure.files?.length > 0 && (
+                          <span className="text-[10px] text-cyan-300/70 shrink-0" title={procedure.files.map((f) => f.path).join('\n')}>
+                            {procedure.files.length} file{procedure.files.length === 1 ? '' : 's'}
+                          </span>
+                        )}
                         <span className="text-[10px] text-zinc-600 font-mono shrink-0">{(procedure.updated_at || procedure.created_at || '').slice(0, 10)}</span>
                         {moving === procedure.id ? (
                           <span className="flex items-center gap-1 shrink-0 text-[10px]">
@@ -710,12 +771,72 @@ export default function BotSettingsPage({
                         </button>
                       </div>
                       {openProcedure === procedure.id && (
-                        <pre className="px-3 pb-2.5 max-h-72 overflow-auto text-[11px] font-mono text-zinc-300 whitespace-pre-wrap">{procedure.steps}</pre>
+                        <>
+                          <pre className="px-3 pb-2.5 max-h-72 overflow-auto text-[11px] font-mono text-zinc-300 whitespace-pre-wrap">{procedure.steps}</pre>
+                          {procedure.files?.length > 0 && (
+                            <div className="px-3 pb-2.5 space-y-1">
+                              <div className="flex flex-wrap gap-1">
+                                {procedure.files.map((file) => (
+                                  <button
+                                    key={file.path}
+                                    type="button"
+                                    onClick={() => showSkillFile(procedure, file.path)}
+                                    className={`px-1.5 py-0.5 rounded font-mono text-[10px] border ${openFile?.skill === procedure.id && openFile?.path === file.path ? 'border-cyan-400/50 text-cyan-200' : 'border-[#2e2e34] text-zinc-400 hover:text-white'}`}
+                                  >
+                                    {file.path}
+                                  </button>
+                                ))}
+                              </div>
+                              {openFile?.skill === procedure.id && (
+                                <pre className="max-h-72 overflow-auto rounded-lg bg-[#0f0f11] border border-[#26262b] p-2 text-[11px] font-mono text-zinc-300 whitespace-pre-wrap">{openFile.text}</pre>
+                              )}
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   ))}
                   {!values.procedures.length && <span className="text-[11px] text-zinc-600">None yet.</span>}
                   {moveNote && <p className="text-[11px] text-amber-200/90">{moveNote}</p>}
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      value={skillLink}
+                      onChange={(e) => setSkillLink(e.target.value)}
+                      placeholder="Install for this bot: a GitHub folder, a .zip or a SKILL.md link"
+                      className="flex-1 min-w-0 bg-[#1b1b1f] border border-[#2e2e34] rounded-lg px-2.5 py-1.5 text-[11px] text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-400"
+                    />
+                    <button
+                      type="button"
+                      disabled={!skillLink.trim() || !!skillBusy}
+                      onClick={async () => {
+                        if (await addOwnSkills('link', () => installBotSkill(botId, skillLink.trim()))) setSkillLink('');
+                      }}
+                      className="px-2.5 py-1.5 rounded-lg text-[11px] bg-zinc-100 text-black hover:bg-white disabled:opacity-40 shrink-0"
+                    >
+                      {skillBusy === 'link' ? 'Installing…' : 'Install'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!!skillBusy}
+                      onClick={() => skillUploadRef.current?.click()}
+                      className="px-2.5 py-1.5 rounded-lg text-[11px] border border-[#2e2e34] text-zinc-300 hover:text-white disabled:opacity-40 shrink-0"
+                      title="A zip of a skill folder, or a SKILL.md"
+                    >
+                      {skillBusy === 'upload' ? 'Uploading…' : 'Upload'}
+                    </button>
+                    <input
+                      ref={skillUploadRef}
+                      type="file"
+                      accept=".zip,.md"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (file) addOwnSkills('upload', () => uploadBotSkill(botId, file));
+                      }}
+                    />
+                  </div>
+                  {skillNote && <p className="text-[11px] text-cyan-200/90">{skillNote}</p>}
                 </div>
               </Card>
             )}

@@ -13,6 +13,7 @@ from app.routers import help as help_router
 from app.routers import skills as skills_router
 from app.routers import memories as memories_router
 from app.routers import previews as previews_router
+from app.routers import bot_skills as bot_skills_router
 from app.services.mcp_service import mcp_manager
 from app.services.scheduler import scheduler
 from app.services.job_watch import job_watcher
@@ -138,6 +139,7 @@ app.include_router(mcp.router)
 app.include_router(skills_router.router)
 app.include_router(memories_router.router)
 app.include_router(previews_router.router)
+app.include_router(bot_skills_router.router)
 
 
 @app.get("/api/v1/health")
