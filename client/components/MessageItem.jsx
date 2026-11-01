@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { FiX, FiChevronRight, FiTool, FiZap, FiShield, FiEdit2, FiCopy, FiCheck } from 'react-icons/fi';
 import FileCard from './FileCard';
+import PreviewCard from './PreviewCard';
 import { apiUrl } from '../lib/api';
 import { useDisplayPrefs } from '../lib/displayPrefs';
 
@@ -684,7 +685,9 @@ function MessageItem({ message, botId, onEdit }) {
           {attachments.length > 0 && (
             <div className="space-y-1.5 mb-1.5 min-w-[240px]">
               {attachments.map((attachment) => (
-                <FileCard key={`${attachment.source}:${attachment.path}`} attachment={attachment} botId={botId || message.bot_id} />
+                attachment.kind === 'preview'
+                  ? <PreviewCard key={`preview:${attachment.path}`} attachment={attachment} />
+                  : <FileCard key={`${attachment.source}:${attachment.path}`} attachment={attachment} botId={botId || message.bot_id} />
               ))}
             </div>
           )}
@@ -878,7 +881,9 @@ function MessageItem({ message, botId, onEdit }) {
         {attachments.length > 0 && (
           <div className="mt-3 space-y-2">
             {attachments.map((attachment) => (
-              <FileCard key={`${attachment.source}:${attachment.path}`} attachment={attachment} botId={botId || message.bot_id} />
+              attachment.kind === 'preview'
+                ? <PreviewCard key={`preview:${attachment.path}`} attachment={attachment} />
+                : <FileCard key={`${attachment.source}:${attachment.path}`} attachment={attachment} botId={botId || message.bot_id} />
             ))}
           </div>
         )}

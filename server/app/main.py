@@ -12,6 +12,7 @@ from app.routers import sharing as sharing_router
 from app.routers import help as help_router
 from app.routers import skills as skills_router
 from app.routers import memories as memories_router
+from app.routers import previews as previews_router
 from app.services.mcp_service import mcp_manager
 from app.services.scheduler import scheduler
 from app.services.job_watch import job_watcher
@@ -83,6 +84,10 @@ async def require_authentication(request: Request, call_next):
     ):
         return await call_next(request)
 
+    # A page with an opaque origin (a bot's web preview runs sandboxed on Cubicle's address) never
+    # acts as the person viewing it, even in a browser that would send their cookie along.
+    if request.headers.get("origin") == "null" and not request.headers.get("authorization"):
+        return JSONResponse({"detail": "Requests from a sandboxed page are not accepted."}, status_code=403)
     user = auth_service.authenticate_request(request)
     if not user:
         return JSONResponse(
@@ -132,6 +137,7 @@ app.include_router(schedules.router)
 app.include_router(mcp.router)
 app.include_router(skills_router.router)
 app.include_router(memories_router.router)
+app.include_router(previews_router.router)
 
 
 @app.get("/api/v1/health")

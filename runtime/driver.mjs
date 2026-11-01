@@ -14,7 +14,7 @@
 import net from 'node:net';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createServer } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import { createWriteStream, mkdirSync } from 'node:fs';
 import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -1009,6 +1009,12 @@ async function handle(request, response) {
     return;
   }
 
+  const preview = previewRoute(request.url);
+  if (preview) {
+    await relayPreview(request, response, preview);
+    return;
+  }
+
   try {
     const body = request.method === 'POST' ? await readBody(request) : {};
     if (request.method === 'GET' && request.url === '/mcp/servers') {
@@ -1128,7 +1134,100 @@ function bridgeVnc(socket) {
   socket.on('error', () => tcp.destroy());
 }
 
+// ---- web previews ----------------------------------------------------------------
+// /preview/<port>/<path> relays to a web server the bot runs in this computer, on
+// loopback, so one that listens only on localhost (most dev servers) works too. The
+// host API puts it at a temporary address in Cubicle after checking who may see it.
+
+const PREVIEW_ROUTE = /^\/preview\/(\d{1,5})(\/.*)?$/s;
+const previewAddresses = new Map(); // port -> { address, at }
+
+function previewRoute(url) {
+  const match = PREVIEW_ROUTE.exec(url || '');
+  if (!match) return null;
+  const target = Number(match[1]);
+  if (!target || target > 65535 || target === port || target === vncPort) return null;
+  return { port: target, path: match[2] || '/' };
+}
+
+// The loopback address the server listens on: IPv4, or IPv6 for one bound to "localhost"
+// that resolved to ::1. Remembered for a little while.
+async function previewAddress(target) {
+  const known = previewAddresses.get(target);
+  if (known && Date.now() - known.at < 10_000) return known.address;
+  for (const address of ['127.0.0.1', '::1']) {
+    const open = await new Promise((resolve) => {
+      const probe = net.connect({ port: target, host: address });
+      probe.setTimeout(2000, () => { probe.destroy(); resolve(false); });
+      probe.once('connect', () => { probe.destroy(); resolve(true); });
+      probe.once('error', () => resolve(false));
+    });
+    if (open) {
+      previewAddresses.set(target, { address, at: Date.now() });
+      return address;
+    }
+  }
+  previewAddresses.delete(target);
+  return null;
+}
+
+function previewHeaders(rawHeaders, target) {
+  const headers = {};
+  for (let i = 0; i < rawHeaders.length; i += 2) {
+    const name = rawHeaders[i].toLowerCase();
+    if (name === 'x-computer-token' || name === 'host') continue;
+    headers[name] = headers[name] ? `${headers[name]}, ${rawHeaders[i + 1]}` : rawHeaders[i + 1];
+  }
+  headers.host = `localhost:${target}`; // dev servers check the Host they are reached by
+  return headers;
+}
+
+async function relayPreview(request, response, { port: target, path: upstreamPath }) {
+  const address = await previewAddress(target);
+  if (!address) {
+    json(response, 502, { error: `Nothing is listening on port ${target} in the computer.`, preview_unreachable: true });
+    request.resume();
+    return;
+  }
+  const upstream = httpRequest(
+    { host: address, port: target, method: request.method, path: upstreamPath, headers: previewHeaders(request.rawHeaders, target) },
+    (reply) => {
+      response.writeHead(reply.statusCode || 502, reply.headers);
+      reply.pipe(response);
+    },
+  );
+  upstream.on('error', (error) => {
+    if (!response.headersSent) json(response, 502, { error: `Port ${target} in the computer did not answer: ${error.code || error.message}`, preview_unreachable: true });
+    else response.destroy();
+  });
+  request.pipe(upstream);
+}
+
+async function relayPreviewUpgrade(request, socket, head, { port: target, path: upstreamPath }) {
+  const address = await previewAddress(target);
+  if (!address) {
+    socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  const upstream = net.connect({ port: target, host: address }, () => {
+    const headers = previewHeaders(request.rawHeaders, target);
+    const lines = Object.entries(headers).map(([name, value]) => `${name}: ${value}`);
+    upstream.write(`${request.method} ${upstreamPath} HTTP/1.1\r\n${lines.join('\r\n')}\r\n\r\n`);
+    if (head && head.length) upstream.write(head);
+    socket.pipe(upstream);
+    upstream.pipe(socket);
+  });
+  upstream.on('error', () => socket.destroy());
+  socket.on('error', () => upstream.destroy());
+}
+
 function handleUpgrade(request, socket, head) {
+  const preview = authorized(request) ? previewRoute(request.url) : null;
+  if (preview) {
+    relayPreviewUpgrade(request, socket, head, preview);
+    return;
+  }
   const url = (request.url || '').split('?')[0];
   if (!authorized(request) || url !== '/vnc') {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');

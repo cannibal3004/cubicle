@@ -125,6 +125,35 @@ COMPUTER_TOOLS: List[ToolSpec] = [
         needs_approval=False,
     ),
     ToolSpec(
+        name="computer_preview",
+        description=(
+            "Show the user a web server running in your computer (a page or game you built, a small app): it gets a temporary "
+            "address in Cubicle and a card in the chat to open it, for anyone who can use you. Start the server first, in the "
+            "background so it keeps running (python3 -m http.server 8000 for static files works). The app is served under the "
+            "preview's path with that prefix removed, so pages must load their files and call their APIs by relative URLs "
+            "(./app.js, not /app.js). The result gives the address and warns about anything that will not load."
+        ),
+        parameters=_obj(
+            {
+                "port": {"type": "integer", "description": "The port your server listens on in your computer"},
+                "title": {"type": "string", "description": "What it is, for the card (optional)"},
+                "path": {"type": "string", "description": "The page to open first, e.g. game.html (optional; default the root)"},
+                "keep_prefix": {"type": "boolean", "description": "For an app set up to live under the preview's path: pass that path on unchanged (optional)"},
+                "hours": {"type": "number", "description": "How long it stays open, at most 72 (optional; default 8)"},
+            },
+            ["port"],
+        ),
+        group="computer",
+        needs_approval=False,
+    ),
+    ToolSpec(
+        name="computer_preview_close",
+        description="End a preview you opened with computer_preview (its address stops working); without a port, all of yours.",
+        parameters=_obj({"port": {"type": "integer", "description": "The port of the preview to end (optional)"}}),
+        group="computer",
+        needs_approval=False,
+    ),
+    ToolSpec(
         name="computer_screenshot",
         description="Capture the sandbox browser screen as an image so you can see the current page. Use it after navigating or sending input.",
         parameters=_obj({}),
@@ -990,7 +1019,9 @@ def describe_tools(
             "computer_install_packages installs other apt packages (the shell has no sudo), e.g. build-essential for a C compiler, or pandoc; "
             "pip in a venv, npm, cargo and the like work from the shell. "
             "/workspace and the home directory persist between starts, so installed tools and venvs stay; /tmp is wiped. "
-            "The user can watch the same desktop live and take control of it; when a step needs a human, call computer_request_takeover."
+            "The user can watch the same desktop live and take control of it; when a step needs a human, call computer_request_takeover. "
+            "To show the user a web page, game or app you serve from your computer, open it with computer_preview rather than "
+            "describing it or taking screenshots of it."
         )
         if secret_names:
             listed = ", ".join(secret_names)
@@ -1289,6 +1320,29 @@ def _build_invocation(
         return _computer_invocation("start", bot_id, {}, f"Start the computer for {bot_id}")
     if name == "computer_screenshot":
         return _computer_invocation("screenshot", bot_id, {}, f"Capture the computer screen for {bot_id}")
+    if name == "computer_preview":
+        port = arguments.get("port")
+        if isinstance(port, str) and port.strip().isdigit():
+            port = int(port.strip())
+        if not isinstance(port, int) or isinstance(port, bool):
+            raise ToolCallError("'port' is the port number your server listens on.")
+        payload: Dict[str, Any] = {"bot_id": bot_id, "port": port}
+        for field, limit in (("title", 120), ("path", 500)):
+            value = _string(arguments, field, max_len=limit)
+            if value:
+                payload[field] = value
+        if arguments.get("keep_prefix") is True:
+            payload["keep_prefix"] = True
+        if isinstance(arguments.get("hours"), (int, float)) and not isinstance(arguments.get("hours"), bool):
+            payload["hours"] = float(arguments["hours"])
+        return ActionInvocation(name="preview.open", arguments=payload, target={"bot_id": bot_id}, preview=f"Open a preview of port {port} in the computer for {bot_id}")
+    if name == "computer_preview_close":
+        port = arguments.get("port")
+        payload = {"bot_id": bot_id}
+        if port not in (None, ""):
+            payload["port"] = port
+        return ActionInvocation(name="preview.close", arguments=payload, target={"bot_id": bot_id},
+                                preview=f"Close the preview of port {port} for {bot_id}" if port else f"Close the previews of {bot_id}")
     if name == "computer_request_takeover":
         reason = _string(arguments, "reason", required=True, max_len=500).strip()
         if not reason:
