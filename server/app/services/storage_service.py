@@ -51,6 +51,7 @@ SETTING_KEYS = {
     "rerank_model",
     "tool_selection_max",
     "title_model",
+    "deleted_schedules",
 }
 # App-wide keys live under the system owner and only admins change them;
 # every other key is personal to the account that saved it.
@@ -72,6 +73,7 @@ APP_SETTING_KEYS = {
     "rerank_model",
     "tool_selection_max",
     "title_model",
+    "deleted_schedules",
     "mcp_servers",
     "skills",
     "memory_model",

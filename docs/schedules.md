@@ -18,6 +18,10 @@ Times are in the server's timezone, shown on the page. You can pause a schedule,
 it. A bot can also make and remove schedules itself (it asks first), so "remind me tomorrow at nine" is
 something you can just say.
 
+A bot that looks for a schedule removed elsewhere (by you, or by itself in another conversation) is told
+who removed it, when, and from which conversation, and its list of schedules shows the ones removed in
+the last week.
+
 ## When it runs
 
 ![A scheduled run](images/scheduled-run.png)

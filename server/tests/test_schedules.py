@@ -145,7 +145,7 @@ class ScheduleRecordTests(unittest.TestCase):
         gone = schedule_service.delete_schedule(created["id"], storage=self.storage)
         self.assertEqual(gone["id"], created["id"])
         self.assertEqual(schedule_service.list_for_bot(self.bot, self.storage), [])
-        with self.assertRaisesRegex(ScheduleError, "no schedule"):
+        with self.assertRaisesRegex(ScheduleError, "already deleted"):
             schedule_service.get_schedule(created["id"], self.storage)
         with self.assertRaisesRegex(ScheduleError, "does not exist"):
             create_schedule("nobody", "x", "y", {"kind": "daily", "time": "08:00"}, storage=self.storage, tz=TZ, now=NOW)
@@ -225,7 +225,7 @@ class ScheduleToolTests(unittest.TestCase):
         listing = build_invocation("schedule_list", {}, self.bot)
         self.assertEqual(listing.name, "schedule.list")
         delete = build_invocation("schedule_delete", {"id": "sch-1"}, self.bot)
-        self.assertEqual(delete.arguments, {"bot_id": self.bot, "id": "sch-1"})
+        self.assertEqual(delete.arguments, {"bot_id": self.bot, "id": "sch-1", "thread_id": self.bot})
 
     def test_gateway_actions(self):
         gateway = ActionGateway(workspace=WorkspaceService(Path(self.temp_dir.name)), approvals=_Broker(), audit=_Audit())
@@ -264,6 +264,28 @@ class ScheduleToolTests(unittest.TestCase):
             asyncio.run(gateway.wait_for_decision(request))
             self.assertEqual(asyncio.run(gateway.execute(request)).result["deleted"]["id"], schedule["id"])
             self.assertEqual(self.storage.list_schedules(self.bot), [])
+
+            # Looked for again: who deleted it, when, and from which conversation.
+            def again(thread_id):
+                call = ActionInvocation(name="schedule.delete", arguments={"bot_id": self.bot, "id": schedule["id"], "thread_id": thread_id}, target={}, preview="x")
+                with self.assertRaises(ScheduleError) as raised:
+                    asyncio.run(schedule_service.execute_delete(call))
+                return str(raised.exception)
+
+            same = again(self.bot)
+            self.assertIn('"Digest"', same)
+            self.assertIn("already deleted on 2026-10-12 09:00 by you (", same)
+            self.assertIn("earlier in this conversation", same)
+            self.assertIn("in another conversation of yours", again("cv-elsewhere"))
+            listed = asyncio.run(schedule_service.execute_list(ActionInvocation(name="schedule.list", arguments={"bot_id": self.bot, "thread_id": "cv-elsewhere"},
+                                                                                target={}, preview="x")))
+            self.assertEqual([d["name"] for d in listed["recently_deleted"]], ["Digest"])
+            # Deleted in the bot's settings: by that person.
+            by_hand = schedule_service.create_schedule(self.bot, "Weekly", "Go.", {"kind": "daily", "time": "08:00"}, storage=self.storage)
+            schedule_service.delete_schedule(by_hand["id"], storage=self.storage, by={"kind": "user", "name": "Jamie"})
+            call = ActionInvocation(name="schedule.update", arguments={"bot_id": self.bot, "id": by_hand["id"], "enabled": False}, target={}, preview="x")
+            with self.assertRaisesRegex(ScheduleError, "by Jamie in the bot's settings"):
+                asyncio.run(schedule_service.execute_update(call))
 
     def test_router_crud_and_ownership(self):
         with mock.patch.object(storage_module, "storage_service", self.storage), mock.patch.object(

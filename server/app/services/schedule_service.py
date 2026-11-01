@@ -50,6 +50,12 @@ LIST_ACTION = "schedule.list"
 CREATE_ACTION = "schedule.create"
 UPDATE_ACTION = "schedule.update"
 DELETE_ACTION = "schedule.delete"
+# Deleted schedules are remembered a while (in the settings store, `deleted_schedules`), so a bot
+# that looks for one deleted in another conversation, or by the user, is told who deleted it and when.
+DELETED_KEY = "deleted_schedules"
+DELETED_KEEP_DAYS = 30
+DELETED_KEEP = 100
+DELETED_LISTED_DAYS = 7
 
 
 class ScheduleError(RuntimeError):
@@ -376,8 +382,59 @@ def list_for_bot(bot_id: str, storage: Optional[StorageService] = None) -> List[
 def get_schedule(schedule_id: str, storage: Optional[StorageService] = None) -> Dict[str, Any]:
     record = _storage(storage).get_schedule(schedule_id)
     if record is None:
-        raise ScheduleError("There is no schedule with that id.")
+        gone = deleted_schedule(schedule_id, storage)
+        raise ScheduleError(describe_deletion(gone) if gone else "There is no schedule with that id.")
     return record
+
+
+# ---- deleted schedules: who deleted one, and when -------------------------------------------------
+
+
+def _deleted(storage: StorageService) -> List[Dict[str, Any]]:
+    raw = storage.get_settings().get(DELETED_KEY) or []
+    cutoff = _iso(now_local() - timedelta(days=DELETED_KEEP_DAYS)) or ""
+    return [d for d in raw if isinstance(d, dict) and d.get("id") and str(d.get("deleted_at") or "") >= cutoff] if isinstance(raw, list) else []
+
+
+def remember_deletion(record: Dict[str, Any], by: Optional[Dict[str, Any]], storage: Optional[StorageService] = None) -> Dict[str, Any]:
+    storage = _storage(storage)
+    entry = {"id": record["id"], "bot_id": record.get("bot_id"), "name": record.get("name"), "deleted_at": _iso(now_local()),
+             "by": {k: v for k, v in (by or {}).items() if v}}
+    kept = [d for d in _deleted(storage) if d["id"] != record["id"]][-(DELETED_KEEP - 1):]
+    storage.save_settings({DELETED_KEY: kept + [entry]})
+    return entry
+
+
+def deleted_schedule(schedule_id: str, storage: Optional[StorageService] = None) -> Optional[Dict[str, Any]]:
+    return next((d for d in reversed(_deleted(_storage(storage))) if d["id"] == schedule_id), None)
+
+
+def recently_deleted(bot_id: str, thread_id: str = "", storage: Optional[StorageService] = None) -> List[Dict[str, Any]]:
+    """The bot's schedules deleted in the last few days, newest first, as the bot's list shows them."""
+    cutoff = _iso(now_local() - timedelta(days=DELETED_LISTED_DAYS)) or ""
+    found = [d for d in reversed(_deleted(_storage(storage))) if d.get("bot_id") == bot_id and str(d.get("deleted_at") or "") >= cutoff]
+    return [{"id": d["id"], "name": d.get("name"), "deleted": describe_deletion(d, asking_bot=bot_id, thread_id=thread_id)} for d in found[:10]]
+
+
+def describe_deletion(entry: Dict[str, Any], *, asking_bot: str = "", thread_id: str = "") -> str:
+    """What to tell a bot about a deleted schedule: when, by whom, and from where (as the bot asking sees it)."""
+    by = entry.get("by") or {}
+    when = str(entry.get("deleted_at") or "")[:16].replace("T", " ")
+    if by.get("kind") == "bot" and asking_bot and by.get("bot_id") == asking_bot:
+        who = f"by you ({by.get('name') or asking_bot})"
+        if thread_id and by.get("thread_id") == thread_id:
+            where = ", earlier in this conversation"
+        else:
+            where = f", in another conversation of yours, \"{by['conversation']}\"" if by.get("conversation") else ", in another conversation of yours"
+    elif by.get("kind") == "bot":
+        who = f"by {by.get('name') or 'another bot'} (a bot)"
+        where = f", in the conversation \"{by['conversation']}\"" if by.get("conversation") else ""
+    elif by.get("kind") == "user":
+        who, where = f"by {by.get('name') or 'the user'}", " in the bot's settings"
+    else:
+        who, where = "", ""
+    return (f"The schedule \"{entry.get('name') or entry['id']}\" ({entry['id']}) was already deleted on {when}{' ' + who if who else ''}{where}. "
+            "It no longer exists, so there is nothing more to do with it; create a new one if it is still needed.")
 
 
 def create_schedule(
@@ -459,10 +516,12 @@ def update_schedule(
     return public(record)
 
 
-def delete_schedule(schedule_id: str, storage: Optional[StorageService] = None) -> Dict[str, Any]:
+def delete_schedule(schedule_id: str, storage: Optional[StorageService] = None, *, by: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Delete it, remembering who did (`by`: kind bot or user, name, and the conversation for a bot)."""
     storage = _storage(storage)
     record = get_schedule(schedule_id, storage)
     storage.delete_schedule(schedule_id)
+    remember_deletion(record, by, storage)
     return public(record)
 
 
@@ -554,7 +613,33 @@ def _clock() -> Dict[str, Any]:
 
 
 async def execute_list(call: ActionInvocation) -> Dict[str, Any]:
-    return {"schedules": list_for_bot(_bot_id(call)), **_clock()}
+    bot_id = _bot_id(call)
+    gone = recently_deleted(bot_id, str(call.arguments.get("thread_id") or ""))
+    return {"schedules": list_for_bot(bot_id), **({"recently_deleted": gone} if gone else {}), **_clock()}
+
+
+def _bot_deleter(call: ActionInvocation, bot_id: str) -> Dict[str, Any]:
+    """Who is deleting: this bot, and the conversation it is doing it from."""
+    from app.services import conversations
+
+    bot = next((b for b in current_storage().get_bots() if b.get("id") == bot_id), {})
+    thread_id = str(call.arguments.get("thread_id") or "")
+    conversation = (conversations.get(thread_id) or {}) if thread_id else {}
+    return {"kind": "bot", "bot_id": bot_id, "name": bot.get("name") or bot_id, "thread_id": thread_id, "conversation": conversation.get("title") or ""}
+
+
+def _bot_schedule(call: ActionInvocation, bot_id: str) -> Dict[str, Any]:
+    """The schedule a bot names; one already deleted is described (by whom, when, where) instead of just missing."""
+    schedule_id = str(call.arguments.get("id") or "")
+    record = current_storage().get_schedule(schedule_id)
+    if record is None:
+        gone = deleted_schedule(schedule_id)
+        if gone and gone.get("bot_id") == bot_id:
+            raise ScheduleError(describe_deletion(gone, asking_bot=bot_id, thread_id=str(call.arguments.get("thread_id") or "")))
+        raise ScheduleError("There is no schedule with that id.")
+    if record["bot_id"] != bot_id:
+        raise ScheduleError("That schedule belongs to another bot.")
+    return record
 
 
 async def execute_create(call: ActionInvocation) -> Dict[str, Any]:
@@ -566,19 +651,15 @@ async def execute_create(call: ActionInvocation) -> Dict[str, Any]:
 async def execute_update(call: ActionInvocation) -> Dict[str, Any]:
     bot_id = _bot_id(call)
     args = call.arguments
-    record = get_schedule(str(args.get("id") or ""))
-    if record["bot_id"] != bot_id:
-        raise ScheduleError("That schedule belongs to another bot.")
+    record = _bot_schedule(call, bot_id)
     changes = {key: args[key] for key in ("name", "prompt", "cadence", "enabled", "check") if key in args}
     return {"schedule": update_schedule(record["id"], **changes), **_clock()}
 
 
 async def execute_delete(call: ActionInvocation) -> Dict[str, Any]:
     bot_id = _bot_id(call)
-    record = get_schedule(str(call.arguments.get("id") or ""))
-    if record["bot_id"] != bot_id:
-        raise ScheduleError("That schedule belongs to another bot.")
-    return {"deleted": delete_schedule(record["id"]), **_clock()}
+    record = _bot_schedule(call, bot_id)
+    return {"deleted": delete_schedule(record["id"], by=_bot_deleter(call, bot_id)), **_clock()}
 
 
 def register_schedule_actions(gateway: Optional[ActionGateway] = None) -> None:
