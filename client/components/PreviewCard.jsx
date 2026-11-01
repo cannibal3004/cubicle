@@ -79,7 +79,6 @@ export default function PreviewCard({ attachment }) {
             title={attachment.name}
             sandbox={SANDBOX}
             allow="fullscreen; gamepad; autoplay"
-            allowFullScreen
             className="w-full bg-white block resize-y"
             style={{ height: '28rem', minHeight: '12rem' }}
           />
