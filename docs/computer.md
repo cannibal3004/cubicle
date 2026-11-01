@@ -59,6 +59,29 @@ output, marked **background job ended**. If the bot is idle that starts a reply 
 the middle of one, the message waits for that reply to end. Several jobs that end together arrive as
 one message. A job that never exits on its own (a server) is started without this.
 
+## Web previews
+
+When a bot runs a web server in its computer (a page or game it built, a dashboard, a small app), it
+can show it to you with `computer_preview`. A card appears in the chat, marked **web preview**:
+**Open** puts the page in a new tab, and **Show here** shows it in the chat, with buttons to reload it
+and to go full screen.
+
+- **The address** is a temporary one on Cubicle's own address, like `/api/preview/<id>/`, so it works
+  however you reach Cubicle, with no DNS or proxy changes. It lasts 8 hours unless the bot asks for
+  longer (up to 72), until the bot closes it, or while its computer is stopped.
+- **Who can open it:** anyone who can use the bot, its owner and teammates it is shared with, once
+  signed in to Cubicle.
+- **Sandboxed:** the page runs with an origin of its own, so it cannot use your Cubicle session.
+  It has no cookies or lasting browser storage: saving to `localStorage` works until the page is
+  reloaded.
+- **Relative addresses:** the app is served under the preview's path, so a page has to load its
+  files and call its APIs by relative URLs (`./app.js`, not `/app.js`). The bot is told when one
+  will not load. An app that can be told where it lives (a base path) can be opened with that
+  path kept instead.
+
+A server that listens only on `localhost` works too. Computers started before runtime 2.15.0 need a
+server listening on `0.0.0.0` until they are stopped and started again.
+
 ## Checking scripts
 
 When a bot saves a shell script (`.sh`, `.bash`, or a file starting with a shell `#!` line) or a Python

@@ -437,6 +437,9 @@ async def delete_bot(bot_id: str):
     from app.services import auto_memory
 
     auto_memory.delete_bot_memories(bot_id)
+    from app.services import previews
+
+    previews.close_previews(get_current_owner(), bot_id)
     bots.pop(index)
     current_storage().save_bots(bots)
     sharing.forget_bot(get_current_owner(), bot_id)

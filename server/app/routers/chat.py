@@ -1597,7 +1597,8 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                                 "botId": bot_id,
                                 "reason": str(arguments.get("reason") or ""),
                             })
-                        if call_name == "share_file" and isinstance(result.get("attachment"), dict):
+                        # A shared file's download card, or a web preview's card (computer_preview).
+                        if call_name in ("share_file", "computer_preview") and isinstance(result.get("attachment"), dict):
                             attachment = dict(result["attachment"])
                             if not any(a.get("source") == attachment.get("source") and a.get("path") == attachment.get("path") for a in attachments):
                                 attachments.append(attachment)
