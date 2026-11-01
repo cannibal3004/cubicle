@@ -126,6 +126,11 @@ def _is_read(name: str) -> bool:
     return bool(words & _READ_WORDS)
 
 
+def is_read_tool(name: str) -> bool:
+    """Whether a tool only looks (reads, lists, searches) rather than changing or running something."""
+    return _is_read(name)
+
+
 def _summary(name: str, args: Dict[str, Any]) -> str:
     for key in ("command", "path", "url", "title", "name", "to", "recipient_email", "subject", "message", "text", "query"):
         value = args.get(key)

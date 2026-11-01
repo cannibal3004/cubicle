@@ -793,6 +793,14 @@ def _store_added_tools(history: List[Dict[str, Any]], definitions: List[Dict[str
     return True
 
 
+def _command_failed(call_name: str, result: Any) -> bool:
+    """A terminal command that ran to the end with a non-zero exit code (a background one has not ended yet)."""
+    if call_name != "computer_terminal_execute" or not isinstance(result, dict) or result.get("background"):
+        return False
+    code = result.get("exit_code")
+    return isinstance(code, int) and code != 0
+
+
 async def attach_turn_context(
     turn: Turn, thread_id: str, bot_msg_id: str, history: List[Dict[str, Any]], query: str, bot_id: Optional[str] = None
 ) -> bool:
@@ -1522,6 +1530,9 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                 replies_start = len(messages)
                 # The same call twice in one round (a model hedging) runs once.
                 ran_this_round: Dict[tuple, str] = {}
+                # Once a call fails, the calls after it that change or run something are not run: they
+                # may depend on it (a script that was never written, then run and waited on).
+                failed_before: Optional[str] = None
                 for call in pending_calls:
                     call_id = call["id"]
                     call_name = call["name"]
@@ -1558,6 +1569,15 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         record.update({"status": "failed", "error": error})
                         turn.emit({"type": "tool.failed", "tool": call_name, "callName": call_name, "error": error})
                         messages.append({"role": "tool", "tool_call_id": call_id, "content": _tool_result_text({"error": error})})
+                        failed_before = failed_before or call_name
+                        continue
+                    # A call that would run (its name and arguments are fine) after one that failed: not run.
+                    if failed_before and not rewind_service.is_read_tool(call_name):
+                        note = (f"Not run: {failed_before} earlier in this round failed, and this call may depend on it. "
+                                "Fix that first, then make this call again if it is still needed.")
+                        record.update({"status": "skipped", "error": note})
+                        turn.emit({"type": "tool.failed", "tool": call_name, "callName": call_name, "error": note})
+                        messages.append({"role": "tool", "tool_call_id": call_id, "content": _tool_result_text({"status": "skipped", "error": note})})
                         continue
 
                     record["summary"] = getattr(invocation, "summary", None) or getattr(invocation, "preview", call_name)
@@ -1573,6 +1593,8 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
 
                     status = outcome.get("status", "failed")
                     record["status"] = status
+                    if status != "completed" or _command_failed(call_name, outcome.get("result")):
+                        failed_before = failed_before or call_name
                     if trusted and status != "rejected":
                         record["trusted"] = True
                         record["trusted_by"] = trusted if isinstance(trusted, str) else "trusted"

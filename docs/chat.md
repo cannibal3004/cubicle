@@ -27,7 +27,9 @@ A reply shows what the bot did, in the order it did it:
   [Thinking and Auto](thinking.md).
 - **Tool steps**: each tool the bot used, with what it did and how it went. A green **⚡** means the
   decision model approved it, a **🛡** that it is a trusted tool or an always-allowed command. Hover a
-  step for a summary; click it to fold out the details.
+  step for a summary; click it to fold out the details. A bot often asks for several tools at once;
+  when one of them fails (or a command exits with an error), the ones after it that change or run
+  something are marked **not run**, because they may depend on it. The bot sees why and goes again.
 - **Text**: what the bot wrote between steps, and its answer.
 
 ![A tool step folded out](images/tool-step-details.png)
