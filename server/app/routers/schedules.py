@@ -83,7 +83,17 @@ async def update_schedule(bot_id: str, schedule_id: str, body: ScheduleUpdate):
 async def delete_schedule(bot_id: str, schedule_id: str):
     _ensure_bot(bot_id)
     _owned(bot_id, schedule_id)
-    return {"status": "ok", "deleted": _guard(lambda: schedule_service.delete_schedule(schedule_id))}
+    return {"status": "ok", "deleted": _guard(lambda: schedule_service.delete_schedule(schedule_id, by=_person()))}
+
+
+def _person() -> Dict[str, Any]:
+    """Who is deleting from the bot's settings, for the bot to be told later."""
+    from app.services.auth_service import auth_service
+    from app.services.identity import get_current_actor
+    from app.services.sharing import person_name
+
+    user = auth_service.accounts.get_user(get_current_actor()) or {}
+    return {"kind": "user", "name": person_name(user) if user else "the user"}
 
 
 @router.post("/{bot_id}/schedules/{schedule_id}/run")

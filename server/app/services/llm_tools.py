@@ -1249,7 +1249,7 @@ PROJECT_CALLS: Dict[str, Any] = {
 THREAD_ACTIONS = {
     "todo.list", "todo.add", "todo.update", "memory.read", "memory.write", "memory.edit", "memory.save", "user.ask",
     "projects.list", "projects.create", "projects.join", "work_notes.read", "work_notes.write", "work_notes.edit",
-    "project_log.add", "project_log.read", "bots.send", "help.search",
+    "project_log.add", "project_log.read", "bots.send", "help.search", "schedule.delete", "schedule.update", "schedule.list",
 }
 
 
