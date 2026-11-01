@@ -337,11 +337,11 @@ async def update_bot(bot_id: str, updates: BotUpdate):
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     procedures_before = None
     if "procedures" in changes:
+        procedures_before = [p for p in (bots[index].get("procedures") or []) if isinstance(p, dict)]
         try:
-            changes["procedures"] = procedure_service.clean_procedures(changes["procedures"])
+            changes["procedures"] = procedure_service.clean_procedures(changes["procedures"], procedures_before)
         except procedure_service.ProcedureError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        procedures_before = [p for p in (bots[index].get("procedures") or []) if isinstance(p, dict)]
     if "gate_threshold" in changes:
         changes["gate_threshold"] = clean_gate_threshold(changes["gate_threshold"])
     memory_note = None
@@ -383,6 +383,7 @@ async def update_bot(bot_id: str, updates: BotUpdate):
         schedule_recheck(bot_id)
     if procedures_before is not None:
         procedure_service.sync_index(bot_id, procedures_before, bots[index].get("procedures") or [])
+        procedure_service.sync_files(bot_id, procedures_before, bots[index].get("procedures") or [])
     if memory_note is not None:
         _announce_notes(bot_id, memory_note)
     if todo_note is not None:
@@ -440,6 +441,7 @@ async def delete_bot(bot_id: str):
     from app.services import previews
 
     previews.close_previews(get_current_owner(), bot_id)
+    procedure_service.remove_all_files(bot_id)
     bots.pop(index)
     current_storage().save_bots(bots)
     sharing.forget_bot(get_current_owner(), bot_id)

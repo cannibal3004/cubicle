@@ -12,12 +12,15 @@ There are two kinds:
   its own bots. Each lives as a folder under DATA_DIR/skills/<system|owner id>/<skill id>/, with
   an index in the settings store (`skills`, `user_skills`). Every bot gets every library skill
   unless it is switched off in the bot's settings (`skill_settings` {id: false}).
-- A bot's own skills: what it wrote itself with skill_save, most often after the user showed it a
-  task (these were called procedures, and are still kept on the bot record under `procedures`,
-  see services/procedures).
+- A bot's own skills: what it wrote itself with skill_save (most often after the user showed it a
+  task), what was installed into that bot alone, or copied into it from the library. Kept on the
+  bot record under `procedures` (they were called procedures), with their files on disk (see
+  services/procedures); BotSkillStore installs into a bot the way SkillStore does into the library.
+  They go wherever the bot goes, so a teammate using a shared bot has them too.
 
-Every turn's tools prompt lists the skills by name and description; skill_read brings one back
-in full, and copies its files into the bot's computer (/workspace/skills/<folder>) so its
+A bot's own skill wins over a library skill of the same name: that library skill is left out of the
+bot's list. Every turn's tools prompt lists the skills by name and description; skill_read brings
+one back in full, and copies its files into the bot's computer (/workspace/skills/<folder>) so its
 scripts can run there.
 """
 
@@ -306,14 +309,7 @@ class SkillStore:
         return {**record, "scope": self.scope}
 
     def install_all(self, files: Dict[str, bytes], *, source: Dict[str, Any]) -> List[Dict[str, Any]]:
-        found = split_skills(files)
-        if len(found) > 50:
-            raise SkillError(f"That holds {len(found)} skills; install at most 50 at once (link to the folder of the one you want).")
-        installed = []
-        for root, members in found:
-            fallback = PurePosixPath(root).name if root != "." else (source.get("name") or "")
-            installed.append(self.install(members, source={**source, "path": source.get("path") or (root if root != "." else "")}, fallback_name=fallback))
-        return installed
+        return install_each(self, files, source=source)
 
     def create(self, name: Any, description: Any, instructions: Any) -> Dict[str, Any]:
         """A skill written in the app: a SKILL.md and nothing else."""
@@ -375,13 +371,74 @@ class SkillStore:
         if target is None or folder not in target.parents or not target.is_file():
             names = ", ".join(f["path"] for f in record.get("files") or []) or "none"
             raise SkillError(f"The skill {record['name']} has no file {path!r}. Its files: {names}.")
-        data = target.read_bytes()
-        if b"\0" in data[:4096]:
-            raise SkillError(f"{path} is not a text file; use it from the skill's folder in your computer.")
-        text = data.decode("utf-8", errors="replace")
-        if len(text) > READ_FILE_MAX_CHARS:
-            text = text[:READ_FILE_MAX_CHARS] + f"\n[... cut at {READ_FILE_MAX_CHARS} characters of {len(text)}]"
-        return text
+        return text_of(target.read_bytes(), path)
+
+
+def install_each(store: Any, files: Dict[str, bytes], *, source: Dict[str, Any], most: int = 50) -> List[Dict[str, Any]]:
+    """Every skill folder among the files, installed by the store."""
+    found = split_skills(files)
+    if len(found) > most:
+        raise SkillError(f"That holds {len(found)} skills; install at most {most} at once (link to the folder of the one you want).")
+    installed = []
+    for root, members in found:
+        fallback = PurePosixPath(root).name if root != "." else (source.get("name") or "")
+        installed.append(store.install(members, source={**source, "path": source.get("path") or (root if root != "." else "")}, fallback_name=fallback))
+    return installed
+
+
+def text_of(data: bytes, path: str) -> str:
+    if b"\0" in data[:4096]:
+        raise SkillError(f"{path} is not a text file; use it from the skill's folder in your computer.")
+    text = data.decode("utf-8", errors="replace")
+    if len(text) > READ_FILE_MAX_CHARS:
+        text = text[:READ_FILE_MAX_CHARS] + f"\n[... cut at {READ_FILE_MAX_CHARS} characters of {len(text)}]"
+    return text
+
+
+class BotSkillStore:
+    """One bot's own skills, installed the way the library's are (from a zip, a link, or the library):
+    the instructions on the bot record, the other files beside it on disk (services/procedures)."""
+
+    scope = "bot"
+
+    def __init__(self, bot_id: str):
+        self.bot_id = bot_id
+
+    def install(self, files: Dict[str, bytes], *, source: Dict[str, Any], fallback_name: str = "") -> Dict[str, Any]:
+        from app.services import procedures
+
+        meta, instructions, _ = describe_files(files)
+        name = clean_name(meta.get("name") or fallback_name)
+        description = clean_description(meta.get("description") or _first_line(instructions))
+        try:
+            return procedures.save_procedure(self.bot_id, name, instructions, description=description, files=files,
+                                             source={k: v for k, v in source.items() if v}, limit=procedures.IMPORTED_STEPS_MAX)
+        except procedures.ProcedureError as exc:
+            raise SkillError(str(exc)) from exc
+
+    def install_all(self, files: Dict[str, bytes], *, source: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return install_each(self, files, source=source, most=10)
+
+
+def bot_skill_files(bot_id: str, own: Dict[str, Any]) -> Dict[str, bytes]:
+    """All of a bot's own skill as a folder: its SKILL.md and its other files."""
+    from app.services import procedures
+
+    files = procedures.files_of(bot_id, own)
+    meta = {"name": own["title"], "description": own.get("description") or _first_line(own["steps"])}
+    files[SKILL_FILE] = compose_skill_md(meta, own["steps"]).encode("utf-8")
+    return files
+
+
+def read_bot_file(bot_id: str, own: Dict[str, Any], path: str) -> str:
+    from app.services import procedures
+
+    relative = _safe_relative(str(path or "").strip().lstrip("/"))
+    data = procedures.files_of(bot_id, own).get(relative or "")
+    if data is None:
+        names = ", ".join(f["path"] for f in own.get("files") or []) or "none"
+        raise SkillError(f"The skill {own['title']} has no file {path!r}. Its files: {names}.")
+    return text_of(data, path)
 
 
 system_skill_store = SkillStore(scope="system")
@@ -472,9 +529,11 @@ def install_upload(filename: str, data: bytes, store: SkillStore) -> List[Dict[s
 
 
 def bot_library(bot: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The library skills this bot has: all of them, less the ones switched off in its settings."""
+    """The library skills this bot has: all of them, less the ones switched off in its settings and
+    the ones its own skill of the same name takes the place of."""
     off = {k for k, v in ((bot or {}).get("skill_settings") or {}).items() if v is False}
-    return [record for record in library() if record["id"] not in off]
+    own = {str(p["title"]).lower() for p in own_skills(bot)}
+    return [record for record in library() if record["id"] not in off and record["name"].lower() not in own]
 
 
 def own_skills(bot: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -497,10 +556,12 @@ def prompt_block(bot: Optional[Dict[str, Any]]) -> str:
             lines.append(f"  - {record['name']}: {description}")
     own = own_skills(bot)
     if own:
-        titles = "; ".join(f'"{p["title"]}"' + (f" ({p['description']})" if p.get("description") else "") for p in own[:PROMPT_MAX_SKILLS])
+        titles = "; ".join(f'"{p["title"]}"' + (f" ({p['description']})" if p.get("description") else "")
+                           + (f" [{len(p['files'])} files]" if p.get("files") else "") for p in own[:PROMPT_MAX_SKILLS])
         lines.append(
-            f"- Skills you wrote ({len(own)}), most from what the user showed you: {titles}. When a task matches one, read it with skill_read "
-            "first and follow it; when you learn that a step has changed, save the corrected skill under the same name with skill_save."
+            f"- Your own skills ({len(own)}), ones you wrote (most from what the user showed you) or were given: {titles}. When a task matches "
+            "one, read it with skill_read first and follow it; when you learn that a step has changed, save the corrected skill under the same "
+            "name with skill_save."
         )
     return "\n".join(lines)
 
@@ -513,9 +574,10 @@ def _match(items: List[Dict[str, Any]], wanted: str, key: str) -> Optional[Dict[
     return partial[0] if len(partial) == 1 else None
 
 
-def copy_to_computer(record: Dict[str, Any], bot_id: str) -> Optional[str]:
+def copy_to_computer(record: Dict[str, Any], bot_id: str, files: Optional[Dict[str, bytes]] = None) -> Optional[str]:
     """The skill's files in the bot's computer (copied when missing or out of date); the folder's
-    path there, or None when the computer's files cannot be reached from here."""
+    path there, or None when the computer's files cannot be reached from here. `files` gives a bot's
+    own skill's (a library skill's come from its store)."""
     from app.services.file_share import FileShareError, source_root
 
     try:
@@ -533,7 +595,7 @@ def copy_to_computer(record: Dict[str, Any], bot_id: str) -> Optional[str]:
         # A new version replaces the folder whole, so nothing of the old one lingers.
         if target.exists():
             shutil.rmtree(target)
-        for path, data in store_for(record).files_of(record).items():
+        for path, data in (files if files is not None else store_for(record).files_of(record)).items():
             destination = target / path
             _make_open_folders(root, destination.parent)
             destination.write_bytes(data)
@@ -573,6 +635,24 @@ async def execute_read(call: ActionInvocation) -> Dict[str, Any]:
     if not wanted:
         raise SkillError("Name the skill to read.")
     shared = bot_library(bot)
+    own = _match(own_skills(bot), wanted, "title")
+    if own is not None and str(own["title"]).lower() != wanted and any(r["name"].lower() == wanted for r in shared):
+        own = None  # a library skill named exactly that beats a partial match among the bot's own
+    if own is not None:  # the bot's own wins over a library skill of the same name
+        file = str(call.arguments.get("file") or "").strip()
+        if file:
+            return {"skill": own["title"], "file": file, "text": read_bot_file(bot_id, own, file)}
+        result = {"skill": own["title"], "description": own.get("description") or "", "instructions": own["steps"], "yours": True, "updated_at": own.get("updated_at")}
+        if own.get("files"):
+            folder = copy_to_computer({"id": own["id"], "name": own["title"], "version": own.get("version") or own.get("updated_at")}, bot_id,
+                                      files=bot_skill_files(bot_id, own))
+            result["files"] = [f["path"] for f in own["files"]]
+            if folder:
+                result["folder"] = folder
+                result["note"] = f"The skill's files are in your computer at {folder}; paths in the instructions are relative to it. Run its scripts from there."
+            else:
+                result["note"] = "Your computer's files cannot be reached from here: read a text file with skill_read(name, file=...)."
+        return result
     record = _match(shared, wanted, "name")
     if record is not None:
         store = store_for(record)
@@ -589,10 +669,7 @@ async def execute_read(call: ActionInvocation) -> Dict[str, Any]:
             else:
                 result["note"] = "Your computer's files cannot be reached from here: read a text file with skill_read(name, file=...)."
         return result
-    own = _match(own_skills(bot), wanted, "title")
-    if own is not None:
-        return {"skill": own["title"], "description": own.get("description") or "", "instructions": own["steps"], "yours": True, "updated_at": own.get("updated_at")}
-    names = [r["name"] for r in shared] + [p["title"] for p in own_skills(bot)]
+    names = [p["title"] for p in own_skills(bot)] + [r["name"] for r in shared]
     raise SkillError(f"No skill called {call.arguments.get('name')!r}. Your skills: {names}" if names else "You have no skills yet.")
 
 
@@ -600,14 +677,26 @@ async def execute_save(call: ActionInvocation) -> Dict[str, Any]:
     from app.services import procedures
 
     bot_id = str(call.arguments.get("bot_id") or "")
+    instructions = call.arguments.get("instructions")
+    description = call.arguments.get("description")
+    files = None
+    folder = str(call.arguments.get("folder") or "").strip()
+    if folder:
+        files = files_from_computer(bot_id, folder)
+        skill_md = next((path for path in files if path.lower() == "skill.md"), None)
+        if skill_md:
+            meta, body = parse_skill_md(files.pop(skill_md).decode("utf-8", errors="replace"))
+            instructions = str(instructions or "").strip() or body.strip()
+            description = description or meta.get("description")
     try:
-        saved = procedures.save_procedure(
-            bot_id, call.arguments.get("name"), call.arguments.get("instructions"),
-            description=call.arguments.get("description"), source=call.arguments.get("source"),
-        )
+        saved = procedures.save_procedure(bot_id, call.arguments.get("name"), instructions, description=description,
+                                          source=call.arguments.get("source"), files=files)
     except procedures.ProcedureError as exc:
         raise SkillError(str(exc)) from exc
-    return {"saved": True, "name": saved["title"], "chars": len(saved["steps"]), "count": len(procedures.list_procedures(bot_id))}
+    result = {"saved": True, "name": saved["title"], "chars": len(saved["steps"]), "count": len(procedures.list_procedures(bot_id))}
+    if saved.get("files"):
+        result["files"] = [f["path"] for f in saved["files"]]
+    return result
 
 
 # ---- into the library: a bot's skill for every bot --------------------------------------------
@@ -649,13 +738,14 @@ def files_from_computer(bot_id: str, folder: str) -> Dict[str, bytes]:
     return files
 
 
-def publish(bot: Dict[str, Any], *, name: Any, description: Any = None, instructions: Any = None, folder: Any = None) -> Dict[str, Any]:
+def publish(bot: Dict[str, Any], *, name: Any, description: Any = None, instructions: Any = None, folder: Any = None,
+            files: Optional[Dict[str, bytes]] = None) -> Dict[str, Any]:
     """A bot's skill made a library skill of the current account: instructions, with the files of a
-    folder of its computer if given (a SKILL.md there serves when no instructions are). The bot's own
-    skill of the same name, if any, gives way to it."""
+    folder of its computer if given, or `files` (a SKILL.md among them serves when no instructions
+    are). The bot's own skill of the same name, if any, gives way to it."""
     from app.services import procedures
 
-    files = files_from_computer(bot["id"], str(folder)) if folder else {}
+    files = dict(files) if files is not None else (files_from_computer(bot["id"], str(folder)) if folder else {})
     skill_md = next((path for path in files if path.lower() == "skill.md"), None)
     meta, folder_body = parse_skill_md(files.pop(skill_md).decode("utf-8", errors="replace")) if skill_md else ({}, "")
     body = str(instructions or "").strip() or folder_body.strip()
@@ -681,7 +771,19 @@ def move_from_bot(bot_id: str, procedure_id: str) -> Dict[str, Any]:
         raise SkillError("That bot has no such skill of its own.")
     if any(s["name"].lower() == str(own["title"]).lower() for s in user_skill_store.list()):
         raise SkillError(f"Your library already has a skill named {own['title']}; rename or delete one of them first.")
-    return publish(bot, name=own["title"], description=own.get("description") or own["title"], instructions=own["steps"])
+    return publish(bot, name=own["title"], description=own.get("description") or own["title"], instructions=own["steps"],
+                   files=procedures.files_of(bot_id, own))
+
+
+def copy_from_library(bot_id: str, skill_id: str) -> Dict[str, Any]:
+    """A library skill copied into one bot as its own, files and all: from then on it is the bot's to
+    change, and it takes the library one's place for that bot."""
+    _bot(bot_id)
+    record = find(skill_id)
+    files = store_for(record).files_of(record)
+    if not files:
+        raise SkillError(f"The files of the skill {record['name']} are missing; install it again.")
+    return BotSkillStore(bot_id).install(files, source={"kind": "library", "skill_id": record["id"], "name": record["name"]}, fallback_name=record["name"])
 
 
 async def execute_publish(call: ActionInvocation) -> Dict[str, Any]:
