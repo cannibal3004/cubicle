@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 REWIND_BY = "rewind"
 MAX_STACK = 20
 NOTES_TOOLS = {"memory_write", "memory_edit", "memory_save"}
-TODO_TOOLS = {"todo_add", "todo_update"}
+TODO_TOOLS = {"todo_add", "todo_update", "todo_clear"}
 WORK_NOTES_TOOLS = {"work_notes_write", "work_notes_edit", "project_join"}
 # Built-in tools that only look; anything else that completed may have changed something.
 READ_ONLY_TOOLS = {

@@ -15,6 +15,14 @@ away, does not lose what was done and what remains.
 
 Each conversation keeps its own list, on its record (services/conversations):
 the work at hand is the conversation's, while the notes are the bot's.
+
+Finished items do not pile up: when the last item is marked done the bot is
+reminded to keep what is worth keeping (notes, work notes, the project log,
+memory) and clear the list with todo_clear; a new plan started on a list
+that is all done replaces it; and a full list makes room by dropping its
+oldest done items. Open and doing items are never removed by themselves.
+Ids keep counting up across clears (`todo_floor` on the conversation), so
+an old id never names a new item.
 """
 
 from __future__ import annotations
@@ -33,6 +41,12 @@ STATES = ("open", "doing", "done")
 LIST_ACTION = "todo.list"
 ADD_ACTION = "todo.add"
 UPDATE_ACTION = "todo.update"
+CLEAR_ACTION = "todo.clear"
+ALL_DONE_NOTE = (
+    "Everything on your list is done. Before you move on, keep what is worth keeping from this job (a decision or where "
+    "things stand in the work notes or project log, a lasting fact in your notes or memory), then clear the finished "
+    "items with todo_clear."
+)
 _MARKS = {"open": "[ ]", "doing": "[~]", "done": "[x]"}
 
 
@@ -81,11 +95,16 @@ def clean_todo(items: Any) -> List[Dict[str, Any]]:
     return cleaned
 
 
-def _next_id(taken) -> str:
-    n = len(taken) + 1
+def _next_id(taken, floor: int = 0) -> str:
+    n = max(len(taken), floor) + 1
     while f"t{n}" in taken:
         n += 1
     return f"t{n}"
+
+
+def _number(item_id: str) -> int:
+    digits = str(item_id or "")[1:]
+    return int(digits) if digits.isdigit() else 0
 
 
 def render_todo(items: List[Dict[str, Any]]) -> str:
@@ -106,12 +125,24 @@ def get_todo(thread_id: str, storage: Optional[StorageService] = None) -> List[D
         return []
 
 
-def _save_todo(thread_id: str, items: List[Dict[str, Any]], storage: StorageService) -> Dict[str, Any]:
+def _floor(thread_id: str, storage: StorageService) -> int:
+    from app.services import conversations
+
+    try:
+        return int((conversations.get(thread_id, storage) or {}).get("todo_floor") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _save_todo(thread_id: str, items: List[Dict[str, Any]], storage: StorageService, *, cleared: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     from app.services import conversations
 
     if conversations.get(thread_id, storage) is None:
         raise TodoError("The conversation does not exist.")
-    conversations.update(thread_id, {"todo": items, "todo_updated_at": datetime.now().isoformat()}, storage)
+    changes: Dict[str, Any] = {"todo": items, "todo_updated_at": datetime.now().isoformat()}
+    if cleared:
+        changes["todo_floor"] = max([_floor(thread_id, storage)] + [_number(i["id"]) for i in cleared])
+    conversations.update(thread_id, changes, storage)
     return summary(items)
 
 
@@ -126,7 +157,11 @@ def summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def set_todo(bot_id: str, items: Any, storage: Optional[StorageService] = None) -> Dict[str, Any]:
     """Replace the list (the user's edits from the chat). Returns the stored list."""
-    return _save_todo(bot_id, clean_todo(items), storage or current_storage())
+    storage = storage or current_storage()
+    cleaned = clean_todo(items)
+    kept = {item["id"] for item in cleaned}
+    removed = [item for item in get_todo(bot_id, storage) if item["id"] not in kept]
+    return _save_todo(bot_id, cleaned, storage, cleared=removed)
 
 
 def add_todo(bot_id: str, texts: Any, storage: Optional[StorageService] = None) -> Dict[str, Any]:
@@ -137,16 +172,28 @@ def add_todo(bot_id: str, texts: Any, storage: Optional[StorageService] = None) 
     if not isinstance(texts, (list, tuple)) or not texts:
         raise TodoError("'items' must be one or more item texts.")
     current = get_todo(bot_id, storage)
-    taken = {item["id"] for item in current}
+    cleared: List[Dict[str, Any]] = []
+    # A new plan on a list that is all done replaces it.
+    if current and all(item["state"] == "done" for item in current):
+        cleared, current = current, []
+    floor = max([_floor(bot_id, storage)] + [_number(i["id"]) for i in cleared])
+    taken = {item["id"] for item in current} | {item["id"] for item in cleared}
     added: List[str] = []
     for text in texts:
-        entry = {"id": _next_id(taken), "text": _clean_text(text), "state": "open"}
+        entry = {"id": _next_id(taken, floor), "text": _clean_text(text), "state": "open"}
         taken.add(entry["id"])
         added.append(entry["id"])
         current.append(entry)
-    if len(current) > TODO_MAX_ITEMS:
-        raise TodoError(f"The to-do list is limited to {TODO_MAX_ITEMS} items; remove finished ones first.")
-    return {**_save_todo(bot_id, current, storage), "added": added}
+    # Full: the oldest done items make room; open and doing ones are never dropped.
+    while len(current) > TODO_MAX_ITEMS:
+        oldest_done = next((i for i, item in enumerate(current) if item["state"] == "done"), None)
+        if oldest_done is None:
+            raise TodoError(f"The to-do list is limited to {TODO_MAX_ITEMS} items, and none of the rest is done; finish or remove some first.")
+        cleared.append(current.pop(oldest_done))
+    result = {**_save_todo(bot_id, current, storage, cleared=cleared), "added": added}
+    if cleared:
+        result["cleared_done"] = len(cleared)
+    return result
 
 
 def update_todo(
@@ -168,7 +215,19 @@ def update_todo(
         current[index]["state"] = _clean_state(state)
     if text is not None:
         current[index]["text"] = _clean_text(text)
-    return {**_save_todo(bot_id, current, storage), "updated": key}
+    result = {**_save_todo(bot_id, current, storage), "updated": key}
+    if current[index]["state"] == "done" and all(item["state"] == "done" for item in current):
+        result.update(all_done=True, note=ALL_DONE_NOTE)
+    return result
+
+
+def clear_done(bot_id: str, storage: Optional[StorageService] = None) -> Dict[str, Any]:
+    """Remove the finished items in one go. Returns the whole list."""
+    storage = storage or current_storage()
+    current = get_todo(bot_id, storage)
+    done = [item for item in current if item["state"] == "done"]
+    left = [item for item in current if item["state"] != "done"]
+    return {**_save_todo(bot_id, left, storage, cleared=done), "cleared": len(done)}
 
 
 def todo_note_message(thread_id: str, items: List[Dict[str, Any]], *, message_id: str, bot_id: Optional[str] = None) -> Dict[str, Any]:
@@ -204,6 +263,10 @@ async def execute_add(call: ActionInvocation) -> Dict[str, Any]:
     return add_todo(_bot_id(call), call.arguments.get("items"))
 
 
+async def execute_clear(call: ActionInvocation) -> Dict[str, Any]:
+    return clear_done(_bot_id(call))
+
+
 async def execute_update(call: ActionInvocation) -> Dict[str, Any]:
     return update_todo(
         _bot_id(call),
@@ -229,6 +292,10 @@ def register_todo_actions(gateway: Optional[ActionGateway] = None) -> None:
             name=UPDATE_ACTION, tool="todo", action="update", intent="Change or remove one item of the bot's to-do list.", risk="write", requires_approval=False
         ),
         execute_update,
+    )
+    target.register_action(
+        ActionDefinition(name=CLEAR_ACTION, tool="todo", action="clear", intent="Remove the finished items of the bot's to-do list.", risk="write", requires_approval=False),
+        execute_clear,
     )
 
 

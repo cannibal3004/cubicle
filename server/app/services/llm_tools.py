@@ -553,6 +553,16 @@ TODO_TOOLS: List[ToolSpec] = [
         group="todo",
         needs_approval=False,
     ),
+    ToolSpec(
+        name="todo_clear",
+        description=(
+            "Remove the finished (done) items from your to-do list in one go; open and doing items stay. Do it when a job is finished, "
+            "after keeping anything worth keeping from it in your notes, work notes, project log or memory."
+        ),
+        parameters=_obj({}),
+        group="todo",
+        needs_approval=False,
+    ),
 ]
 
 
@@ -1081,7 +1091,9 @@ def describe_tools(
             "- Your to-do list: the steps of the job you are on, kept across tool rounds and compactions. For any job with several "
             "steps, todo_add the steps first, mark each doing when you start it and done when it is finished (todo_update), and add "
             "steps you discover. Every todo result shows the whole list, the user sees and can edit it, and after a compaction the "
-            "current list comes with the summary. Keep items short; it is a checklist, not notes."
+            "current list comes with the summary. Keep items short; it is a checklist, not notes. When the job is done, keep what is "
+            "worth keeping elsewhere and clear the finished items with todo_clear; starting a new list when everything is done "
+            "replaces the old one by itself."
         )
     if "orchestration" in groups:
         lines.append(
@@ -1247,7 +1259,7 @@ PROJECT_CALLS: Dict[str, Any] = {
 
 # Actions that belong to the conversation a call comes from, not just the bot.
 THREAD_ACTIONS = {
-    "todo.list", "todo.add", "todo.update", "memory.read", "memory.write", "memory.edit", "memory.save", "user.ask",
+    "todo.list", "todo.add", "todo.update", "todo.clear", "memory.read", "memory.write", "memory.edit", "memory.save", "user.ask",
     "projects.list", "projects.create", "projects.join", "work_notes.read", "work_notes.write", "work_notes.edit",
     "project_log.add", "project_log.read", "bots.send", "help.search", "schedule.delete", "schedule.update", "schedule.list",
 }
@@ -1537,6 +1549,8 @@ def _build_invocation(
             target={"bot_id": bot_id},
             preview=f"Add {len(items)} item(s) to the to-do list of {bot_id}",
         )
+    if name == "todo_clear":
+        return ActionInvocation(name="todo.clear", arguments={"bot_id": bot_id}, target={"bot_id": bot_id}, preview=f"Clear the finished items of the to-do list of {bot_id}")
     if name == "todo_update":
         item_id = _string(arguments, "id", required=True, max_len=20)
         state = _string(arguments, "state", default="", max_len=20).lower()
