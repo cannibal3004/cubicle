@@ -30,6 +30,17 @@ RUN apt-get update \
 # PowerPoint to Markdown) for the bot's own use, and pdftotext above. Ruff
 # checks the Python the bot writes (syntax errors, undefined names).
 RUN pip3 install --no-cache-dir --break-system-packages "markitdown[docx,pdf,pptx,xls,xlsx]>=0.1.8" "ruff==0.16.10"
+# PowerShell 7, for the bot to run PowerShell itself, and PSScriptAnalyzer, which checks the
+# PowerShell it writes (syntax errors and a few rules that catch real bugs). The analyzer's
+# compatibility data (about 280 MB, for rules about other PowerShell versions) is not used.
+ENV POWERSHELL_TELEMETRY_OPTOUT=1 POWERSHELL_UPDATECHECK=Off
+RUN . /etc/os-release \
+    && curl -fsSL "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/packages-microsoft-prod.deb" -o /tmp/packages-microsoft-prod.deb \
+    && dpkg -i /tmp/packages-microsoft-prod.deb && rm /tmp/packages-microsoft-prod.deb \
+    && apt-get update && apt-get install -y --no-install-recommends powershell \
+    && rm -rf /var/lib/apt/lists/* \
+    && pwsh -NoProfile -Command "Set-PSRepository PSGallery -InstallationPolicy Trusted; Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope AllUsers -Force" \
+    && rm -rf /usr/local/share/powershell/Modules/PSScriptAnalyzer/*/compatibility_profiles
 
 WORKDIR /opt/cubicle-computer
 

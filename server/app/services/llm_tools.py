@@ -1026,11 +1026,12 @@ def describe_tools(
                 else ""
             )
             +
-            "Software: Ubuntu with Node and Python, and git, curl, jq, file, strings, xxd, less, nano, tree, rsync, zip/7z/xz/zstd, rg, fd, sqlite3, "
-            "ImageMagick, ffmpeg, tesseract (OCR), qpdf, exiftool, pdftotext and markitdown, dig, ping and nc are already installed. "
-            "So are shellcheck and ruff: a shell or Python script saved with write_file or edit_file is checked on the spot, and the "
-            "result's check lists any problems; fix them before running it. For a script made another way, run `shellcheck script.sh` or "
-            "`ruff check script.py` yourself before running it. "
+            "Software: Ubuntu with Node, Python and PowerShell 7 (pwsh), and git, curl, jq, file, strings, xxd, less, nano, tree, rsync, "
+            "zip/7z/xz/zstd, rg, fd, sqlite3, ImageMagick, ffmpeg, tesseract (OCR), qpdf, exiftool, pdftotext and markitdown, dig, ping and nc "
+            "are already installed. So are shellcheck, ruff and PSScriptAnalyzer: a shell, Python or PowerShell (.ps1, .psm1, .psd1) script "
+            "saved with write_file or edit_file is checked on the spot, and the result's check lists any problems; fix them before running "
+            "it. For a script made another way, run `shellcheck script.sh`, `ruff check script.py` or "
+            "`pwsh -c Invoke-ScriptAnalyzer -Path script.ps1` yourself before running it. "
             "computer_install_packages installs other apt packages (the shell has no sudo), e.g. build-essential for a C compiler, or pandoc; "
             "pip in a venv, npm, cargo and the like work from the shell. "
             "/workspace and the home directory persist between starts, so installed tools and venvs stay; /tmp is wiped. "

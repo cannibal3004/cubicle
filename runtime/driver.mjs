@@ -194,8 +194,27 @@ async function readTextFile(requestedPath) {
 const CHECK_TIMEOUT_MS = 10000;
 const CHECK_MAX_PROBLEMS = 30;
 
+// PowerShell: PSScriptAnalyzer's syntax errors, its error rules (less the ones about hardcoded
+// computer names, which scripts for real servers are full of, and other PowerShell versions), and a
+// few warnings that catch real bugs. One line per problem in the gcc shape the other checkers use;
+// the path comes in through the environment, so no quoting can break the command.
+const PSSA_RULES = [
+  'PSReservedParams', 'PSAvoidUsingUsernameAndPasswordParams', 'PSAvoidUsingConvertToSecureStringWithPlainText',
+  'PSAvoidUsingPlainTextForPassword', 'PSUseDeclaredVarsMoreThanAssignments', 'PSPossibleIncorrectComparisonWithNull',
+  'PSAvoidUsingEmptyCatchBlock', 'PSAvoidAssignmentToAutomaticVariable',
+];
+const PSSA_COMMAND = [
+  '$p = $env:CUBICLE_CHECK_PATH',
+  `$found = @(Invoke-ScriptAnalyzer -Path $p -IncludeRule ${PSSA_RULES.join(',')})`,
+  '$found | Sort-Object Line, Column | ForEach-Object { "{0}:{1}:{2}: {3}: {4}" -f $p, $_.Line, $_.Column, $_.RuleName, ($_.Message -replace "\\s+", " ") }',
+  'if ($found.Count) { exit 1 }',
+].join('; ');
+
 function checkerFor(target, content) {
   const shebang = content.startsWith('#!') ? content.split('\n', 1)[0] : '';
+  if (/\.ps(m|d)?1$/i.test(target) || /^#!.*\bpwsh\b/.test(shebang)) {
+    return ['pwsh', ['-NoProfile', '-NonInteractive', '-Command', PSSA_COMMAND], { CUBICLE_CHECK_PATH: target }];
+  }
   if (/\.(sh|bash)$/i.test(target) || /^#!.*\b(ba|da|k)?sh\b/.test(shebang)) {
     return ['shellcheck', ['--severity=warning', '--format=gcc', '--color=never', target]];
   }
@@ -205,12 +224,19 @@ function checkerFor(target, content) {
   return null;
 }
 
+const CHECK_NOTES = {
+  shellcheck: 'Fix these before running the script. If one is a false alarm, put "# shellcheck disable=SCnnnn" on the line before it.',
+  ruff: 'Fix these before running the script: Python would fail on them.',
+  pwsh: 'Fix these before running the script (PSScriptAnalyzer). If one is a false alarm, put '
+    + "[Diagnostics.CodeAnalysis.SuppressMessageAttribute('RuleName', '')] above the param() block of the script or function it is in.",
+};
+
 async function checkScript(target, content) {
   const checker = checkerFor(target, content);
   if (!checker) return {};
-  const [tool, args] = checker;
+  const [tool, args, env] = checker;
   try {
-    await execFileAsync(tool, args, { cwd: workspace, timeout: CHECK_TIMEOUT_MS, maxBuffer: 1024 * 1024 });
+    await execFileAsync(tool, args, { cwd: workspace, timeout: CHECK_TIMEOUT_MS, maxBuffer: 1024 * 1024, ...(env ? { env: { ...process.env, ...env } } : {}) });
     return { check: { tool, ok: true } };
   } catch (error) {
     // Not installed (an older image) or too slow: say nothing rather than something wrong.
@@ -227,10 +253,7 @@ async function checkScript(target, content) {
         ok: false,
         problems: problems.slice(0, CHECK_MAX_PROBLEMS),
         ...(problems.length > CHECK_MAX_PROBLEMS ? { more: problems.length - CHECK_MAX_PROBLEMS } : {}),
-        note:
-          tool === 'shellcheck'
-            ? 'Fix these before running the script. If one is a false alarm, put "# shellcheck disable=SCnnnn" on the line before it.'
-            : 'Fix these before running the script: Python would fail on them.',
+        note: CHECK_NOTES[tool] || 'Fix these before running the script.',
       },
     };
   }
