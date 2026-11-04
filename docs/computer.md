@@ -84,12 +84,16 @@ server listening on `0.0.0.0` until they are stopped and started again.
 
 ## Checking scripts
 
-When a bot saves a shell script (`.sh`, `.bash`, or a file starting with a shell `#!` line) or a Python
-file with its file tools, the computer checks it on the spot: shell with
-[ShellCheck](https://www.shellcheck.net), Python with [Ruff](https://docs.astral.sh/ruff/) for real
-errors (syntax errors, undefined names). Problems come back with the save, so the bot fixes the
-script before running it; style notes are left out, and nothing is ever refused. Both tools are
-installed in the computer for the bot to run itself too.
+When a bot saves a shell script (`.sh`, `.bash`, or a file starting with a shell `#!` line), a Python
+file or a PowerShell one (`.ps1`, `.psm1`, `.psd1`) with its file tools, the computer checks it on the
+spot: shell with [ShellCheck](https://www.shellcheck.net), Python with
+[Ruff](https://docs.astral.sh/ruff/) for real errors (syntax errors, undefined names), and PowerShell
+with [PSScriptAnalyzer](https://learn.microsoft.com/powershell/utility-modules/psscriptanalyzer/overview)
+for syntax errors and a few rules that catch real bugs (variables set and never used, `$null` on the
+wrong side of a comparison, empty `catch` blocks, passwords as plain text). Problems come back with the
+save, so the bot fixes the script before running it; style notes are left out, and nothing is ever
+refused. A PowerShell check takes about a second. All three tools are installed in the computer for the
+bot to run itself too, along with PowerShell 7 (`pwsh`).
 
 ## Showing the bot how
 
