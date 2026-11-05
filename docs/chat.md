@@ -45,7 +45,8 @@ the time to the first token (mostly the model reading the prompt). Hover it for 
 
 A bot can ask you something and wait for the answer: a card with the choices, and a box for an answer of
 your own, appears in the chat, and the sidebar marks the bot as waiting. The reply carries on once you
-answer.
+answer. A bot with a few separate decisions for you asks them on one card (up to four): pick or type an
+answer to each, then **Send answers**.
 
 ## Undo and redo
 
