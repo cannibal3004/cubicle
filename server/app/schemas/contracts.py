@@ -101,12 +101,18 @@ class ApprovalDecision(BaseModel):
     action: Literal["allow", "deny"]
 
 
+class QuestionAnswerItem(BaseModel):
+    answer: str = ""
+    option_index: Optional[int] = None
+
+
 class QuestionAnswer(BaseModel):
-    """The user's answer to a question a bot asked (ask_user)."""
+    """The user's answer to a question a bot asked (ask_user); `answers` for a card of several, in order."""
 
     request_id: str
     answer: str = ""
     option_index: Optional[int] = None
+    answers: Optional[List[QuestionAnswerItem]] = None
 
 
 class ActionRequest(BaseModel):

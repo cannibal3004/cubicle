@@ -239,8 +239,8 @@ export default function ChatWindow({ bot, threadId: threadIdProp, conversation, 
     await respondApproval(requestId, action);
   };
 
-  const handleQuestionAnswer = async (requestId, answer, optionIndex) => {
-    await answerQuestion(requestId, answer, optionIndex);
+  const handleQuestionAnswer = async (requestId, answer, optionIndex, answers = null) => {
+    await answerQuestion(requestId, answer, optionIndex, answers);
   };
 
   // Attaching: the first image goes to the model as a picture; every other

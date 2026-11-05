@@ -623,12 +623,13 @@ export function subscribeToChatStream(threadId, options, onEvent, onError) {
   };
 }
 
-// Answer a question a bot asked mid-reply (an ask_user card).
-export async function answerQuestion(requestId, answer, optionIndex = null) {
+// Answer a question a bot asked mid-reply (an ask_user card); `answers` answers a card of several,
+// one { answer, option_index } each, in order.
+export async function answerQuestion(requestId, answer, optionIndex = null, answers = null) {
   const res = await apiFetch(`${API_BASE_URL}/questions/answer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ request_id: requestId, answer, option_index: optionIndex }),
+    body: JSON.stringify({ request_id: requestId, answer, option_index: optionIndex, ...(answers ? { answers } : {}) }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Failed to send the answer' }));

@@ -663,22 +663,45 @@ HELP_TOOLS: List[ToolSpec] = [
 # a Composio tool-router session, which this app does not use.
 _TOOLKIT_SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
+MAX_QUESTIONS = 4  # ask_user: questions on one card
+# An ask_user option: a short label, or the label with a line saying what choosing it means.
+_OPTION_SCHEMA: Dict[str, Any] = {
+    "anyOf": [
+        {"type": "string"},
+        _obj({"label": {"type": "string"}, "description": {"type": "string"}}, ["label"]),
+    ]
+}
+
 QUESTION_TOOLS: List[ToolSpec] = [
     ToolSpec(
         name="ask_user",
         description=(
-            "Ask the user one question and wait for the answer; the reply pauses until they respond. Use it when a decision is "
+            "Ask the user a question and wait for the answer; the reply pauses until they respond. Use it when a decision is "
             "theirs to make or when something you need is missing and cannot be found with your other tools. Offer 2 to 6 short "
             "options when there are natural choices (the user can still type something else unless allow_other is false); leave "
-            "options out for a free-text answer. Ask one thing at a time, and do not ask what you could find out yourself."
+            "options out for a free-text answer. For a few separate decisions at once, give 'questions' instead of 'question' "
+            f"(up to {MAX_QUESTIONS}, each with its own options): they share one card, the user answers each and sends once, and the "
+            "answers come back together. Do not ask what you could find out yourself."
         ),
         parameters=_obj(
             {
                 "question": {"type": "string", "description": "The question, in one or two sentences"},
-                "options": {"type": "array", "items": {"type": "string"}, "description": "2 to 6 short choices, in the order to show them"},
+                "options": {"type": "array", "items": _OPTION_SCHEMA, "description": "2 to 6 short choices, in the order to show them"},
                 "allow_other": {"type": "boolean", "description": "Whether the user may type an answer of their own (default true)"},
+                "questions": {
+                    "type": "array",
+                    "description": f"Instead of 'question': up to {MAX_QUESTIONS} questions on one card, each answered separately",
+                    "items": _obj(
+                        {
+                            "question": {"type": "string", "description": "The question, in one or two sentences"},
+                            "header": {"type": "string", "description": "A label of a word or two shown above it (optional)"},
+                            "options": {"type": "array", "items": _OPTION_SCHEMA, "description": "2 to 6 short choices (optional)"},
+                            "allow_other": {"type": "boolean", "description": "Whether the user may type an answer of their own (default true)"},
+                        },
+                        ["question"],
+                    ),
+                },
             },
-            ["question"],
         ),
         group="questions",
         needs_approval=False,
@@ -1266,6 +1289,44 @@ THREAD_ACTIONS = {
 }
 
 
+def _ask_options(value: Any, where: str) -> List[Dict[str, str]]:
+    """Options as {label, description}: from strings, {label, description} objects, or a {label: description} map."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    if isinstance(value, dict):
+        value = [{"label": k, "description": v} for k, v in value.items()]
+    if not isinstance(value, list):
+        raise ToolCallError(f"'{where}options' must be a list of short choices.")
+    options = []
+    for item in value:
+        label, description = (item, "") if isinstance(item, str) else ((item.get("label") or item.get("value") or ""), item.get("description") or "") if isinstance(item, dict) else ("", "")
+        if not isinstance(label, str) or not label.strip():
+            raise ToolCallError(f"Every one of '{where}options' needs a short label.")
+        options.append({"label": label.strip()[:200], "description": " ".join(str(description).split())[:300]})
+    if len(options) == 1:
+        raise ToolCallError(f"Offer at least two '{where}options', or none for a free-text answer.")
+    if len(options) > 6:
+        raise ToolCallError(f"At most 6 '{where}options' can be offered.")
+    return options
+
+
+def _ask_item(item: Any, where: str) -> Dict[str, Any]:
+    """One question of ask_user, checked: its text, header, options and whether typing is allowed."""
+    if not isinstance(item, dict):
+        raise ToolCallError(f"'{where.rstrip('.') or 'questions'}' must be an object with a 'question'.")
+    question = " ".join(str(item.get("question") or "").split()) if not isinstance(item.get("question"), str) else str(item["question"]).strip()
+    if not question:
+        raise ToolCallError(f"'{where}question' is required.")
+    allow_other = item.get("allow_other", True)
+    if not isinstance(allow_other, bool):
+        raise ToolCallError(f"'{where}allow_other' must be true or false.")
+    options = _ask_options(item.get("options"), where)
+    return {"question": question[:2000], "header": " ".join(str(item.get("header") or "").split())[:40], "options": options,
+            "allow_other": allow_other or not options}
+
+
 def build_invocation(
     name: str,
     arguments: Dict[str, Any],
@@ -1512,30 +1573,24 @@ def _build_invocation(
             preview=f"Collect the reply of bot {other}",
         )
     if name == "ask_user":
-        question = _string(arguments, "question", required=True, max_len=2000).strip()
-        if not question:
-            raise ToolCallError("'question' is required.")
-        options = arguments.get("options")
-        if options is None:
-            options = []
-        if isinstance(options, str):
-            options = [options]
-        if not isinstance(options, list) or not all(isinstance(o, str) and o.strip() for o in options):
-            raise ToolCallError("'options' must be a list of short non-empty strings.")
-        options = [o.strip()[:200] for o in options]
-        if len(options) == 1:
-            raise ToolCallError("Offer at least two options, or none for a free-text answer.")
-        if len(options) > 6:
-            raise ToolCallError("At most 6 options can be offered.")
-        allow_other = arguments.get("allow_other", True)
-        if not isinstance(allow_other, bool):
-            raise ToolCallError("'allow_other' must be true or false.")
-        return ActionInvocation(
-            name="user.ask",
-            arguments={"bot_id": bot_id, "question": question, "options": options, "allow_other": allow_other or not options},
-            target={"bot_id": bot_id},
-            preview=f"Ask the user: {question[:160]}",
-        )
+        raw = arguments.get("questions")
+        if raw is not None and arguments.get("question"):
+            raise ToolCallError("Give 'question' for one question or 'questions' for several, not both.")
+        if raw is None:
+            questions = [_ask_item(arguments, "")]
+        else:
+            if isinstance(raw, dict):
+                raw = [raw]
+            if not isinstance(raw, list) or not raw:
+                raise ToolCallError("'questions' must be a list of questions, each with its own 'question' and 'options'.")
+            if len(raw) > MAX_QUESTIONS:
+                raise ToolCallError(f"At most {MAX_QUESTIONS} questions at once; ask the rest after these are answered.")
+            if arguments.get("options") is not None:
+                raise ToolCallError("With 'questions', give each question its own 'options' inside it, not one list for all.")
+            questions = [_ask_item(item, f"questions[{n}].") for n, item in enumerate(raw)]
+        first = questions[0]["question"]
+        preview = f"Ask the user: {first[:160]}" if len(questions) == 1 else f"Ask the user {len(questions)} questions: {first[:120]}"
+        return ActionInvocation(name="user.ask", arguments={"bot_id": bot_id, "questions": questions}, target={"bot_id": bot_id}, preview=preview)
     if name == "todo_add":
         items = arguments.get("items")
         if isinstance(items, str):

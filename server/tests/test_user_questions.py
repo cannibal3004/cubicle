@@ -27,13 +27,32 @@ class AskUserInvocationTests(unittest.TestCase):
     def test_question_with_options(self):
         call = build_invocation("ask_user", {"question": "Which region?", "options": ["North", "South"]}, "bot-1")
         self.assertEqual(call.name, "user.ask")
-        self.assertEqual(call.arguments, {"bot_id": "bot-1", "question": "Which region?", "options": ["North", "South"], "allow_other": True, "thread_id": "bot-1"})
+        self.assertEqual(call.arguments, {"bot_id": "bot-1", "thread_id": "bot-1", "questions": [
+            {"question": "Which region?", "header": "", "options": [{"label": "North", "description": ""}, {"label": "South", "description": ""}], "allow_other": True}]})
         self.assertEqual(call.preview, "Ask the user: Which region?")
 
     def test_free_text_question_always_allows_typing(self):
         call = build_invocation("ask_user", {"question": "What is the budget?", "allow_other": False}, "bot-1")
-        self.assertEqual(call.arguments["options"], [])
-        self.assertTrue(call.arguments["allow_other"])
+        self.assertEqual(call.arguments["questions"][0]["options"], [])
+        self.assertTrue(call.arguments["questions"][0]["allow_other"])
+
+    def test_several_questions_and_options_with_descriptions(self):
+        call = build_invocation("ask_user", {"questions": [
+            {"question": "Install fail2ban now?", "header": "fail2ban",
+             "options": [{"label": "Install now", "description": "Deploy the staged jail.local"}, "Hold"]},
+            {"question": "Look into the open MQTT port?", "header": "MQTT", "options": {"Yes": "Check 8883 from outside", "No": ""}},
+        ]}, "bot-1")
+        first, second = call.arguments["questions"]
+        self.assertEqual((first["header"], first["options"][0]), ("fail2ban", {"label": "Install now", "description": "Deploy the staged jail.local"}))
+        self.assertEqual([o["label"] for o in second["options"]], ["Yes", "No"])  # a {label: description} map
+        self.assertEqual(call.preview, "Ask the user 2 questions: Install fail2ban now?")
+        # What Qwen sent: one options map for all the questions.
+        with self.assertRaisesRegex(ToolCallError, "each question its own 'options'"):
+            build_invocation("ask_user", {"questions": [{"question": "a"}, {"question": "b"}], "options": {"x": "", "y": ""}}, "bot-1")
+        with self.assertRaisesRegex(ToolCallError, "At most 4"):
+            build_invocation("ask_user", {"questions": [{"question": str(n)} for n in range(5)]}, "bot-1")
+        with self.assertRaisesRegex(ToolCallError, "questions\\[1\\].question"):
+            build_invocation("ask_user", {"questions": [{"question": "a"}, {"header": "b"}]}, "bot-1")
 
     def test_bad_arguments(self):
         with self.assertRaises(ToolCallError):
@@ -106,6 +125,35 @@ class AskUserExecutorTests(unittest.TestCase):
             request_id = turn.events[-1]["requestId"]
             await questions_router.answer_question(QuestionAnswer(request_id=request_id, answer="  about 5k  "))
             self.assertEqual(await task, {"answered": True, "answer": "about 5k", "typed": True})
+            turn.task.cancel()
+
+        asyncio.run(scenario())
+
+    def test_several_questions_on_one_card_are_answered_together(self):
+        async def scenario():
+            turn = await self._turn()()
+            questions = [
+                {"question": "Install fail2ban now?", "header": "fail2ban", "options": [{"label": "Install now", "description": "Deploy jail.local"}, {"label": "Hold", "description": ""}]},
+                {"question": "Which hosts?", "header": "Hosts", "options": []},
+            ]
+            task = asyncio.create_task(execute_ask(self._call(questions=questions)))
+            await asyncio.sleep(0.01)
+            opened = turn.events[-1]
+            self.assertEqual([q["header"] for q in opened["questions"]], ["fail2ban", "Hosts"])
+            self.assertEqual(opened["questions"][0]["options"][0]["description"], "Deploy jail.local")
+            self.assertTrue(opened["questions"][1]["allowOther"])  # free text
+            self.assertEqual((opened["summary"], turn.pending_approval["questions"]), ("fail2ban · Hosts", 2))
+            # Every question must be answered.
+            with self.assertRaises(HTTPException) as missing:
+                await questions_router.answer_question(QuestionAnswer(request_id=opened["requestId"], answers=[{"option_index": 0}]))
+            self.assertIn("each of the 2", missing.exception.detail)
+            await questions_router.answer_question(QuestionAnswer(request_id=opened["requestId"], answers=[{"option_index": 1}, {"answer": "oracle and pi"}]))
+            result = await task
+            self.assertEqual(result, {"answered": True, "answers": [
+                {"question": "Install fail2ban now?", "answer": "Hold", "selected_option": "Hold", "option_index": 1},
+                {"question": "Which hosts?", "answer": "oracle and pi", "typed": True},
+            ]})
+            self.assertEqual(turn.events[-1]["answer"], "fail2ban: Hold; Hosts: oracle and pi")
             turn.task.cancel()
 
         asyncio.run(scenario())
