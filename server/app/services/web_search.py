@@ -300,10 +300,18 @@ class _TextOf(HTMLParser):
         self.skipping = 0
         self.title = ""
         self.in_title = False
+        # Where the page's own content starts and ends in `parts` (its <main>, else its <article>),
+        # so the site's header, menus and footer can be left out.
+        self.main: Dict[str, List[int]] = {"main": [], "article": []}
+        self.open_main: Dict[str, int] = {"main": 0, "article": 0}
 
     def handle_starttag(self, tag, attrs):
         if tag == "title":
             self.in_title = True
+        if tag in self.main and not self.skipping:
+            if not self.open_main[tag]:
+                self.main[tag].append(len(self.parts))
+            self.open_main[tag] += 1
         if tag in self.SKIP:
             self.skipping += 1
         elif tag in self.BREAK:
@@ -316,6 +324,10 @@ class _TextOf(HTMLParser):
     def handle_endtag(self, tag):
         if tag == "title":
             self.in_title = False
+        if tag in self.main and self.open_main[tag]:
+            self.open_main[tag] -= 1
+            if not self.open_main[tag]:
+                self.main[tag].append(len(self.parts))
         if tag in self.SKIP and self.skipping:
             self.skipping -= 1
         elif tag in self.BREAK or tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
@@ -327,8 +339,17 @@ class _TextOf(HTMLParser):
         elif not self.skipping:
             self.parts.append(data)
 
+    def _content(self) -> List[str]:
+        """The parts inside the page's <main> (else its <article> elements), when they hold real text; else all."""
+        for tag in ("main", "article"):
+            marks = self.main[tag] + ([len(self.parts)] if len(self.main[tag]) % 2 else [])
+            inside = [part for start, end in zip(marks[::2], marks[1::2]) for part in self.parts[start:end]]
+            if len("".join(inside).strip()) >= 200:
+                return inside
+        return self.parts
+
     def text(self) -> str:
-        joined = "".join(self.parts)
+        joined = "".join(self._content())
         lines = [" ".join(line.split()) for line in joined.splitlines()]
         return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 

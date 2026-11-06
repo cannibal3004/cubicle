@@ -133,6 +133,15 @@ class PageTests(unittest.TestCase):
                                               "<h2>Install</h2><p>Run <b>apt</b> install.</p><ul><li>one</li><li>two</li></ul></body></html>")
         self.assertEqual(title, "Guide")
         self.assertEqual(text, "## Install\n\nRun apt install.\n\none\n\ntwo")
+        # A page with a <main>: the site's header and menus around it are left out.
+        body = "Caddy 2.11.9 fixes the PHP directory index regression. " * 6
+        _, text = web_search.html_to_text(f"<body><div>Skip to content</div><div>Sign in</div><main><h1>v2.11.9</h1><p>{body}</p></main><div>Footer links</div></body>")
+        self.assertTrue(text.startswith("# v2.11.9"))
+        self.assertNotIn("Sign in", text)
+        self.assertNotIn("Footer", text)
+        # A <main> with hardly anything in it is not trusted to be the content.
+        _, text = web_search.html_to_text("<body><p>The real text is out here, and long enough to matter.</p><main>x</main></body>")
+        self.assertIn("real text", text)
 
     def test_private_addresses_are_not_read_directly(self):
         for url in ("http://127.0.0.1:8000/", "http://192.168.1.3:32443/api", "http://[::1]/", "file:///etc/passwd"):
