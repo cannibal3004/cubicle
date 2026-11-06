@@ -44,6 +44,12 @@ machine.
 The **Files** tab browses the computer's `/workspace` and the shared folder: open, preview, download,
 upload, make folders and delete. A [project's](projects.md) **Files** button opens its folder here.
 
+A bot keeps track of the files it reads and writes (in `/workspace`, its home and `/shared`). When one
+changes under it, by a command it ran, by you, or in another conversation, it is told with its next
+step, with the changed lines for a small text file. It will not replace a file whole that changed
+since it last read it until it reads it again (or says it means to), so an edit of yours is not lost
+to a bot's older copy.
+
 ## Activity
 
 The **Activity** tab shows the computer's state: whether it is running, who has control, its screen

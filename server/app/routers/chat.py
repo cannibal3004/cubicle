@@ -38,7 +38,7 @@ from app.services.mcp_tools import mcp_tool_specs
 from app.services.secrets_service import names_for, redactor_for
 from app.services import attachments as attachment_service
 from app.services import recall, retrieval
-from app.services import auto_memory, demonstrations, procedures, skills, web_search
+from app.services import auto_memory, demonstrations, file_tracking, procedures, skills, web_search
 from app.services import rewind as rewind_service
 from app.services import tool_names
 from app.services.repetition import RepetitionGuard, TAIL_CHARS as _LOOP_TAIL
@@ -793,6 +793,39 @@ def _store_added_tools(history: List[Dict[str, Any]], definitions: List[Dict[str
     return True
 
 
+# File tools whose path the bot has then seen as it is (services/file_tracking).
+_FILE_SEEN_TOOLS = {"read_file", "write_file", "edit_file", "shared_folder_read", "shared_folder_write"}
+
+
+def _tracked_path(call_name: str, arguments: Dict[str, Any]) -> str:
+    """The file a file tool names, as the tracker keys it ("" for other tools)."""
+    path = arguments.get("path") if isinstance(arguments, dict) else None
+    if not isinstance(path, str) or not path.strip():
+        return ""
+    if call_name in ("read_file", "write_file", "edit_file"):
+        return file_tracking.computer_path(path)
+    if call_name in ("shared_folder_read", "shared_folder_write"):
+        return file_tracking.shared_path(path)
+    return ""
+
+
+def _changed_files_block(thread_id: str) -> tuple:
+    """Files the bot read that changed since its last reply (the user, another conversation, a job), and how many; ("", 0) when none."""
+    try:
+        found = file_tracking.changes(thread_id)
+    except Exception as exc:  # never let it fail a turn
+        logger.warning("Checking the files of %s failed: %s", thread_id, exc)
+        return "", 0
+    if not found:
+        return "", 0
+    lines = ["Files you read that changed since your last reply (not by you: the user, another conversation or a job):"]
+    for entry in found:
+        lines.append(f"- {entry['path']}: {entry['change']}" + (f". {entry['note']}" if entry.get("note") else ""))
+        if entry.get("diff"):
+            lines.append("```diff\n" + entry["diff"] + "\n```")
+    return "\n".join(lines), len(found)
+
+
 def _command_failed(call_name: str, result: Any) -> bool:
     """A terminal command that ran to the end with a non-zero exit code (a background one has not ended yet)."""
     if call_name != "computer_terminal_execute" or not isinstance(result, dict) or result.get("background"):
@@ -838,6 +871,11 @@ async def attach_turn_context(
         counts["memories"] = remembered.count("\n- ")
         turn.emit({"type": "memory.used", "botMsgId": bot_msg_id, "count": counts["memories"]})
         blocks.append(remembered)
+    # Files the bot read that someone else changed since its last reply.
+    moved, moved_count = _changed_files_block(thread_id)
+    if moved:
+        counts["files_changed"] = moved_count
+        blocks.append(moved)
     # Lines of the bot's notes that a newer memory contradicts, until they are fixed (once per stretch of context).
     stale = _fresh_entries(stale_notes_context(bot_id), "- ", seen) if acting_for_owner() else ""
     if stale:
@@ -1580,6 +1618,20 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         turn.emit({"type": "tool.failed", "tool": call_name, "callName": call_name, "error": note})
                         messages.append({"role": "tool", "tool_call_id": call_id, "content": _tool_result_text({"status": "skipped", "error": note})})
                         continue
+                    # Files the bot read that changed since the last call: not by this conversation.
+                    file_path = _tracked_path(call_name, arguments)
+                    file_notes: Dict[str, Any] = {}
+                    elsewhere = file_tracking.changes(thread_id)
+                    if elsewhere:
+                        file_notes["files_changed_outside_this_conversation"] = elsewhere
+                    if call_name in ("write_file", "shared_folder_write") and file_path and arguments.get("overwrite") is not True:
+                        refusal = file_tracking.overwrite_refusal(thread_id, bot_id, file_path)
+                        if refusal:
+                            record.update({"status": "failed", "error": refusal})
+                            turn.emit({"type": "tool.failed", "tool": call_name, "callName": call_name, "error": refusal})
+                            messages.append({"role": "tool", "tool_call_id": call_id, "content": _tool_result_text({"error": refusal, **file_notes})})
+                            failed_before = failed_before or call_name
+                            continue
 
                     record["summary"] = getattr(invocation, "summary", None) or getattr(invocation, "preview", call_name)
                     # The approval settings as they are now: the user may have
@@ -1594,6 +1646,12 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
 
                     status = outcome.get("status", "failed")
                     record["status"] = status
+                    # What the bot now knows of the file it read or wrote, and what this call changed besides.
+                    if status == "completed" and file_path and call_name in _FILE_SEEN_TOOLS:
+                        file_tracking.note_seen(thread_id, bot_id, file_path)
+                    changed_here = file_tracking.changes(thread_id, skip=(file_path,) if file_path else ())
+                    if changed_here:
+                        file_notes["files_changed_by_this_call"] = changed_here
                     if status != "completed" or _command_failed(call_name, outcome.get("result")):
                         failed_before = failed_before or call_name
                     if trusted and status != "rejected":
@@ -1612,7 +1670,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         record["ran_ms"] = outcome["ran_ms"]
                     if status == "completed":
                         result = outcome.get("result") or {}
-                        payload = _compact_result(result)
+                        payload = {**_compact_result(result), **file_notes}
                         if call_name == "computer_request_takeover":
                             turn.emit({
                                 "type": "computer.takeover_requested",
@@ -1642,7 +1700,7 @@ async def _build_turn_runner(thread_id: str, requested_model: Optional[str]):
                         messages.append({
                             "role": "tool",
                             "tool_call_id": call_id,
-                            "content": _tool_result_text({"status": status, "error": outcome.get("error")}),
+                            "content": _tool_result_text({"status": status, "error": outcome.get("error"), **file_notes}),
                         })
                 # Every call above appended exactly one tool reply. A round in
                 # which each call is a repeat with the same reply made no progress.
