@@ -1046,6 +1046,10 @@ export const updateBotMemory = (botId, id, changes) =>
   secretsCall(`/bots/${encodeURIComponent(botId)}/memories/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
 export const deleteBotMemory = (botId, id) => secretsCall(`/bots/${encodeURIComponent(botId)}/memories/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
+// Web search: a two-result search with the given (or saved) provider; { ok, provider, results, first, ms } or { ok: false, error }.
+export const testWebSearch = (body) =>
+  secretsCall('/settings/web-search/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
 // One of a bot's own skills moved into your library (every bot gets it); returns { skill, bot }.
 export const moveSkillToLibrary = (botId, skillId) =>
   secretsCall('/skills/from-bot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bot_id: botId, skill_id: skillId }) });

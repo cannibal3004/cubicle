@@ -38,7 +38,7 @@ from app.services.mcp_tools import mcp_tool_specs
 from app.services.secrets_service import names_for, redactor_for
 from app.services import attachments as attachment_service
 from app.services import recall, retrieval
-from app.services import auto_memory, demonstrations, procedures, skills
+from app.services import auto_memory, demonstrations, procedures, skills, web_search
 from app.services import rewind as rewind_service
 from app.services import tool_names
 from app.services.repetition import RepetitionGuard, TAIL_CHARS as _LOOP_TAIL
@@ -1019,6 +1019,7 @@ async def _turn_setup(thread_id: str, requested_model: Optional[str]) -> Dict[st
             orchestrator=bool(current_bot.get("orchestrator")),
             # Only in the owner's own conversations: a teammate's neither feed nor read it.
             auto_memory=acting_for_owner() and (auto_memory.enabled_for(bot_id) or bool(auto_memory.list_memories(bot_id))),
+            web=web_search.provider_now(),
         )
         # The bot's own tool choices, over the apps that are off by default.
         tool_specs = filter_tools(
