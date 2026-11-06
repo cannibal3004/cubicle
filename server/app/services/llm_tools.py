@@ -81,11 +81,12 @@ SHARED_FOLDER_TOOLS: List[ToolSpec] = [
     ),
     ToolSpec(
         name="shared_folder_write",
-        description="Create or overwrite a UTF-8 text file in the shared folder. Missing parent folders are created automatically.",
+        description="Create or overwrite a UTF-8 text file in the shared folder. Missing parent folders are created automatically. A file that changed since you last read it is not replaced unless you pass overwrite: true.",
         parameters=_obj(
             {
                 "path": {"type": "string", "description": "Relative file path"},
                 "content": {"type": "string", "description": "Full file contents"},
+                "overwrite": {"type": "boolean", "description": "Replace the file even though it changed since you last read it (default false)"},
             },
             ["path", "content"],
         ),
@@ -198,11 +199,12 @@ COMPUTER_TOOLS: List[ToolSpec] = [
     ),
     ToolSpec(
         name="write_file",
-        description=f"Create or replace a UTF-8 text file in your computer (under {_FILE_ROOTS}). Missing parent directories are created. Give the complete file contents; for a change to an existing file use edit_file. A shell or Python script is checked as it is saved (ShellCheck, or Ruff for errors): fix what the result's check reports before running it.",
+        description=f"Create or replace a UTF-8 text file in your computer (under {_FILE_ROOTS}). Missing parent directories are created. Give the complete file contents; for a change to an existing file use edit_file. A file that changed since you last read it is not replaced unless you pass overwrite: true (read it again first). A shell, Python or PowerShell script is checked as it is saved (ShellCheck, Ruff, PSScriptAnalyzer): fix what the result's check reports before running it.",
         parameters=_obj(
             {
                 "path": {"type": "string", "description": _PATH_HINT},
                 "content": {"type": "string", "description": "Full file contents"},
+                "overwrite": {"type": "boolean", "description": "Replace the file even though it changed since you last read it (default false)"},
             },
             ["path", "content"],
         ),

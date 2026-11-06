@@ -713,7 +713,8 @@ function MessageItem({ message, botId, onEdit }) {
                   found.passages ? `${found.passages} passage${found.passages === 1 ? '' : 's'} from attachments` : '',
                   found.procedures ? `${found.procedures} skill${found.procedures === 1 ? '' : 's'} of its own` : '',
                   found.memories ? `${found.memories} memor${found.memories === 1 ? 'y' : 'ies'}` : '',
-                  found.stale_notes ? `${found.stale_notes} out-of-date line${found.stale_notes === 1 ? '' : 's'} in its notes` : '',
+                  found.files_changed ? `${found.files_changed} changed file${found.files_changed === 1 ? '' : 's'}` : '',
+                  found.stale_notes ?`${found.stale_notes} out-of-date line${found.stale_notes === 1 ? '' : 's'} in its notes` : '',
                   found.recalled ? `${found.recalled} earlier message${found.recalled === 1 ? '' : 's'}` : '',
                   found.log_entries ? `${found.log_entries} project log entr${found.log_entries === 1 ? 'y' : 'ies'}` : '',
                 ].filter(Boolean);
