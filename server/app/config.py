@@ -93,6 +93,11 @@ class Settings:
     CONTEXT_TOOL_RESULT_CHARS: int = int(os.getenv("CONTEXT_TOOL_RESULT_CHARS", "4000"))
     CONTEXT_TOOL_RESULTS_MESSAGE_CHARS: int = int(os.getenv("CONTEXT_TOOL_RESULTS_MESSAGE_CHARS", "24000"))
     COMPOSIO_API_KEY: str = os.getenv("COMPOSIO_API_KEY", "")
+    # Web search for every bot (services/web_search): exa, tavily or searxng, its key (Exa, Tavily)
+    # or address (SearXNG). App Settings → Web search overrides these.
+    WEB_SEARCH_PROVIDER: str = os.getenv("WEB_SEARCH_PROVIDER", "").strip().lower()
+    WEB_SEARCH_API_KEY: str = os.getenv("WEB_SEARCH_API_KEY", "")
+    WEB_SEARCH_URL: str = os.getenv("WEB_SEARCH_URL", "").strip()
     # Connected apps are offered to the model as tools. Composio flags a
     # subset of each toolkit as "important"; that keeps the list useful
     # without flooding the context window.

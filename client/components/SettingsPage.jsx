@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { FiX, FiCheck, FiEye, FiEyeOff, FiUser, FiUsers, FiServer, FiShield, FiLink, FiKey, FiCpu, FiBookOpen } from "react-icons/fi";
+import { FiX, FiCheck, FiEye, FiEyeOff, FiUser, FiUsers, FiServer, FiShield, FiLink, FiKey, FiCpu, FiBookOpen, FiGlobe } from "react-icons/fi";
 import {
   fetchSettings,
   saveSettings,
@@ -26,6 +26,7 @@ import ModelPicker from "./ModelPicker";
 import SecretsSection from "./SecretsSection";
 import McpServersSection from "./McpServersSection";
 import SkillsSection from "./SkillsSection";
+import WebSearchSection from "./WebSearchSection";
 import { setDisplayPrefs, useDisplayPrefs } from "../lib/displayPrefs";
 import AccountSection from "./AccountSection";
 import AdminUsersSection from "./AdminUsersSection";
@@ -60,6 +61,7 @@ const SECTIONS = [
   { id: "model", label: "Model server", icon: FiCpu, adminEdits: true, blurb: "The model server every bot uses, and the default model." },
   { id: "approval", label: "Auto-approval", icon: FiShield, blurb: "Which actions ask you, and which a decision model may wave through." },
   { id: "connectors", label: "Connectors", icon: FiLink, blurb: "App connections for your bots." },
+  { id: "web", label: "Web search", icon: FiGlobe, blurb: "The search provider your bots use to search and read the web." },
   { id: "secrets", label: "Secrets", icon: FiKey, blurb: "API keys and tokens your bots may use in their computers." },
   { id: "mcp", label: "MCP servers", icon: FiServer, blurb: "Tool servers for your bots, and system-wide ones." },
   { id: "skills", label: "Skills", icon: FiBookOpen, blurb: "Instructions for kinds of tasks, with their scripts and files, that your bots load when a task fits." },
@@ -1067,6 +1069,7 @@ export default function SettingsPage({
         )}
 
         {/* Secrets for bot computers */}
+        {show("web") && <WebSearchSection admin={admin} />}
         <div className={`bg-[#18181b] border border-[#27272a] rounded-2xl p-5 space-y-4 shadow-sm ${show("secrets") ? "" : "hidden"}`}>
           <div>
             <h3 className="text-sm font-bold text-zinc-100">Secrets</h3>

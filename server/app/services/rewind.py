@@ -47,6 +47,7 @@ READ_ONLY_TOOLS = {
     "computer_read_file", "list_files", "read_file", "github_list_issues", "memory_read", "procedure_read", "skill_read", "todo_list", "schedule_list",
     "ask_user", "bots_list", "bots_status", "bots_reply", "connector_status", "mcp_list_servers", "mcp_test_server",
     "computer_request_takeover", "composio_search_tools", "work_notes_read", "project_log_read", "projects_list",
+    "web_search", "web_answer", "web_fetch",
 }
 # Words in an app tool's name that mark it as a read (gmail_fetch_emails, notion_search, ...).
 _READ_WORDS = {"list", "get", "fetch", "read", "search", "find", "query", "describe", "status", "lookup", "retrieve", "view", "show", "check"}

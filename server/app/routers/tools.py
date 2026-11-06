@@ -28,6 +28,7 @@ GROUP_LABELS = {
     "questions": "Questions to you",
     "help": "Cubicle help",
     "orchestration": "Other bots (orchestrator)",
+    "web": "Web search",
 }
 
 
@@ -54,6 +55,7 @@ async def tool_catalog():
         github=bool(composio_service.get_api_key()) and not connector_specs,
         connector_management=bool(composio_service.get_api_key()),
         orchestrator=True,
+        web="exa",  # every web tool, whichever provider is set up
     )
 
     groups: List[Dict[str, Any]] = []

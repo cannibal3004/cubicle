@@ -18,7 +18,7 @@ from app.services.tool_names import migrate_bot
 # accepted so legacy JSON imports and old databases keep working, and are
 # copied into the `llm_*` keys once by `_migrate_legacy_llm_settings`.
 LEGACY_LLM_KEYS = {"muapi_api_key", "muapi_base_url"}
-SECRET_KEYS = {"llm_api_key", "muapi_api_key", "composio_api_key", "composio_key"}
+SECRET_KEYS = {"llm_api_key", "muapi_api_key", "composio_api_key", "composio_key", "web_search_api_key", "user_web_search_api_key"}
 SETTING_KEYS = {
     "llm_provider",
     "llm_api_key",
@@ -52,6 +52,12 @@ SETTING_KEYS = {
     "tool_selection_max",
     "title_model",
     "deleted_schedules",
+    "web_search_provider",
+    "web_search_api_key",
+    "web_search_url",
+    "user_web_search_provider",
+    "user_web_search_api_key",
+    "user_web_search_url",
 }
 # App-wide keys live under the system owner and only admins change them;
 # every other key is personal to the account that saved it.
@@ -77,6 +83,9 @@ APP_SETTING_KEYS = {
     "mcp_servers",
     "skills",
     "memory_model",
+    "web_search_provider",
+    "web_search_api_key",
+    "web_search_url",
 }
 
 

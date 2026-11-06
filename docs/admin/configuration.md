@@ -64,6 +64,9 @@ variable once it is saved there.
 | `DECIDER_THRESHOLD` | `0.2` | An action is auto-approved only when every risk score is below this |
 | `DECIDER_TIMEOUT_SECONDS` | `15` | How long to wait for the decision server before asking you |
 | `COMPOSIO_API_KEY` | empty | The connector key, when none is saved in App Settings |
+| `WEB_SEARCH_PROVIDER` | empty | `exa`, `tavily` or `searxng`, when none is chosen in App Settings → Web search |
+| `WEB_SEARCH_API_KEY` | empty | The Exa or Tavily key, when none is saved in App Settings |
+| `WEB_SEARCH_URL` | empty | The SearXNG server's address, when none is saved in App Settings |
 | `COMPOSIO_IMPORTANT_TOOLS_ONLY` | `1` | Offer only the tools Composio marks important for each app |
 | `COMPOSIO_TOOLS_PER_TOOLKIT` | `40` | Most tools offered per connected app |
 | `TOOL_SELECTION_MAX` | `40` | Above this many tools, connected apps' tools are narrowed to the ones that match the conversation; `0` offers everything |

@@ -186,6 +186,15 @@ class AppSettingsSchema(BaseModel):
     # Automatic memory for bots that have not chosen (per account), and the model that keeps it (app-wide).
     auto_memory_default: bool = False
     memory_model: str = Field(default="", max_length=200)
+    # Web search (services/web_search): everyone's provider (app-wide), and an account's own instead.
+    web_search_provider: Literal["", "exa", "tavily", "searxng"] = Field(default_factory=lambda: settings.WEB_SEARCH_PROVIDER if settings.WEB_SEARCH_PROVIDER in {"exa", "tavily", "searxng"} else "")
+    web_search_api_key: str = Field(default="", json_schema_extra={"writeOnly": True})
+    web_search_api_key_configured: bool = False
+    web_search_url: str = Field(default_factory=lambda: settings.WEB_SEARCH_URL, max_length=300, pattern=r"^(https?://[^\s]+)?$")
+    user_web_search_provider: Literal["", "exa", "tavily", "searxng"] = ""
+    user_web_search_api_key: str = Field(default="", json_schema_extra={"writeOnly": True})
+    user_web_search_api_key_configured: bool = False
+    user_web_search_url: str = Field(default="", max_length=300, pattern=r"^(https?://[^\s]+)?$")
     # Connected apps whose tools are withheld from every bot (still connected).
     disabled_toolkits: List[str] = Field(default_factory=list)
     # Auto-approval of actions that need approval, scored by a decision model.
