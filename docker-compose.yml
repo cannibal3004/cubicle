@@ -76,6 +76,11 @@ services:
       COMPOSIO_IMPORTANT_TOOLS_ONLY: ${COMPOSIO_IMPORTANT_TOOLS_ONLY:-1}
       COMPOSIO_TOOLS_PER_TOOLKIT: ${COMPOSIO_TOOLS_PER_TOOLKIT:-40}
       FILE_SHARE_MAX_BYTES: ${FILE_SHARE_MAX_BYTES:-209715200}
+      # OCR of scanned PDF pages, on the CPU: see docs/admin/configuration.md.
+      OCR_SCANNED_PDFS: ${OCR_SCANNED_PDFS:-1}
+      OCR_INLINE_SECONDS: ${OCR_INLINE_SECONDS:-30}
+      OCR_MAX_PAGES: ${OCR_MAX_PAGES:-50}
+      OCR_THREADS: ${OCR_THREADS:-4}
       DEFAULT_MODEL: ${DEFAULT_MODEL:-}
       COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
       # Auto-approval defaults. All optional; App Settings in the UI overrides

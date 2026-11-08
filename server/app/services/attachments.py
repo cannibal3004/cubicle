@@ -275,7 +275,7 @@ def save_scan_text(shared: SharedFile, scan: "ocr.Scan") -> Optional[str]:
     if scan.skipped:
         lines += [f"(Not read: {ocr.page_list(scan.skipped)}; only the first {len(scan.scanned)} scanned pages are.)", ""]
     try:
-        target.write_text("\n".join(lines) + scan.text() + "\n", encoding="utf-8")
+        target.write_text("\n".join(lines) + "\n" + scan.text() + "\n", encoding="utf-8")
     except OSError as exc:
         logger.warning("Could not save the OCR text of %s: %s", shared.name, exc)
         return None
