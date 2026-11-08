@@ -122,6 +122,13 @@ class Settings:
     ATTACHMENT_MAX_BYTES: int = int(os.getenv("ATTACHMENT_MAX_BYTES", str(50 * 1024 * 1024)))
     ATTACHMENT_INLINE_MAX_CHARS: int = int(os.getenv("ATTACHMENT_INLINE_MAX_CHARS", "40000"))
     ATTACHMENT_EXTRACT_TIMEOUT: float = float(os.getenv("ATTACHMENT_EXTRACT_TIMEOUT", "60"))
+    # PDF pages with no text in them (scans) are read with OCR on the CPU (services/ocr.py): for up
+    # to OCR_INLINE_SECONDS while the message is sent, the rest in the background, at most
+    # OCR_MAX_PAGES pages a file, with OCR_THREADS threads.
+    OCR_SCANNED_PDFS: bool = os.getenv("OCR_SCANNED_PDFS", "1").lower() in {"1", "true", "yes"}
+    OCR_INLINE_SECONDS: float = float(os.getenv("OCR_INLINE_SECONDS", "30"))
+    OCR_MAX_PAGES: int = int(os.getenv("OCR_MAX_PAGES", "50"))
+    OCR_THREADS: int = int(os.getenv("OCR_THREADS", "4"))
     # Retrieval: embeddings (and a reranker when the server has one) on the
     # model server, used to bring the relevant parts of long attachments to a
     # turn. Empty model names let the server pick its defaults. App Settings

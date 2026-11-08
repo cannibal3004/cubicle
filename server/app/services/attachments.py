@@ -6,19 +6,28 @@ folder. The chat shows it as the same download card a bot's share_file
 produces, and the model gets the file's text, converted from PDF and Office
 formats with MarkItDown and capped so one big document cannot fill the
 context; above the cap the model is told where the whole file is.
+
+A PDF whose pages are pictures (a scan) is read with OCR instead
+(services/ocr.py): for a while as the message is sent, the remaining pages in
+the background. What was read is saved next to the PDF as <name>.ocr.md, and
+when the last page is done the conversation gets a message saying so (like a
+background job's). A background read is lost if the API restarts.
 """
 
 import asyncio
 import re
+import time
 import unicodedata
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
+import uuid
+from datetime import datetime
 
 import logging
 
 from app.config import settings
-from app.services import retrieval
+from app.services import ocr, retrieval
 from app.services.identity import get_current_actor, get_current_owner, owner_context
 
 logger = logging.getLogger(__name__)
@@ -52,6 +61,7 @@ class Extract:
     chars: int  # of the whole conversion, before the cap
     truncated: bool
     note: str  # how the text was obtained, or why there is none
+    ocr: str = ""  # for a scan: what the model should know about text read with OCR
 
 
 def upload_target(bot_id: Optional[str]) -> Tuple[str, Path]:
@@ -146,12 +156,32 @@ def _plain_text(path: Path) -> Optional[str]:
 
 
 def extract_text(path: Path, limit: Optional[int] = None) -> Extract:
-    """The file's text, capped at `limit` characters. Never raises: a file
-    that cannot be read as text comes back with an empty text and a note."""
+    """The file's text, capped at `limit` characters (a scan's pages all read).
+    Never raises: a file that cannot be read as text comes back with an empty
+    text and a note."""
+    return _extract(path, limit)[0]
+
+
+def _scan_note(scan: "ocr.Scan") -> str:
+    note = "read from a scan with OCR"
+    if len(scan.scanned) + len(scan.skipped) < len(scan.texts):
+        note = "the scanned pages read with OCR, the others from the PDF's own text"
+    return note + (" (not all pages yet)" if scan.pending else "")
+
+
+def _extract(path: Path, limit: Optional[int] = None, ocr_seconds: Optional[float] = None) -> Tuple[Extract, Optional["ocr.Scan"]]:
+    """extract_text, and for a scan what was read of it; OCR stops starting
+    new pages after `ocr_seconds` (the rest are the Scan's pending pages)."""
     cap = settings.ATTACHMENT_INLINE_MAX_CHARS if limit is None else limit
     suffix = path.suffix.lower()
     text: Optional[str] = None
     note = ""
+    if suffix == ".pdf":
+        scan = ocr.open_scan(path)
+        if scan is not None:
+            scan.read(None if ocr_seconds is None else time.monotonic() + ocr_seconds)
+            if scan.found_text or scan.pending:  # else only blank pages: the PDF's own text is all there is
+                return _capped(scan.text(), cap, _scan_note(scan), OCR_CAVEAT.format(pages=ocr.page_list(scan.scanned))), scan
     if suffix in IMAGE_SUFFIXES:
         note = "an image file; it is not shown to you as text"
     elif suffix in PLAIN_TEXT_SUFFIXES or not suffix:
@@ -175,33 +205,154 @@ def extract_text(path: Path, limit: Optional[int] = None) -> Extract:
                 text = None
                 note = f"no text could be extracted ({type(exc).__name__})"
     if text is None:
-        return Extract(text="", chars=0, truncated=False, note=note)
+        return Extract(text="", chars=0, truncated=False, note=note), None
+    return _capped(text, cap, note), None
+
+
+def _capped(text: str, cap: int, note: str, ocr_note: str = "") -> Extract:
     text = text.strip()
     total = len(text)
     truncated = total > cap
     if truncated:
         text = text[:cap]
-    return Extract(text=text, chars=total, truncated=truncated, note=note)
+    return Extract(text=text, chars=total, truncated=truncated, note=note, ocr=ocr_note)
 
 
-async def attach(shared: SharedFile, bot_id: Optional[str]) -> Dict[str, Any]:
+OCR_CAVEAT = (
+    "A scan, read with OCR ({pages}). OCR misreads characters, most often digits and symbols ($ read as 5, 0 as O): "
+    "before relying on a figure, check it on the page itself (open the PDF in your computer's browser and take a "
+    "screenshot) or ask the user."
+)
+SCAN_SUFFIX = ".ocr.md"
+
+# Background reads of scans, kept referenced until they end.
+_scan_tasks: Set["asyncio.Task[None]"] = set()
+
+
+async def attach(shared: SharedFile, bot_id: Optional[str], thread_id: Optional[str] = None) -> Dict[str, Any]:
     """The attachment record for a message: card fields, location and the
-    text for the model (extracted in a worker thread)."""
+    text for the model (extracted in a worker thread). A scan's pages not read
+    in time go on in the background, and `thread_id` hears when they are done."""
     record = describe(shared, bot_id)
     # Extracted once in full: the message inlines the first part, and the
     # whole text is indexed for retrieval when embeddings are available.
+    scan = None
     try:
-        full = await asyncio.wait_for(asyncio.to_thread(extract_text, shared.absolute, retrieval.MAX_INDEX_CHARS), timeout=settings.ATTACHMENT_EXTRACT_TIMEOUT)
+        full, scan = await asyncio.wait_for(
+            asyncio.to_thread(_extract, shared.absolute, retrieval.MAX_INDEX_CHARS, settings.OCR_INLINE_SECONDS),
+            timeout=settings.ATTACHMENT_EXTRACT_TIMEOUT,
+        )
     except asyncio.TimeoutError:
         full = Extract(text="", chars=0, truncated=False, note=f"text extraction did not finish within {settings.ATTACHMENT_EXTRACT_TIMEOUT:.0f}s")
     except Exception as exc:  # pragma: no cover - extract_text should not raise
         full = Extract(text="", chars=0, truncated=False, note=f"no text could be extracted ({type(exc).__name__})")
     cap = settings.ATTACHMENT_INLINE_MAX_CHARS
-    extract = Extract(text=full.text[:cap], chars=full.chars, truncated=full.chars > cap, note=full.note)
+    extract = Extract(text=full.text[:cap], chars=full.chars, truncated=full.chars > cap, note=full.note, ocr=full.ocr)
+    if scan is not None:
+        saved = save_scan_text(shared, scan)
+        extract = replace(extract, ocr=extract.ocr + _scan_progress(scan, shared, saved))
+        if scan.pending:
+            _finish_scan_later(scan, shared, record, bot_id, thread_id, saved)
     record["extract"] = asdict(extract)
-    if full.text and bot_id:
+    if full.text and bot_id and (scan is None or not scan.pending):
         schedule_indexing(bot_id, record, full.text)
     return record
+
+
+# ---- scans ----------------------------------------------------------------------
+
+def _scan_file(shared: SharedFile) -> Tuple[Path, str]:
+    """Where a scan's text is saved: on disk, and as the bot finds it."""
+    return shared.absolute.with_name(shared.absolute.name + SCAN_SUFFIX), location_for(shared.source, shared.path + SCAN_SUFFIX)
+
+
+def save_scan_text(shared: SharedFile, scan: "ocr.Scan") -> Optional[str]:
+    """Write what was read of the scan next to it; where the bot finds it, or None when it could not be written."""
+    target, location = _scan_file(shared)
+    lines = [f"# {shared.name}, read with OCR", "", "Pages that are pictures (a scan) were read with OCR: characters can be misread, digits and symbols most often.", ""]
+    if scan.pending:
+        lines += [f"(Still being read: {ocr.page_list(scan.pending)}; each is added here as it is done.)", ""]
+    if scan.skipped:
+        lines += [f"(Not read: {ocr.page_list(scan.skipped)}; only the first {len(scan.scanned)} scanned pages are.)", ""]
+    try:
+        target.write_text("\n".join(lines) + scan.text() + "\n", encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Could not save the OCR text of %s: %s", shared.name, exc)
+        return None
+    _world_writable(target, 0o666)
+    return location
+
+
+def _scan_progress(scan: "ocr.Scan", shared: SharedFile, saved: Optional[str]) -> str:
+    parts = []
+    if scan.pending:
+        where = f" each is added to {saved} as it is done, and" if saved else ""
+        parts.append(f"Still being read: {ocr.page_list(scan.pending)};{where} a message comes to this conversation when all are.")
+    elif saved:
+        parts.append(f"The text read is also saved at {saved}.")
+    if scan.skipped:
+        parts.append(f"Not read: {ocr.page_list(scan.skipped)} (only the first {len(scan.scanned)} scanned pages are).")
+    return (" " + " ".join(parts)) if parts else ""
+
+
+def _finish_scan_later(scan: "ocr.Scan", shared: SharedFile, record: Dict[str, Any], bot_id: Optional[str], thread_id: Optional[str], saved: Optional[str]) -> None:
+    """Read the scan's remaining pages in the background, then index the whole text and tell the conversation."""
+
+    async def run() -> None:
+        try:
+            await asyncio.to_thread(scan.read, None, lambda: save_scan_text(shared, scan))
+        except Exception as exc:  # pragma: no cover - read_page does not raise
+            logger.warning("Reading the rest of %s failed: %s", shared.name, exc)
+        save_scan_text(shared, scan)
+        text = scan.text()
+        if text and bot_id:
+            schedule_indexing(bot_id, record, text)
+        if thread_id and bot_id:
+            await _tell_scan_read(thread_id, bot_id, shared, scan, len(text), saved)
+
+    try:
+        # The task keeps this request's owner and actor (it copies the context).
+        task = asyncio.get_running_loop().create_task(run())
+    except RuntimeError:
+        return
+    _scan_tasks.add(task)
+    task.add_done_callback(_scan_tasks.discard)
+
+
+SCAN_TELL_WAIT_SECONDS = 6 * 3600
+
+
+async def _tell_scan_read(thread_id: str, bot_id: str, shared: SharedFile, scan: "ocr.Scan", chars: int, saved: Optional[str]) -> None:
+    """Post that the scan is read, once no reply is running in the conversation."""
+    from app.routers import chat as chat_router  # the turn machinery; imported here to avoid a cycle
+    from app.services import conversations
+    from app.services.turn_manager import TurnBusyError
+
+    where = f" All of it is in {saved}." if saved else " Its passages are looked up for you when a message asks about them."
+    text = (f"[The scanned file {shared.name} has been read to the end.] It was read with OCR ({ocr.page_list(scan.scanned)}, "
+            f"{chars:,} characters of text in all).{where} Carry on with what you were doing, or tell the user what it says.")
+    message = {
+        "id": f"msg-{uuid.uuid4().hex[:6]}",
+        "bot_id": bot_id,
+        "sender": "user",
+        "text": text,
+        "created_at": datetime.now().isoformat(),
+        "item_type": "user_text",
+        "raw_payload": {"scan_read": {"name": shared.name, "pages": len(scan.scanned)}},
+    }
+    owner = get_current_owner()
+    give_up = time.monotonic() + SCAN_TELL_WAIT_SECONDS
+    while time.monotonic() < give_up:
+        if conversations.get(thread_id) is None and thread_id != bot_id:
+            return  # the conversation was deleted
+        try:
+            await chat_router.start_scheduled_turn(thread_id, message, owner)
+            return
+        except TurnBusyError:
+            await asyncio.sleep(5)  # told after the reply in progress ends
+        except Exception as exc:
+            logger.warning("Could not tell %s that %s was read: %s", thread_id, shared.name, exc)
+            return
 
 
 def attachment_ref(bot_id: str, attachment: Dict[str, Any]) -> str:
@@ -256,6 +407,8 @@ def for_model(attachment: Dict[str, Any]) -> str:
         shown = f"showing the first {len(text):,} of {chars:,} characters; the rest is only in the file"
     else:
         shown = f"{chars:,} characters"
+    if extract.get("ocr"):
+        header += f"\n({extract['ocr']})"
     return f"{header}\n--- {name} ({note}; {shown}) ---\n{text}\n--- end of {name} ---"
 
 

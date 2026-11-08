@@ -93,6 +93,10 @@ variable once it is saved there.
 | `ATTACHMENT_MAX_BYTES` | 50 MB | Largest file you can attach |
 | `ATTACHMENT_INLINE_MAX_CHARS` | `40000` | How much of an attachment's text goes in the message |
 | `ATTACHMENT_EXTRACT_TIMEOUT` | `60` | Seconds a PDF or Office conversion may take |
+| `OCR_SCANNED_PDFS` | `1` | Read PDF pages that have no text in them (scans) with OCR, on the CPU; `0` turns it off |
+| `OCR_INLINE_SECONDS` | `30` | How long OCR reads while a message is sent; the remaining pages are read in the background |
+| `OCR_MAX_PAGES` | `50` | Scanned pages read per file |
+| `OCR_THREADS` | `4` | CPU threads one OCR page uses |
 | `FILE_SHARE_MAX_BYTES` | 200 MB | Largest file a bot can hand you |
 
 ## Schedules

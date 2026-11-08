@@ -18,6 +18,10 @@ mcp==2.3.0
 PyYAML==6.0.3
 # Text from PDF, Word, Excel and PowerPoint attachments.
 markitdown[docx,pdf,pptx,xls,xlsx]==0.1.8
+# OCR of scanned PDF pages (services/ocr.py): the models ship in the package; it runs on the
+# onnxruntime MarkItDown already brings in.
+rapidocr==3.10.0
+opencv-python-headless==5.0.0.93
 # Screenshots scaled for the model (markitdown brings it in; pinned because we import it).
 pillow==13.0.0
 # Password login: argon2 hashes, TOTP two-factor, and the enrolment QR code.

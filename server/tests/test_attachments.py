@@ -246,13 +246,13 @@ class AttachmentTests(unittest.TestCase):
         record = attachments.save_upload("bot-1", "slow.txt", b"slow")
         shared = attachments.resolve_shared_file("computer", record["path"], "bot-1")
 
-        def slow(_path, limit=None):
+        def slow(_path, limit=None, ocr_seconds=None):
             import time
 
             time.sleep(0.5)
-            return attachments.Extract("late", 4, False, "read as text")
+            return attachments.Extract("late", 4, False, "read as text"), None
 
-        with mock.patch.object(attachments.settings, "ATTACHMENT_EXTRACT_TIMEOUT", 0.05), mock.patch.object(attachments, "extract_text", slow):
+        with mock.patch.object(attachments.settings, "ATTACHMENT_EXTRACT_TIMEOUT", 0.05), mock.patch.object(attachments, "_extract", slow):
             attached = asyncio.run(attachments.attach(shared, "bot-1"))
         self.assertEqual(attached["extract"]["text"], "")
         self.assertIn("did not finish", attached["extract"]["note"])

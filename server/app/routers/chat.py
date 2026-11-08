@@ -303,7 +303,7 @@ async def send_message(req: TurnRequest):
                 shared = resolve_shared_file(ref.source, ref.path, bot_id)
             except FileShareError as exc:
                 raise HTTPException(status_code=400, detail=f"Attachment {ref.path}: {exc}")
-            attached.append(await attachment_service.attach(shared, bot_id))
+            attached.append(await attachment_service.attach(shared, bot_id, req.thread_id))
         user_msg["attachments"] = attached
     if req.recording_id:
         record = demonstrations.load_recording(bot_id, req.recording_id)

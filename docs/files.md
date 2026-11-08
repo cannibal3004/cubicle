@@ -9,6 +9,11 @@ Press **+** in the message box, drop files on it, or paste them. You can attach 
   them: in its computer's `/workspace/uploads`, or in the shared folder if it has no computer. Their
   text is extracted and put in your message, up to a limit; for a longer file the bot is told where the
   whole file is and opens it with its tools.
+- **Scanned PDFs** (pages that are pictures, with no text in them) are read with OCR on your server.
+  It takes a few seconds a page: what is read in the first half minute goes with your message, the
+  rest is read in the background, and a message marked **scan read** tells the bot when the whole file
+  is done. The text is saved next to the PDF as `<name>.pdf.ocr.md`. OCR can misread characters,
+  digits and symbols most often, so the bot is told to check a figure that matters against the page.
 - A long attachment is also indexed: later messages that ask about it bring the matching passages along
   with them, so the bot can answer from the right part of the file without rereading it all.
 

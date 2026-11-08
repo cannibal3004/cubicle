@@ -705,6 +705,11 @@ function MessageItem({ message, botId, onEdit }) {
                   {message.raw_payload.jobs.some((job) => job.exit_code !== 0) ? ' · not all succeeded' : ''}
                 </span>
               )}
+              {message.raw_payload?.scan_read && (
+                <span className="block text-[10px] font-mono text-zinc-300/70 mb-0.5" title={message.raw_payload.scan_read.name || ''}>
+                  scan read · {message.raw_payload.scan_read.pages} page{message.raw_payload.scan_read.pages === 1 ? '' : 's'}
+                </span>
+              )}
               {message.raw_payload?.demonstration && <DemonstrationChip demonstration={message.raw_payload.demonstration} />}
               {(() => {
                 // What Cubicle looked up for the bot with this message (passages, procedures, earlier exchanges).
