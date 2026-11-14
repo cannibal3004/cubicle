@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Callable, Dict, Optional
 
+from app.services import file_tracking, image_view
 from app.services.action_gateway import ActionDefinition, ActionGateway, ActionInvocation, action_gateway
 from app.services.screenshots import map_input, scale_for_model
 from app.services.computer_provider import (
@@ -106,6 +108,26 @@ def register_computer_actions(
     async def files_read(call: ActionInvocation) -> Dict[str, Any]:
         status, started = await _ready(call, target_provider)
         return _mark_started(await target_provider.files_read(status.computer_id, str(call.arguments.get("path") or "")), started)
+
+    async def files_view(call: ActionInvocation) -> Dict[str, Any]:
+        path = str(call.arguments.get("path") or "")
+        try:
+            page = image_view.page_number(call.arguments.get("page"))
+        except image_view.ImageViewError as exc:
+            raise ComputerProviderError(str(exc)) from exc
+        # Read from this server's disk when the computer's folders are bind mounts here (no
+        # need for the computer to run); else, or for a type Pillow does not read, in the computer.
+        bot_id = call.arguments.get("bot_id")
+        host = file_tracking.host_path(str(bot_id), file_tracking.computer_path(path)) if isinstance(bot_id, str) and bot_id else None
+        if host is not None and host.is_file() and image_view.readable_here(host):
+            try:
+                return await asyncio.to_thread(image_view.render_file, host, file_tracking.computer_path(path), page)
+            except image_view.ImageViewError as exc:
+                raise ComputerProviderError(str(exc)) from exc
+        status, started = await _ready(call, target_provider)
+        result = await target_provider.files_view(status.computer_id, path, page)
+        result["image_of"] = result.get("path") or path
+        return _mark_started(result, started)
 
     async def files_write(call: ActionInvocation) -> Dict[str, Any]:
         status, started = await _ready(call, target_provider)
@@ -267,6 +289,17 @@ def register_computer_actions(
                 requires_approval=False,
             ),
             files_read,
+        ),
+        "computer.files_view": (
+            ActionDefinition(
+                name="computer.files_view",
+                tool="computer",
+                action="files_view",
+                intent="Look at an image file (or a page of a PDF) inside the bot computer.",
+                risk="read",
+                requires_approval=False,
+            ),
+            files_view,
         ),
         "computer.files_write": (
             ActionDefinition(

@@ -50,6 +50,13 @@ step, with the changed lines for a small text file. It will not replace a file w
 since it last read it until it reads it again (or says it means to), so an edit of yours is not lost
 to a bot's older copy.
 
+A bot can also look at a picture in its files with `view_image`: an image (PNG, JPEG, GIF, WebP,
+BMP, TIFF, SVG, HEIC and the like) or a page of a PDF, which it sees with that step, scaled to at most
+1568 pixels on its long side. Where the computer's folders are on Cubicle's own disk (the `bind`
+workspace mode) the picture is read from there, even while the computer is stopped; otherwise the
+computer converts it (computers started before runtime 2.17.0 need a stop and start first). A model
+that cannot see images is told so instead.
+
 ## Activity
 
 The **Activity** tab shows the computer's state: whether it is running, who has control, its screen

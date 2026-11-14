@@ -220,8 +220,8 @@ def _capped(text: str, cap: int, note: str, ocr_note: str = "") -> Extract:
 
 OCR_CAVEAT = (
     "A scan, read with OCR ({pages}). OCR misreads characters, most often digits and symbols ($ read as 5, 0 as O): "
-    "before relying on a figure, check it on the page itself (in your computer, serve the PDF's folder with "
-    "`python3 -m http.server`, open the PDF from http://localhost:8000/ in the browser and take a screenshot) or ask the user."
+    "before relying on a figure, check it on the page itself (view_image with the PDF's path and the page number) or "
+    "ask the user."
 )
 SCAN_SUFFIX = ".ocr.md"
 

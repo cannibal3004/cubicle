@@ -44,7 +44,7 @@ WORK_NOTES_TOOLS = {"work_notes_write", "work_notes_edit", "project_join"}
 # Built-in tools that only look; anything else that completed may have changed something.
 READ_ONLY_TOOLS = {
     "shared_folder_list", "shared_folder_read", "computer_start", "computer_screenshot", "computer_files_list",
-    "computer_read_file", "list_files", "read_file", "github_list_issues", "memory_read", "procedure_read", "skill_read", "todo_list", "schedule_list",
+    "computer_read_file", "list_files", "read_file", "view_image", "github_list_issues", "memory_read", "procedure_read", "skill_read", "todo_list", "schedule_list",
     "ask_user", "bots_list", "bots_status", "bots_reply", "connector_status", "mcp_list_servers", "mcp_test_server",
     "computer_request_takeover", "composio_search_tools", "work_notes_read", "project_log_read", "projects_list",
     "web_search", "web_answer", "web_fetch",

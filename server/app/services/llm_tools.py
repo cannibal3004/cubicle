@@ -198,6 +198,23 @@ COMPUTER_TOOLS: List[ToolSpec] = [
         needs_approval=False,
     ),
     ToolSpec(
+        name="view_image",
+        description=(
+            f"Look at an image file in your computer (under {_FILE_ROOTS}): PNG, JPEG, GIF, WebP, BMP, TIFF, SVG, HEIC and the like, "
+            "or a page of a PDF (page, from 1). It comes back as a picture you can see, at most 1568 pixels on its long side, shown "
+            "to you once with this result. Use it instead of opening a file in the browser to screenshot it."
+        ),
+        parameters=_obj(
+            {
+                "path": {"type": "string", "description": _PATH_HINT},
+                "page": {"type": "integer", "description": "For a PDF: the page to look at, from 1 (default 1)"},
+            },
+            ["path"],
+        ),
+        group="computer",
+        needs_approval=False,
+    ),
+    ToolSpec(
         name="write_file",
         description=f"Create or replace a UTF-8 text file in your computer (under {_FILE_ROOTS}). Missing parent directories are created. Give the complete file contents; for a change to an existing file use edit_file. A file that changed since you last read it is not replaced unless you pass overwrite: true (read it again first). A shell, Python or PowerShell script is checked as it is saved (ShellCheck, Ruff, PSScriptAnalyzer): fix what the result's check reports before running it.",
         parameters=_obj(
@@ -1520,6 +1537,12 @@ def _build_invocation(
     if name == "read_file":
         path = _computer_file_path(arguments)
         return _computer_invocation("files_read", bot_id, {"path": path}, f"Read {path} from the computer for {bot_id}")
+    if name == "view_image":
+        path = _computer_file_path(arguments)
+        args = {"path": path}
+        if arguments.get("page") not in (None, ""):
+            args["page"] = arguments.get("page")
+        return _computer_invocation("files_view", bot_id, args, f"Look at {path} in the computer for {bot_id}")
     if name == "write_file":
         path = _computer_file_path(arguments)
         content = _string(arguments, "content", required=True, max_len=FILE_CONTENT_MAX_CHARS)

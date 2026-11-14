@@ -33,6 +33,10 @@ RENAMED: Dict[str, str] = {
 # Names models use by habit for the same jobs (other agents' tool names).
 HABITS: Dict[str, str] = {
     "view_file": "read_file",
+    "read_image": "view_image",
+    "open_image": "view_image",
+    "look_at_image": "view_image",
+    "image_view": "view_image",
     "open_file": "read_file",
     "cat_file": "read_file",
     "create_file": "write_file",

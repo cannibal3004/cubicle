@@ -27,7 +27,7 @@ from app.services.approval_gate import approval_gate
 from app.services.commands import CommandError, parse_action_command
 from app.services.composio_service import composio_service
 from app.services.connector_tools import connector_tool_specs, shared_connector_specs
-from app.services import computer_turns, conversation_titles, conversations, projects, sharing, thinking  # projects: registers its actions
+from app.services import computer_turns, conversation_titles, conversations, image_view, projects, sharing, thinking  # projects: registers its actions
 from app.services.context_builder import build_history_messages, cap_message_results, latest_compaction, live_messages, safe_arguments, trim_result_text
 from app.services.context_compactor import at_hard_limit, compact_thread, last_prompt_tokens, over_budget
 from app.services import bot_memory as _bot_memory  # noqa: F401 - registers memory.read/write
@@ -123,6 +123,8 @@ def _screenshot_message(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     image_format = str(result.get("format") or "jpeg").lower()
     frame = result.get("frame_id") or "latest"
     url = data if data.startswith("data:") else f"data:image/{image_format};base64,{data}"
+    if result.get("image_of"):  # view_image: a file, not the screen
+        return {"role": "user", "content": [{"type": "text", "text": image_view.label(result)}, {"type": "image_url", "image_url": {"url": url}}]}
     size = ""
     if result.get("width") and result.get("height"):
         size = f" {result['width']}x{result['height']}"

@@ -840,6 +840,23 @@ class DockerComputerProvider:
         self._touch(record.status, "files.read")
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
 
+    async def files_view(self, computer_id: str, path: str, page: Optional[int] = None) -> Dict[str, Any]:
+        record = self._active_record(computer_id)
+        payload: Dict[str, Any] = {"path": check_file_path(path)}
+        if page:
+            payload["page"] = page
+        try:
+            result = await self._request(record, "POST", "/files/image", payload, timeout=45.0)
+        except ComputerProviderError as exc:
+            if "route not found" in str(exc).lower():
+                raise ComputerProviderError(
+                    "This computer runs an older runtime that cannot show this file as a picture; the user can update it by "
+                    "stopping and starting the computer."
+                ) from exc
+            raise
+        self._touch(record.status, "files.view")
+        return {"computer_id": computer_id, "provider": self.provider_name, **result}
+
     async def files_write(self, computer_id: str, path: str, content: str) -> Dict[str, Any]:
         record = self._active_record(computer_id)
         payload = {"path": check_file_path(path), "content": check_file_content(content)}

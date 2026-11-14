@@ -212,6 +212,9 @@ class ComputerProvider(Protocol):
     async def files_read(self, computer_id: str, path: str) -> Dict[str, Any]:
         ...
 
+    async def files_view(self, computer_id: str, path: str, page: Optional[int] = None) -> Dict[str, Any]:
+        ...
+
     async def files_write(self, computer_id: str, path: str, content: str) -> Dict[str, Any]:
         ...
 
@@ -482,6 +485,15 @@ class FakeComputerProvider:
             "bytes": len(content.encode("utf-8")),
             "lines": content.count("\n") + 1 if content else 0,
         }
+
+    async def files_view(self, computer_id: str, path: str, page: Optional[int] = None) -> Dict[str, Any]:
+        # The fake computer keeps text only: there is no picture to show.
+        status = self._require_active(computer_id)
+        normalized = check_file_path(path)
+        if normalized not in self._files.get(computer_id, {}):
+            raise ComputerProviderError(f"No file at {normalized}.")
+        self._touch(status, "files.view")
+        raise ComputerProviderError(f"{normalized} could not be shown as a picture: the fake computer keeps text files only.")
 
     async def files_write(self, computer_id: str, path: str, content: str) -> Dict[str, Any]:
         status = self._require_active(computer_id)

@@ -187,6 +187,56 @@ async function readTextFile(requestedPath) {
   return { path: target, content, ...textStats(content) };
 }
 
+// view_image, when the API cannot read the file from its own disk: the image (or a page of a
+// PDF, drawn with poppler) as a JPEG at most VIEW_MAX_SIDE pixels on its long side, through
+// ImageMagick, which also reads SVG, HEIC and the rest. The first frame of an animation.
+const VIEW_MAX_SIDE = 1568;
+const VIEW_MAX_BYTES = 30 * 1024 * 1024;
+const VIEW_TIMEOUT_MS = 30000;
+
+async function viewImage(requestedPath, requestedPage) {
+  const target = workspacePath(requestedPath);
+  const info = await stat(target).catch(() => null);
+  if (!info) throw new Error(`No file at ${target}.`);
+  if (!info.isFile()) throw new Error(`${target} is not a file.`);
+  if (info.size > VIEW_MAX_BYTES) throw new Error(`${target} is ${info.size} bytes; images over ${VIEW_MAX_BYTES / 1024 / 1024} MB are not shown.`);
+  const stamp = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const out = `/tmp/view-${stamp}.jpg`;
+  const made = [out];
+  try {
+    let source = `${target}[0]`;
+    let page = null;
+    let pages = null;
+    if (path.extname(target).toLowerCase() === '.pdf') {
+      const { stdout } = await execFileAsync('pdfinfo', [target], { timeout: VIEW_TIMEOUT_MS });
+      pages = Number((/^Pages:\s+(\d+)/m.exec(stdout) || [])[1]) || 0;
+      page = Number(requestedPage) || 1;
+      if (page > pages) throw new Error(`${target} has ${pages} page${pages === 1 ? '' : 's'}; there is no page ${page}.`);
+      const stem = `/tmp/view-${stamp}-page`;
+      await execFileAsync('pdftoppm', ['-f', String(page), '-l', String(page), '-r', '150', '-png', '-singlefile', target, stem], { timeout: VIEW_TIMEOUT_MS });
+      source = `${stem}.png`;
+      made.push(source);
+    } else if (requestedPage && Number(requestedPage) !== 1) {
+      throw new Error('page is for PDFs; an image file has one picture.');
+    }
+    const { stdout: size } = await execFileAsync('identify', ['-format', '%w %h', source], { timeout: VIEW_TIMEOUT_MS });
+    const [originalWidth, originalHeight] = size.trim().split(/\s+/).map(Number);
+    await execFileAsync('convert', [source, '-auto-orient', '-background', 'white', '-flatten', '-resize', `${VIEW_MAX_SIDE}x${VIEW_MAX_SIDE}>`, '-quality', '85', `jpg:${out}`], { timeout: VIEW_TIMEOUT_MS });
+    const { stdout: shown } = await execFileAsync('identify', ['-format', '%w %h', out], { timeout: VIEW_TIMEOUT_MS });
+    const [width, height] = shown.trim().split(/\s+/).map(Number);
+    const data = (await readFile(out)).toString('base64');
+    return { path: target, data, width, height, original_width: originalWidth, original_height: originalHeight, page, pages };
+  } catch (error) {
+    if (error && error.stderr !== undefined) {
+      const reason = String(error.stderr || error.message).trim().split('\n')[0];
+      throw new Error(`${target} could not be shown as a picture: ${reason}`);
+    }
+    throw error;
+  } finally {
+    await Promise.all(made.map((file) => unlink(file).catch(() => {})));
+  }
+}
+
 // Scripts are checked as they are saved: shell with ShellCheck, Python with
 // Ruff's error rules (syntax errors, undefined names, comparisons that are
 // always wrong). What they find comes back with the save, so the bot fixes a
@@ -1022,6 +1072,9 @@ async function unqueued(request, body) {
   }
   if (request.url === '/files/edit') {
     return { operation: 'files.edit', ...(await editTextFile(body.path, body.old_text, body.new_text)) };
+  }
+  if (request.url === '/files/image') {
+    return { operation: 'files.view', ...(await viewImage(body.path, body.page)) };
   }
   return null;
 }
