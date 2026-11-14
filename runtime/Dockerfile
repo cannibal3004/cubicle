@@ -19,7 +19,7 @@ RUN apt-get update \
         file binutils xxd bsdextrautils less nano tree rsync zip bzip2 xz-utils zstd p7zip-full \
         ripgrep fd-find patch bc dos2unix psmisc lsof htop libxml2-utils sqlite3 git-lfs shellcheck \
         dnsutils iputils-ping netcat-openbsd iproute2 traceroute \
-        imagemagick ffmpeg tesseract-ocr qpdf libimage-exiftool-perl \
+        imagemagick librsvg2-bin ffmpeg tesseract-ocr qpdf libimage-exiftool-perl \
     && ln -s /usr/bin/fdfind /usr/local/bin/fd \
     # ping asks for the raw-socket capability, which a computer never has,
     # so the kernel would refuse to start it. Without the request it uses an
