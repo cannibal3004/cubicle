@@ -127,6 +127,10 @@ def register_computer_actions(
         status, started = await _ready(call, target_provider)
         result = await target_provider.files_view(status.computer_id, path, page)
         result["image_of"] = result.get("path") or path
+        result.setdefault("format", "jpeg")
+        if (result.get("original_width"), result.get("original_height")) == (result.get("width"), result.get("height")):
+            result.pop("original_width", None)  # not scaled
+            result.pop("original_height", None)
         return _mark_started(result, started)
 
     async def files_write(call: ActionInvocation) -> Dict[str, Any]:

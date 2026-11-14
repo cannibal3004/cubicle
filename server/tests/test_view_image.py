@@ -128,13 +128,15 @@ class ActionTests(unittest.IsolatedAsyncioTestCase):
 
         async def files_view(computer_id, path, page=None):
             seen.update(path=path, page=page)
-            return {"operation": "files.view", "path": path, "format": "jpeg", "data": "QUJD", "width": 1, "height": 1}
+            return {"operation": "files.view", "path": path, "data": "QUJD", "width": 600, "height": 400, "original_width": 600, "original_height": 400}
 
         with mock.patch.object(self.provider, "files_view", files_view):
             result = await self.view("/workspace/diagram.svg", page="1")
         self.assertEqual(result.status, "completed")
         self.assertEqual(seen, {"path": "/workspace/diagram.svg", "page": 1})
         self.assertEqual(result.result["image_of"], "/workspace/diagram.svg")
+        self.assertEqual(result.result["format"], "jpeg")
+        self.assertIn("(600x400), from view_image", image_view.label(result.result))  # not "scaled down" when it was not
         self.assertTrue(result.result.get("computer_auto_started"))
 
     async def test_a_type_pillow_cannot_read_goes_to_the_computer_even_in_bind_mode(self):
